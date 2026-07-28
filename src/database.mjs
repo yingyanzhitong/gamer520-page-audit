@@ -341,7 +341,8 @@ export class CrawlerDatabase {
       UPDATE xianyu_sync_runs
       SET processed_count = selected_count
       WHERE finished_at IS NOT NULL
-        AND processed_count = 0;
+        AND processed_count = 0
+        AND status IN ('success', 'partial');
     `);
   }
 

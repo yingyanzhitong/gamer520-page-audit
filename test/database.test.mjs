@@ -111,9 +111,8 @@ test("详情失败保留旧成功字段和下载源", () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-db-failure-test-"),
   );
-  const database = new CrawlerDatabase(
-    path.join(directory, "test.sqlite"),
-  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const database = new CrawlerDatabase(databasePath);
 
   try {
     const timestamp = "2026-07-28T00:00:00.000Z";
@@ -168,14 +167,24 @@ test("启动新任务前标记未正常结束的旧任务", () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-db-interrupted-test-"),
   );
-  const database = new CrawlerDatabase(
-    path.join(directory, "test.sqlite"),
-  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const database = new CrawlerDatabase(databasePath);
 
   try {
     const startedAt = "2026-07-28T00:00:00.000Z";
     const interruptedAt = "2026-07-28T01:00:00.000Z";
     const runId = database.startRun("startup", startedAt, {});
+    const syncRunId = database.startSyncRun(
+      "startup",
+      "account-a",
+      "all",
+      1,
+      startedAt,
+    );
+    database.updateSyncRun(syncRunId, {
+      selected_count: 690,
+      processed_count: 20,
+    });
 
     database.markInterruptedRuns(interruptedAt);
 
@@ -186,8 +195,23 @@ test("启动新任务前标记未正常结束的旧任务", () => {
     assert.equal(run.status, "interrupted");
     assert.equal(run.finished_at, interruptedAt);
     assert.match(run.error_summary, /进程在任务完成前退出/);
-  } finally {
     database.close();
+
+    const reopened = new CrawlerDatabase(databasePath);
+    const syncRun = reopened.queryOne(
+      "SELECT status, selected_count, processed_count FROM xianyu_sync_runs WHERE id = ?",
+      syncRunId,
+    );
+    reopened.close();
+    assert.equal(syncRun.status, "interrupted");
+    assert.equal(syncRun.selected_count, 690);
+    assert.equal(syncRun.processed_count, 20);
+  } finally {
+    try {
+      database.close();
+    } catch {
+      // 上方已关闭数据库以验证重新打开后的迁移行为。
+    }
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
