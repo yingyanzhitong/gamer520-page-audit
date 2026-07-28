@@ -1,6 +1,6 @@
 # Gamer520 热度榜采集器
 
-使用 Playwright + Chromium 每天采集 Gamer520 PC PLAY 热度榜前 100 页，并将标题、游戏简介、封面、来源更新时间、下载链接、提取码及解压密码保存到 SQLite。管理界面可查看采集状态、选择闲鱼发布账号、全量同步素材与查看发布结果。
+使用 Playwright + Chromium 每天采集 Gamer520 PC PLAY 热度榜前 100 页，并将标题、游戏简介、封面、来源更新时间、下载链接、提取码及解压密码保存到 SQLite。管理界面可查看采集状态、选择闲鱼发布账号、按全部/未发布/已更新范围同步商品、控制任务中断与恢复并查看发布结果。
 
 ## Docker Compose 部署
 
@@ -82,7 +82,7 @@ docker compose exec crawler npm run crawl:once
 | `DASHBOARD_HOST_PORT` | `13520` | Compose 映射到宿主机回环地址的端口 |
 | `XIANYU_BASE_URL` | `https://xianyu.xyyamsz.cn` | 闲鱼服务地址 |
 | `XIANYU_API_KEY` | 无 | 闲鱼用户 API Key；页面账号配置和手动同步也使用此 Key |
-| `GAMER520_READ_API_KEY` | 无 | 对外下载源查询接口的只读 API Key |
+| `GAMER520_READ_API_KEY` | 无 | 对外下载源查询接口的独立只读 API Key；由部署者设置，不是闲鱼 `xyk_...` Key |
 | `SYNC_CRON_SCHEDULE` | `0 */6 * * *` | 闲鱼自动同步 Cron 表达式 |
 | `SYNC_RUN_LIMIT` | `20` | 全量同步的单批处理数，范围 1 到 20 |
 | `SYNC_POLL_INTERVAL_MS` | `10000` | 发布批次状态轮询间隔 |
@@ -100,23 +100,23 @@ Linux 容器中正式支持 `PLAYWRIGHT_CHANNEL=chromium`。
 
 ## 数据
 
-- `games`：以详情 URL 的数字 ID 为主键，保存文章详情、资源信息、来源更新时间、售价覆盖、热度排名、成功/失败状态和时间。
+- `games`：以详情 URL 的数字 ID 为主键，保存文章详情、资源信息、来源更新时间、售价覆盖、热度排名、成功/失败状态，以及最近成功发布的闲鱼商品编号、链接、账号和时间。
 - `downloads`：保存一个游戏的全部下载源、链接、提取码、二维码地址及解析方式。
 - `crawl_runs`：保存每轮采集的计数和最终状态。
 - `crawl_errors`：保存列表或详情阶段的错误摘要。
 - `xianyu_sync_settings`：持久化当前唯一发布 `account_id` 和默认售卖价格。
-- `scheduler_settings`：持久化采集、同步的 Cron、时区和启用状态。
+- `scheduler_settings`：持久化采集、同步的 Cron、时区、启用状态和定时同步范围。
 - `xianyu_material_sync`：保存每个游戏的素材 ID、已同步哈希和错误。
 - `xianyu_publications`：按游戏和账号保存发布状态、闲鱼商品 ID 与链接。
 - `xianyu_sync_runs`：保存每轮同步的素材和发布计数。
 
-网页游戏详情只展示游戏凭证、下载源和资源详情页，不要求输入 Key。独立的 `/api/download-sources` 对外接口仍使用只读 Key；账号配置、价格和调度操作使用闲鱼用户管理生成的 API Key，该 Key 仅保存在当前浏览器会话且不会由服务端返回。
+网页游戏详情只展示游戏凭证、下载源和资源详情页，不要求输入 Key。独立的 `/api/download-sources` 对外接口使用 `GAMER520_READ_API_KEY` 对应的只读 Key；调用方通过请求头 `X-API-Key` 传入。账号配置、价格、调度和任务控制则使用闲鱼用户管理生成的 `xyk_...` API Key，该 Key 对应服务器环境变量 `XIANYU_API_KEY`，仅保存在当前浏览器会话且不会由 Gamer520 服务返回。两种 Key 相互独立。
 
 同一 ID 再次采集时，先读取文章页绝对更新时间；已有完整详情且来源时间未变化时跳过资源详情解析。来源时间变化后才原子覆盖 `games` 的完整详情并整体替换 `downloads`。失败时不会用空值覆盖旧成功数据，只更新失败状态和错误。移出热度前 100 页的历史记录不会删除。
 
 ## 闲鱼同步与接口
 
-页面先输入闲鱼用户管理生成的 API Key，加载闲鱼账号并保存一个真实 `account_id`；账号与默认售价会持久化到 SQLite，刷新页面和服务重启后仍然保留。页面提交的 Key 必须与服务端 `XIANYU_API_KEY` 一致，确保手动和定时任务使用同一用户权限。每次手动或定时任务会读取全部待处理商品，并按每批最多 20 条执行。新商品会以 `【秒发】原名称`、商品实际售价和数据库 `games.image_url` 唯一封面创建素材并发布；商品介绍在原简介后根据下载源动态追加支持网盘、24 小时自动发货和咨询提示。素材库已有同名商品时跳过；已在当前账号发布过的更新商品只更新素材，不重新上架。
+页面先输入闲鱼用户管理生成的 API Key，加载闲鱼账号并保存一个真实 `account_id`；账号与默认售价会持久化到 SQLite，刷新页面和服务重启后仍然保留。页面提交的 Key 必须与服务端 `XIANYU_API_KEY` 一致，确保手动和定时任务使用同一用户权限。手动同步可选择 `all`（全部有效商品）、`pending`（未在当前账号成功发布）或 `updated`（已发布但素材发生变化），定时同步也会保存其中一种范围，并按每批最多 20 条执行。新商品会以 `【秒发】原名称`、商品实际售价和数据库 `games.image_url` 唯一封面创建素材并发布；商品介绍在原简介后根据下载源动态追加支持网盘、24 小时自动发货和咨询提示。素材库已有同名商品时跳过；已在当前账号发布过的商品只更新素材，不重新上架。发布成功后，闲鱼商品编号和链接会写回对应 `games` 记录。
 
 ```bash
 # 获取可选账号
@@ -134,7 +134,7 @@ curl -X PUT \
 curl -X PUT \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: <闲鱼用户API Key>' \
-  -d '{"cron_timezone":"Asia/Shanghai","crawl":{"cron_schedule":"0 3 * * *","enabled":true},"sync":{"cron_schedule":"0 */6 * * *","enabled":true}}' \
+  -d '{"cron_timezone":"Asia/Shanghai","crawl":{"cron_schedule":"0 3 * * *","enabled":true},"sync":{"cron_schedule":"0 */6 * * *","enabled":true,"mode":"all"}}' \
   http://127.0.0.1:13520/api/settings/schedule
 
 # 立即完整采集
@@ -142,12 +142,18 @@ curl -X POST \
   -H 'X-API-Key: <闲鱼用户API Key>' \
   http://127.0.0.1:13520/api/crawl/run
 
-# 启动全量同步
+# 启动同步；mode 可选 all、pending、updated
 curl -X POST \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: <闲鱼用户API Key>' \
-  -d '{}' \
+  -d '{"mode":"all"}' \
   http://127.0.0.1:13520/api/sync/run
+
+# 中断和恢复当前采集任务；同步任务把 crawl 改为 sync
+curl -X POST -H 'X-API-Key: <闲鱼用户API Key>' \
+  http://127.0.0.1:13520/api/tasks/crawl/interrupt
+curl -X POST -H 'X-API-Key: <闲鱼用户API Key>' \
+  http://127.0.0.1:13520/api/tasks/crawl/resume
 
 # 设置单商品售价；price 传 null 恢复使用默认售价
 curl -X PUT \
@@ -161,9 +167,13 @@ curl -H 'X-API-Key: <下载只读Key>' \
   --get \
   --data-urlencode 'name=【秒发 】游戏名称' \
   'http://127.0.0.1:13520/api/download-sources'
+
+# 按闲鱼商品编号查询
+curl -H 'X-API-Key: <下载只读Key>' \
+  'http://127.0.0.1:13520/api/download-sources?item_id=1067769058126'
 ```
 
-下载源接口的 `id` 和 `name` 必须且只能提供一个。`name` 会先移除开头的 `【秒发】` 或 `【秒发 】` 及相邻空格，再做精确名称匹配。名称重名返回 `409` 和候选 ID；无效 Key 返回 `401`；商品或账号不存在返回 `404`；任务冲突返回 `409`；参数或素材不可发布返回 `422`。
+下载源接口的 `id`（Gamer520 游戏编号）、`item_id`（闲鱼商品编号）和 `name` 必须且只能提供一个。`name` 会先移除开头的 `【秒发】` 或 `【秒发 】` 及相邻空格，再做精确名称匹配。名称重名返回 `409` 和候选 ID；无效 Key 返回 `401`；商品或账号不存在返回 `404`；任务冲突或当前没有可控制任务返回 `409`；参数或素材不可发布返回 `422`。
 
 成功响应同时提供顶层资源凭证和完整下载源：
 
@@ -175,6 +185,7 @@ curl -H 'X-API-Key: <下载只读Key>' \
   },
   "resourceCode": "资源编号",
   "archivePassword": "解压密码",
+  "itemId": "1067769058126",
   "data": "解压密码：解压密码\n百度网盘：https://pan.example/example 提取码：abcd",
   "game": {
     "id": 118842,

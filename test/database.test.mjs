@@ -439,11 +439,13 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         crawlEnabled: true,
         syncCronSchedule: "0 */6 * * *",
         syncEnabled: true,
+        syncMode: "all",
       },
       "2026-07-28T00:00:00.000Z",
     );
     assert.equal(initial.crawl_cron_schedule, "0 3 * * *");
     assert.equal(initial.sync_enabled, 1);
+    assert.equal(initial.sync_mode, "all");
 
     const updated = database.setSchedulerSettings(
       {
@@ -452,16 +454,83 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         crawlEnabled: false,
         syncCronSchedule: "15 */8 * * *",
         syncEnabled: true,
+        syncMode: "updated",
       },
       "2026-07-28T01:00:00.000Z",
     );
     assert.equal(updated.crawl_cron_schedule, "30 4 * * *");
     assert.equal(updated.crawl_enabled, 0);
     assert.equal(updated.sync_cron_schedule, "15 */8 * * *");
+    assert.equal(updated.sync_mode, "updated");
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      4,
+      5,
     );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("发布成功后把闲鱼商品编号写回游戏数据", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-item-id-test-"),
+  );
+  const database = new CrawlerDatabase(
+    path.join(directory, "test.sqlite"),
+  );
+  try {
+    const timestamp = "2026-07-28T00:00:00.000Z";
+    const discovered = discovery(118900, "发布编号测试", 1);
+    database.upsertDiscoveredGames([discovered], timestamp);
+    database.saveGameSuccess(
+      discovered,
+      result(118900, "发布编号测试", "https://pan.example/item"),
+      timestamp,
+    );
+    const stored = database.queryOne(
+      "SELECT content_hash FROM games WHERE id = ?",
+      discovered.id,
+    );
+    database.markMaterialSynced(
+      discovered.id,
+      900,
+      stored.content_hash,
+      timestamp,
+    );
+    database.markPublicationSubmitted(
+      discovered.id,
+      "account-a",
+      900,
+      "batch-a",
+      timestamp,
+    );
+    database.markPublicationResult({
+      gameId: discovered.id,
+      accountId: "account-a",
+      status: "success",
+      itemId: "1069000000000",
+      itemUrl: "https://www.goofish.com/item?id=1069000000000",
+      updatedAt: timestamp,
+    });
+
+    const gameRow = database.queryOne(
+      `SELECT
+         xianyu_item_id,
+         xianyu_item_url,
+         xianyu_account_id,
+         xianyu_published_at
+       FROM games
+       WHERE id = ?`,
+      discovered.id,
+    );
+    assert.equal(gameRow.xianyu_item_id, "1069000000000");
+    assert.equal(
+      gameRow.xianyu_item_url,
+      "https://www.goofish.com/item?id=1069000000000",
+    );
+    assert.equal(gameRow.xianyu_account_id, "account-a");
+    assert.equal(gameRow.xianyu_published_at, timestamp);
   } finally {
     database.close();
     fs.rmSync(directory, { recursive: true, force: true });

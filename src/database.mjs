@@ -99,6 +99,10 @@ export class CrawlerDatabase {
         content_hash TEXT,
         last_change_type TEXT,
         last_changed_at TEXT,
+        xianyu_item_id TEXT,
+        xianyu_item_url TEXT,
+        xianyu_account_id TEXT,
+        xianyu_published_at TEXT,
         updated_at TEXT NOT NULL
       );
 
@@ -165,6 +169,7 @@ export class CrawlerDatabase {
         crawl_enabled INTEGER NOT NULL DEFAULT 1,
         sync_cron_schedule TEXT NOT NULL,
         sync_enabled INTEGER NOT NULL DEFAULT 1,
+        sync_mode TEXT NOT NULL DEFAULT 'all',
         updated_at TEXT NOT NULL
       );
 
@@ -203,6 +208,7 @@ export class CrawlerDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         trigger_type TEXT NOT NULL,
         account_id TEXT,
+        sync_mode TEXT NOT NULL DEFAULT 'all',
         requested_limit INTEGER NOT NULL,
         status TEXT NOT NULL,
         selected_count INTEGER NOT NULL DEFAULT 0,
@@ -223,7 +229,8 @@ export class CrawlerDatabase {
 
     this.#migrateSchema();
     this.#backfillContentHashes();
-    this.database.exec("PRAGMA user_version = 4;");
+    this.#backfillXianyuItemIds();
+    this.database.exec("PRAGMA user_version = 5;");
   }
 
   #migrateSchema() {
@@ -239,6 +246,10 @@ export class CrawlerDatabase {
       ["last_changed_at", "TEXT"],
       ["source_updated_at", "TEXT"],
       ["sale_price", "REAL"],
+      ["xianyu_item_id", "TEXT"],
+      ["xianyu_item_url", "TEXT"],
+      ["xianyu_account_id", "TEXT"],
+      ["xianyu_published_at", "TEXT"],
     ];
     for (const [name, definition] of additions) {
       if (!gameColumns.has(name)) {
@@ -255,6 +266,7 @@ export class CrawlerDatabase {
     const syncRunAdditions = [
       ["material_skipped", "INTEGER NOT NULL DEFAULT 0"],
       ["batch_count", "INTEGER NOT NULL DEFAULT 0"],
+      ["sync_mode", "TEXT NOT NULL DEFAULT 'all'"],
     ];
     for (const [name, definition] of syncRunAdditions) {
       if (!syncRunColumns.has(name)) {
@@ -273,6 +285,18 @@ export class CrawlerDatabase {
     if (!xianyuSettingsColumns.has("default_price")) {
       this.database.exec(
         "ALTER TABLE xianyu_sync_settings ADD COLUMN default_price REAL NOT NULL DEFAULT 1",
+      );
+    }
+
+    const schedulerColumns = new Set(
+      this.database
+        .prepare("PRAGMA table_info(scheduler_settings)")
+        .all()
+        .map((column) => column.name),
+    );
+    if (!schedulerColumns.has("sync_mode")) {
+      this.database.exec(
+        "ALTER TABLE scheduler_settings ADD COLUMN sync_mode TEXT NOT NULL DEFAULT 'all'",
       );
     }
   }
@@ -312,6 +336,48 @@ export class CrawlerDatabase {
         if (downloads.length > 0) {
           ensureMaterialStatement.run(row.id, now);
         }
+      }
+    });
+  }
+
+  #backfillXianyuItemIds() {
+    const rows = this.database
+      .prepare(`
+        SELECT
+          publication.game_id,
+          publication.account_id,
+          publication.item_id,
+          publication.item_url,
+          publication.published_at,
+          publication.updated_at
+        FROM xianyu_publications AS publication
+        JOIN games ON games.id = publication.game_id
+        WHERE publication.status = 'success'
+          AND publication.item_id IS NOT NULL
+          AND games.xianyu_item_id IS NULL
+        ORDER BY
+          COALESCE(publication.published_at, publication.updated_at) DESC
+      `)
+      .all();
+    if (rows.length === 0) return;
+
+    const update = this.database.prepare(`
+      UPDATE games
+      SET xianyu_item_id = ?,
+          xianyu_item_url = ?,
+          xianyu_account_id = ?,
+          xianyu_published_at = ?
+      WHERE id = ? AND xianyu_item_id IS NULL
+    `);
+    transaction(this.database, () => {
+      for (const row of rows) {
+        update.run(
+          row.item_id,
+          row.item_url,
+          row.account_id,
+          row.published_at ?? row.updated_at,
+          row.game_id,
+        );
       }
     });
   }
@@ -791,8 +857,9 @@ export class CrawlerDatabase {
           crawl_enabled,
           sync_cron_schedule,
           sync_enabled,
+          sync_mode,
           updated_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?)
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         defaults.cronTimezone,
@@ -800,6 +867,7 @@ export class CrawlerDatabase {
         defaults.crawlEnabled ? 1 : 0,
         defaults.syncCronSchedule,
         defaults.syncEnabled ? 1 : 0,
+        defaults.syncMode ?? "all",
         updatedAt,
       );
     return this.database
@@ -817,14 +885,16 @@ export class CrawlerDatabase {
           crawl_enabled,
           sync_cron_schedule,
           sync_enabled,
+          sync_mode,
           updated_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?)
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           cron_timezone = excluded.cron_timezone,
           crawl_cron_schedule = excluded.crawl_cron_schedule,
           crawl_enabled = excluded.crawl_enabled,
           sync_cron_schedule = excluded.sync_cron_schedule,
           sync_enabled = excluded.sync_enabled,
+          sync_mode = excluded.sync_mode,
           updated_at = excluded.updated_at
       `)
       .run(
@@ -833,6 +903,7 @@ export class CrawlerDatabase {
         settings.crawlEnabled ? 1 : 0,
         settings.syncCronSchedule,
         settings.syncEnabled ? 1 : 0,
+        settings.syncMode ?? "all",
         updatedAt,
       );
     return this.database
@@ -840,18 +911,19 @@ export class CrawlerDatabase {
       .get();
   }
 
-  startSyncRun(triggerType, accountId, requestedLimit, startedAt) {
+  startSyncRun(triggerType, accountId, syncMode, requestedLimit, startedAt) {
     const result = this.database
       .prepare(`
         INSERT INTO xianyu_sync_runs (
           trigger_type,
           account_id,
+          sync_mode,
           requested_limit,
           status,
           started_at
-        ) VALUES (?, ?, ?, 'running', ?)
+        ) VALUES (?, ?, ?, ?, 'running', ?)
       `)
-      .run(triggerType, accountId, requestedLimit, startedAt);
+      .run(triggerType, accountId, syncMode, requestedLimit, startedAt);
     return Number(result.lastInsertRowid);
   }
 
@@ -879,7 +951,7 @@ export class CrawlerDatabase {
       .run(...entries.map(([, value]) => value), runId);
   }
 
-  listSyncCandidates(accountId, limit) {
+  listSyncCandidates(accountId, limit, mode = "all") {
     const rows = this.database
       .prepare(`
         SELECT
@@ -925,6 +997,13 @@ export class CrawlerDatabase {
     const downloadStatement = this.database.prepare(
       "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
     );
+    const normalizedMode = new Set([
+      "all",
+      "pending",
+      "updated",
+    ]).has(mode)
+      ? mode
+      : "all";
     return rows
       .map((row) => {
         const downloads = downloadStatement.all(row.id);
@@ -943,16 +1022,24 @@ export class CrawlerDatabase {
           downloads,
         };
       })
-      .filter(
-        (row) =>
+      .filter((row) => {
+        const materialNeedsSync =
           row.material_id == null ||
           row.synced_content_hash == null ||
           row.synced_content_hash !== row.sync_content_hash ||
-          ["pending", "failed"].includes(row.material_sync_status) ||
+          ["pending", "failed"].includes(row.material_sync_status);
+        const publicationNeedsSync =
           (row.publication_status == null &&
             row.material_sync_status !== "skipped") ||
-          row.publication_status === "failed",
-      )
+          row.publication_status === "failed";
+        if (normalizedMode === "pending") {
+          return publicationNeedsSync;
+        }
+        if (normalizedMode === "updated") {
+          return row.publication_status === "success" && materialNeedsSync;
+        }
+        return true;
+      })
       .slice(0, limit);
   }
 
@@ -1116,28 +1203,55 @@ export class CrawlerDatabase {
     errorMessage = null,
     updatedAt,
   }) {
-    this.database
-      .prepare(`
-        UPDATE xianyu_publications
-        SET status = ?,
-            item_id = COALESCE(?, item_id),
-            item_url = COALESCE(?, item_url),
-            last_error = ?,
-            published_at = CASE WHEN ? = 'success' THEN ? ELSE published_at END,
-            updated_at = ?
-        WHERE game_id = ? AND account_id = ?
-      `)
-      .run(
-        status,
-        itemId,
-        itemUrl,
-        errorMessage ? String(errorMessage).slice(0, 4_000) : null,
-        status,
-        updatedAt,
-        updatedAt,
-        gameId,
-        accountId,
-      );
+    transaction(this.database, () => {
+      this.database
+        .prepare(`
+          UPDATE xianyu_publications
+          SET status = ?,
+              item_id = COALESCE(?, item_id),
+              item_url = COALESCE(?, item_url),
+              last_error = ?,
+              published_at = CASE WHEN ? = 'success' THEN ? ELSE published_at END,
+              updated_at = ?
+          WHERE game_id = ? AND account_id = ?
+        `)
+        .run(
+          status,
+          itemId,
+          itemUrl,
+          errorMessage ? String(errorMessage).slice(0, 4_000) : null,
+          status,
+          updatedAt,
+          updatedAt,
+          gameId,
+          accountId,
+        );
+      if (status !== "success") return;
+      const publication = this.database
+        .prepare(`
+          SELECT item_id, item_url, published_at
+          FROM xianyu_publications
+          WHERE game_id = ? AND account_id = ?
+        `)
+        .get(gameId, accountId);
+      if (!publication?.item_id) return;
+      this.database
+        .prepare(`
+          UPDATE games
+          SET xianyu_item_id = ?,
+              xianyu_item_url = ?,
+              xianyu_account_id = ?,
+              xianyu_published_at = ?
+          WHERE id = ?
+        `)
+        .run(
+          publication.item_id,
+          publication.item_url,
+          accountId,
+          publication.published_at ?? updatedAt,
+          gameId,
+        );
+    });
   }
 
   getRecentSyncRuns(limit = 20) {

@@ -47,6 +47,12 @@ const changeLabels = {
   updated: "更新",
 };
 
+const syncModeLabels = {
+  all: "全部商品",
+  pending: "未发布商品",
+  updated: "已更新商品",
+};
+
 const elements = {
   adminKey: document.querySelector("#admin-key"),
   catalogCount: document.querySelector("#catalog-count"),
@@ -70,6 +76,8 @@ const elements = {
   generatedAt: document.querySelector("#generated-at"),
   hotRail: document.querySelector("#hot-rail"),
   loadAccounts: document.querySelector("#load-accounts"),
+  interruptCrawl: document.querySelector("#interrupt-crawl"),
+  interruptSync: document.querySelector("#interrupt-sync"),
   nextPage: document.querySelector("#next-page"),
   nextRun: document.querySelector("#next-run"),
   pageLabel: document.querySelector("#page-label"),
@@ -77,8 +85,10 @@ const elements = {
   railSummary: document.querySelector("#rail-summary"),
   refreshButton: document.querySelector("#refresh-button"),
   runCrawl: document.querySelector("#run-crawl"),
-  runSync: document.querySelector("#run-sync"),
+  runSyncAll: document.querySelector("#run-sync-all"),
+  runSyncPending: document.querySelector("#run-sync-pending"),
   runSyncSchedule: document.querySelector("#run-sync-schedule"),
+  runSyncUpdated: document.querySelector("#run-sync-updated"),
   runList: document.querySelector("#run-list"),
   saveAccount: document.querySelector("#save-account"),
   saveSchedule: document.querySelector("#save-schedule"),
@@ -88,12 +98,15 @@ const elements = {
     "#schedule-sync-next-run",
   ),
   scheduleTimezone: document.querySelector("#schedule-timezone"),
+  resumeCrawl: document.querySelector("#resume-crawl"),
+  resumeSync: document.querySelector("#resume-sync"),
   serviceStatus: document.querySelector("#service-status"),
   statusFilter: document.querySelector("#status-filter"),
   statusPulse: document.querySelector("#status-pulse"),
   syncNextRun: document.querySelector("#sync-next-run"),
   syncCron: document.querySelector("#sync-cron"),
   syncEnabled: document.querySelector("#sync-enabled"),
+  syncMode: document.querySelector("#sync-mode"),
   syncRunSummary: document.querySelector("#sync-run-summary"),
   successRatio: document.querySelector("#success-ratio"),
   successfulGames: document.querySelector("#successful-games"),
@@ -283,14 +296,19 @@ function renderXianyuDashboard(payload) {
   }
   elements.configuredAccount.textContent = state.accountId || "未配置";
   elements.syncNextRun.textContent = sync.enabled
-    ? `下次自动同步 ${formatDate(sync.nextRun, true)} · 每批 ${sync.batchSize ?? 20} 条`
+    ? `下次自动同步 ${formatDate(sync.nextRun, true)} · ${syncModeLabels[sync.mode] ?? "全部商品"} · 每批 ${sync.batchSize ?? 20} 条`
     : "自动同步未启用";
   const syncDisabled =
     !state.accountId ||
     Boolean(sync.active) ||
     Boolean(payload.scheduler.active);
-  elements.runSync.disabled = syncDisabled;
+  elements.runSyncAll.disabled = syncDisabled;
+  elements.runSyncPending.disabled = syncDisabled;
+  elements.runSyncUpdated.disabled = syncDisabled;
   elements.runSyncSchedule.disabled = syncDisabled;
+  if (document.activeElement !== elements.xianyuAccount) {
+    renderAccountOptions(state.accounts);
+  }
   elements.xianyuSyncState.className = "sync-state-badge";
   if (!state.accountId) {
     elements.xianyuSyncState.textContent = "请先选择发布账号";
@@ -298,7 +316,9 @@ function renderXianyuDashboard(payload) {
     elements.xianyuSyncState.textContent = "同步未启用";
     elements.xianyuSyncState.classList.add("is-error");
   } else if (sync.active) {
-    elements.xianyuSyncState.textContent = "正在同步";
+    elements.xianyuSyncState.textContent = sync.interrupted
+      ? "同步已中断，可恢复"
+      : "正在同步";
     elements.xianyuSyncState.classList.add("is-active");
   } else if (sync.deferred) {
     elements.xianyuSyncState.textContent = "采集后补跑";
@@ -319,6 +339,7 @@ function renderScheduleDashboard(scheduler) {
     elements.crawlEnabled.checked = Boolean(scheduler.enabled);
     elements.syncCron.value = sync.cronSchedule || "";
     elements.syncEnabled.checked = Boolean(sync.enabled);
+    elements.syncMode.value = sync.mode || "all";
     state.scheduleLoaded = true;
   }
   elements.crawlNextRun.textContent = scheduler.enabled
@@ -329,9 +350,19 @@ function renderScheduleDashboard(scheduler) {
     : "自动同步已关闭";
   const taskBusy = Boolean(scheduler.active || sync.active);
   elements.runCrawl.disabled = taskBusy;
+  elements.interruptCrawl.disabled =
+    !scheduler.active || Boolean(scheduler.interrupted);
+  elements.resumeCrawl.disabled =
+    !scheduler.active || !scheduler.interrupted;
+  elements.interruptSync.disabled =
+    !sync.active || Boolean(sync.interrupted);
+  elements.resumeSync.disabled = !sync.active || !sync.interrupted;
   elements.scheduleSaveState.className = "sync-state-badge";
   if (taskBusy) {
-    elements.scheduleSaveState.textContent = "任务运行中";
+    elements.scheduleSaveState.textContent =
+      scheduler.interrupted || sync.interrupted
+        ? "任务已中断，可恢复"
+        : "任务运行中";
     elements.scheduleSaveState.classList.add("is-active");
   } else if (state.scheduleDirty) {
     elements.scheduleSaveState.textContent = "有未保存修改";
@@ -353,7 +384,7 @@ function renderSyncRun(run) {
     ["最近批次", `#${run.id} · ${statusLabels[run.status] ?? run.status}`],
     [
       "账号 / 入选",
-      `${run.accountId ?? "—"} / ${run.selectedCount} 条 · ${run.batchCount} 批`,
+      `${run.accountId ?? "—"} / ${syncModeLabels[run.syncMode] ?? "全部商品"} / ${run.selectedCount} 条 · ${run.batchCount} 批`,
     ],
     [
       "素材",
@@ -797,15 +828,29 @@ function requireXianyuApiKey() {
 
 function renderAccountOptions(accounts) {
   clear(elements.xianyuAccount);
-  if (accounts.length === 0) {
-    const option = createElement("option", null, "没有可用账号");
+  const savedAccountExists = accounts.some(
+    (account) => account.accountId === state.accountId,
+  );
+  if (state.accountId && !savedAccountExists) {
+    const saved = createElement(
+      "option",
+      null,
+      `${state.accountId} · 当前已保存`,
+    );
+    saved.value = state.accountId;
+    elements.xianyuAccount.append(saved);
+  }
+  if (accounts.length === 0 && !state.accountId) {
+    const option = createElement("option", null, "请先加载账号");
     option.value = "";
     elements.xianyuAccount.append(option);
     return;
   }
-  const placeholder = createElement("option", null, "请选择发布账号");
-  placeholder.value = "";
-  elements.xianyuAccount.append(placeholder);
+  if (!state.accountId) {
+    const placeholder = createElement("option", null, "请选择发布账号");
+    placeholder.value = "";
+    elements.xianyuAccount.append(placeholder);
+  }
   for (const account of accounts) {
     const option = createElement(
       "option",
@@ -822,10 +867,10 @@ function renderAccountOptions(accounts) {
     (account) => account.accountId === state.accountId && account.enabled,
   )
     ? state.accountId
-    : "";
+    : state.accountId || "";
 }
 
-async function loadXianyuAccounts() {
+async function loadXianyuAccounts({ announce = true } = {}) {
   const key = requireXianyuApiKey();
   elements.loadAccounts.disabled = true;
   try {
@@ -834,7 +879,7 @@ async function loadXianyuAccounts() {
     });
     state.accounts = payload.items;
     renderAccountOptions(state.accounts);
-    showToast(`已加载 ${state.accounts.length} 个账号`);
+    if (announce) showToast(`已加载 ${state.accounts.length} 个账号`);
   } finally {
     elements.loadAccounts.disabled = false;
   }
@@ -881,31 +926,56 @@ async function saveXianyuAccount(event) {
   }
 }
 
-async function runXianyuSync() {
+async function runXianyuSync(mode) {
   const key = requireXianyuApiKey();
   if (!state.accountId) throw new Error("请先选择发布账号");
+  const label = syncModeLabels[mode] ?? syncModeLabels.all;
   if (
     !window.confirm(
-      `确认使用账号“${state.accountId}”同步全部 ${state.eligibleGames} 条有效商品吗？同名商品会跳过，新商品会提交发布。`,
+      `确认使用账号“${state.accountId}”同步“${label}”吗？同名商品会跳过，已发布商品不会重复上架。`,
     )
   ) {
     return;
   }
-  elements.runSync.disabled = true;
+  elements.runSyncAll.disabled = true;
+  elements.runSyncPending.disabled = true;
+  elements.runSyncUpdated.disabled = true;
   elements.runSyncSchedule.disabled = true;
   try {
     await fetchJson("/api/sync/run", {
       method: "POST",
       headers: { "X-API-Key": key },
-      body: {},
+      body: { mode },
     });
-    showToast("全量同步任务已启动");
+    showToast(`${label}同步任务已启动`);
     window.setTimeout(() => {
       void refreshAll();
     }, 1_000);
   } finally {
-    elements.runSync.disabled = false;
+    elements.runSyncAll.disabled = false;
+    elements.runSyncPending.disabled = false;
+    elements.runSyncUpdated.disabled = false;
     elements.runSyncSchedule.disabled = false;
+  }
+}
+
+async function controlTask(task, action, button) {
+  const key = requireXianyuApiKey();
+  button.disabled = true;
+  try {
+    await fetchJson(`/api/tasks/${task}/${action}`, {
+      method: "POST",
+      headers: { "X-API-Key": key },
+      body: {},
+    });
+    showToast(
+      `${task === "crawl" ? "采集" : "同步"}任务已${
+        action === "interrupt" ? "中断" : "恢复"
+      }`,
+    );
+    await refreshAll();
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -946,6 +1016,7 @@ async function saveScheduleSettings(event) {
     sync: {
       cron_schedule: elements.syncCron.value.trim(),
       enabled: elements.syncEnabled.checked,
+      mode: elements.syncMode.value,
     },
   };
   if (
@@ -1056,16 +1127,50 @@ elements.xianyuSettingsForm.addEventListener("submit", (event) => {
   void saveXianyuAccount(event).catch((error) => showToast(error.message));
 });
 
-elements.runSync.addEventListener("click", () => {
-  void runXianyuSync().catch((error) => showToast(error.message));
+elements.runSyncAll.addEventListener("click", () => {
+  void runXianyuSync("all").catch((error) => showToast(error.message));
+});
+
+elements.runSyncPending.addEventListener("click", () => {
+  void runXianyuSync("pending").catch((error) => showToast(error.message));
+});
+
+elements.runSyncUpdated.addEventListener("click", () => {
+  void runXianyuSync("updated").catch((error) => showToast(error.message));
 });
 
 elements.runSyncSchedule.addEventListener("click", () => {
-  void runXianyuSync().catch((error) => showToast(error.message));
+  void runXianyuSync(elements.syncMode.value).catch((error) =>
+    showToast(error.message),
+  );
 });
 
 elements.runCrawl.addEventListener("click", () => {
   void runManualCrawl().catch((error) => showToast(error.message));
+});
+
+elements.interruptCrawl.addEventListener("click", () => {
+  void controlTask("crawl", "interrupt", elements.interruptCrawl).catch(
+    (error) => showToast(error.message),
+  );
+});
+
+elements.resumeCrawl.addEventListener("click", () => {
+  void controlTask("crawl", "resume", elements.resumeCrawl).catch(
+    (error) => showToast(error.message),
+  );
+});
+
+elements.interruptSync.addEventListener("click", () => {
+  void controlTask("sync", "interrupt", elements.interruptSync).catch(
+    (error) => showToast(error.message),
+  );
+});
+
+elements.resumeSync.addEventListener("click", () => {
+  void controlTask("sync", "resume", elements.resumeSync).catch(
+    (error) => showToast(error.message),
+  );
 });
 
 elements.scheduleForm.addEventListener("submit", (event) => {
@@ -1080,6 +1185,7 @@ for (const control of [
   elements.crawlEnabled,
   elements.syncCron,
   elements.syncEnabled,
+  elements.syncMode,
 ]) {
   control.addEventListener("input", () => {
     if (!state.scheduleLoaded) return;
@@ -1101,7 +1207,15 @@ for (let index = 0; index < 100; index += 1) {
   elements.hotRail.append(createElement("span", "rail-segment"));
 }
 
-void refreshAll();
+async function initializeDashboard() {
+  await refreshAll();
+  if (!elements.adminKey.value.trim()) return;
+  await loadXianyuAccounts({ announce: false }).catch((error) => {
+    showToast(error.message);
+  });
+}
+
+void initializeDashboard();
 window.setInterval(() => {
   void refreshAll();
 }, 15_000);

@@ -69,10 +69,37 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     "2026-07-28T00:01:00.000Z",
     statistics(),
   );
+  const storedGame = database.queryOne(
+    "SELECT content_hash FROM games WHERE id = ?",
+    game.id,
+  );
+  database.markMaterialSynced(
+    game.id,
+    842,
+    storedGame.content_hash,
+    timestamp,
+  );
+  database.markPublicationSubmitted(
+    game.id,
+    "account-a",
+    842,
+    "batch-842",
+    timestamp,
+  );
+  database.markPublicationResult({
+    gameId: game.id,
+    accountId: "account-a",
+    status: "success",
+    itemId: "1067769058126",
+    itemUrl: "https://www.goofish.com/item?id=1067769058126",
+    updatedAt: timestamp,
+  });
   database.close();
 
   let savedSchedule = null;
   let crawlTrigger = null;
+  let syncTrigger = null;
+  let taskControl = null;
   const dashboard = await startDashboardServer(
     {
       dashboardHost: "127.0.0.1",
@@ -85,6 +112,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     },
     () => ({
       active: false,
+      interrupted: false,
       enabled: true,
       cronSchedule: "0 3 * * *",
       cronTimezone: "Asia/Shanghai",
@@ -93,11 +121,13 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       updatedAt: "2026-07-28T00:00:00.000Z",
       sync: {
         active: false,
+        interrupted: false,
         enabled: true,
         cronSchedule: "0 */6 * * *",
         cronTimezone: "Asia/Shanghai",
         nextRun: "2026-07-28T18:00:00.000Z",
         batchSize: 20,
+        mode: "all",
       },
     }),
     {
@@ -131,10 +161,12 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           nextRun: "2026-07-29T20:30:00.000Z",
           sync: {
             active: false,
+            interrupted: false,
             enabled: settings.syncEnabled,
             cronSchedule: settings.syncCronSchedule,
             cronTimezone: settings.cronTimezone,
             nextRun: "2026-07-29T16:15:00.000Z",
+            mode: settings.syncMode,
           },
         };
       },
@@ -142,11 +174,27 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         crawlTrigger = trigger;
         return { trigger, mode: "full", active: true };
       },
-      triggerSync: (trigger) => ({
-        trigger,
-        mode: "full",
-        active: true,
-      }),
+      triggerSync: (trigger, mode) => {
+        syncTrigger = { trigger, mode };
+        return {
+          trigger,
+          mode,
+          active: true,
+        };
+      },
+      controlTask: (task, action) => {
+        taskControl = { task, action };
+        return {
+          active: task === "crawl",
+          interrupted: action === "interrupt",
+          sync: {
+            active: task === "sync",
+            interrupted:
+              task === "sync" && action === "interrupt",
+            mode: "all",
+          },
+        };
+      },
     },
   );
   const baseUrl = `http://127.0.0.1:${dashboard.address.port}`;
@@ -165,12 +213,20 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     ).then((response) => response.json());
     assert.equal(schedule.crawl.cronSchedule, "0 3 * * *");
     assert.equal(schedule.sync.enabled, true);
+    assert.equal(schedule.sync.mode, "all");
 
     const games = await fetch(
       `${baseUrl}/api/games?query=118842&status=success`,
     ).then((response) => response.json());
     assert.equal(games.total, 1);
     assert.equal(games.items[0].title, "黄昏远征军");
+    assert.equal(games.items[0].xianyuItemId, "1067769058126");
+
+    const gamesByItem = await fetch(
+      `${baseUrl}/api/games?query=1067769058126`,
+    ).then((response) => response.json());
+    assert.equal(gamesByItem.total, 1);
+    assert.equal(gamesByItem.items[0].id, 118842);
 
     const detail = await fetch(`${baseUrl}/api/games/118842`).then(
       (response) => response.json(),
@@ -195,6 +251,15 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       sources.data,
       "解压密码：laoquzhang.com\n百度网盘：https://pan.example/download?pwd=e15a 提取码：e15a",
     );
+
+    const sourcesByItem = await fetch(
+      `${baseUrl}/api/download-sources?item_id=1067769058126`,
+      { headers: { "X-API-Key": "download-secret" } },
+    ).then((response) => response.json());
+    assert.equal(sourcesByItem.itemId, "1067769058126");
+    assert.equal(sourcesByItem.game.id, 118842);
+    assert.equal(sourcesByItem.archivePassword, "laoquzhang.com");
+    assert.equal(sourcesByItem.downloads.length, 1);
 
     const sourcesByPrefixedName = await fetch(
       `${baseUrl}/api/download-sources?name=${encodeURIComponent("【秒发 】 黄昏远征军")}`,
@@ -337,6 +402,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           sync: {
             cron_schedule: "15 */8 * * *",
             enabled: true,
+            mode: "updated",
           },
         }),
       },
@@ -344,6 +410,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(updatedSchedule.success, true);
     assert.equal(savedSchedule.crawlEnabled, false);
     assert.equal(savedSchedule.syncCronSchedule, "15 */8 * * *");
+    assert.equal(savedSchedule.syncMode, "updated");
 
     const crawl = await fetch(`${baseUrl}/api/crawl/run`, {
       method: "POST",
@@ -362,10 +429,32 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         "content-type": "application/json",
         "X-API-Key": "xianyu-secret",
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ mode: "pending" }),
     });
     assert.equal(sync.status, 202);
-    assert.equal((await sync.json()).mode, "full");
+    assert.equal((await sync.json()).mode, "pending");
+    assert.deepEqual(syncTrigger, {
+      trigger: "manual",
+      mode: "pending",
+    });
+
+    const interruptedSync = await fetch(
+      `${baseUrl}/api/tasks/sync/interrupt`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({}),
+      },
+    ).then((response) => response.json());
+    assert.equal(interruptedSync.success, true);
+    assert.equal(interruptedSync.scheduler.sync.interrupted, true);
+    assert.deepEqual(taskControl, {
+      task: "sync",
+      action: "interrupt",
+    });
 
     const page = await fetch(baseUrl).then((response) => response.text());
     assert.match(page, /G520 采集观测台/);

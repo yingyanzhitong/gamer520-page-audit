@@ -63,6 +63,12 @@ function mapGame(row) {
     contentHash: row.content_hash,
     lastChangeType: row.last_change_type,
     lastChangedAt: row.last_changed_at,
+    xianyuItemId:
+      row.xianyu_item_id ?? row.publication_item_id ?? null,
+    xianyuItemUrl:
+      row.xianyu_item_url ?? row.publication_item_url ?? null,
+    xianyuAccountId: row.xianyu_account_id ?? null,
+    xianyuPublishedAt: row.xianyu_published_at ?? null,
     materialSyncStatus: row.material_sync_status ?? "pending",
     publicationStatus: row.publication_status ?? "pending",
     publishedItemId: row.publication_item_id ?? null,
@@ -77,6 +83,7 @@ function mapSyncRun(row) {
     id: row.id,
     triggerType: row.trigger_type,
     accountId: row.account_id,
+    syncMode: row.sync_mode ?? "all",
     requestedLimit: row.requested_limit,
     status: row.status,
     selectedCount: row.selected_count,
@@ -141,6 +148,16 @@ function salePrice(value, { allowNull = false } = {}) {
     throw error;
   }
   return Math.round(parsed * 100) / 100;
+}
+
+function syncMode(value, fallback = "all") {
+  const normalized = String(value ?? fallback).trim();
+  if (!new Set(["all", "pending", "updated"]).has(normalized)) {
+    const error = new Error("同步范围必须是 all、pending 或 updated");
+    error.statusCode = 422;
+    throw error;
+  }
+  return normalized;
 }
 
 function sendJson(response, status, payload) {
@@ -327,10 +344,10 @@ function listGames(database, requestUrl) {
 
   if (query) {
     conditions.push(
-      "(CAST(games.id AS TEXT) LIKE ? OR games.title LIKE ?)",
+      "(CAST(games.id AS TEXT) LIKE ? OR games.title LIKE ? OR games.xianyu_item_id LIKE ?)",
     );
     const pattern = `%${query}%`;
-    parameters.push(pattern, pattern);
+    parameters.push(pattern, pattern, pattern);
   }
   if (status !== "all") {
     conditions.push("games.scrape_status = ?");
@@ -427,12 +444,17 @@ function gameDetail(database, gameId) {
 
 function downloadSources(database, requestUrl) {
   const idValue = requestUrl.searchParams.get("id")?.trim() ?? "";
+  const itemIdValue =
+    requestUrl.searchParams.get("item_id")?.trim() ?? "";
   const requestedName =
     requestUrl.searchParams.get("name")?.trim() ?? "";
-  if (Boolean(idValue) === Boolean(requestedName)) {
+  const providedCount = [idValue, itemIdValue, requestedName].filter(
+    Boolean,
+  ).length;
+  if (providedCount !== 1) {
     return {
       status: 422,
-      error: "id 和 name 必须且只能提供一个",
+      error: "id、item_id 和 name 必须且只能提供一个",
     };
   }
 
@@ -452,6 +474,24 @@ function downloadSources(database, requestUrl) {
     rows = database
       .prepare("SELECT * FROM games WHERE id = ?")
       .all(Number(idValue));
+  } else if (itemIdValue) {
+    if (itemIdValue.length > 100) {
+      return { status: 422, error: "item_id 不能超过 100 个字符" };
+    }
+    rows = database
+      .prepare(`
+        SELECT DISTINCT games.*
+        FROM games
+        LEFT JOIN xianyu_publications AS publication
+          ON publication.game_id = games.id
+        WHERE games.xianyu_item_id = ?
+           OR (
+             publication.item_id = ?
+             AND publication.status = 'success'
+           )
+        ORDER BY games.id
+      `)
+      .all(itemIdValue, itemIdValue);
   } else {
     rows = database
       .prepare(
@@ -486,7 +526,10 @@ function downloadSources(database, requestUrl) {
             requestedName,
             normalizedName: nameValue,
           }
-        : null,
+        : itemIdValue
+          ? { itemId: itemIdValue }
+          : null,
+      itemId: itemIdValue || row.xianyu_item_id || null,
       resourceCode: row.resource_code,
       archivePassword: row.archive_password,
       data: buildDownloadData(row.archive_password, downloads),
@@ -652,12 +695,15 @@ export async function startDashboardServer(
             cronSchedule: state.cronSchedule,
             nextRun: state.nextRun ?? null,
             active: Boolean(state.active),
+            interrupted: Boolean(state.interrupted),
           },
           sync: {
             enabled: Boolean(state.sync?.enabled),
             cronSchedule: state.sync?.cronSchedule,
+            mode: state.sync?.mode ?? "all",
             nextRun: state.sync?.nextRun ?? null,
             active: Boolean(state.sync?.active),
+            interrupted: Boolean(state.sync?.interrupted),
           },
         });
         return;
@@ -687,6 +733,7 @@ export async function startDashboardServer(
           crawlEnabled: body.crawl?.enabled,
           syncCronSchedule: body.sync?.cron_schedule,
           syncEnabled: body.sync?.enabled,
+          syncMode: syncMode(body.sync?.mode),
         });
         sendJson(response, 200, {
           success: true,
@@ -806,7 +853,7 @@ export async function startDashboardServer(
         ) {
           return;
         }
-        await readJsonBody(request);
+        const body = await readJsonBody(request);
         const state = runtimeState();
         if (state.active || state.sync?.active) {
           sendError(response, 409, "采集或同步任务正在运行");
@@ -816,11 +863,40 @@ export async function startDashboardServer(
           sendError(response, 503, "闲鱼同步服务尚未启用");
           return;
         }
-        const accepted = handlers.triggerSync("manual");
+        const mode = syncMode(body.mode);
+        const accepted = handlers.triggerSync("manual", mode);
         sendJson(response, 202, {
           success: true,
-          message: "全量同步任务已启动",
+          message: `${mode === "pending" ? "未发布商品" : mode === "updated" ? "已更新商品" : "全部商品"}同步任务已启动`,
           ...accepted,
+        });
+        return;
+      }
+      const taskControlMatch = requestUrl.pathname.match(
+        /^\/api\/tasks\/(crawl|sync)\/(interrupt|resume)$/,
+      );
+      if (request.method === "POST" && taskControlMatch) {
+        if (
+          !requireKey(
+            request,
+            response,
+            config.xianyuApiKey,
+            "X-API-Key",
+          )
+        ) {
+          return;
+        }
+        if (!handlers.controlTask) {
+          sendError(response, 503, "任务控制服务尚未启用");
+          return;
+        }
+        const [, task, action] = taskControlMatch;
+        const scheduler = handlers.controlTask(task, action);
+        sendJson(response, 200, {
+          success: true,
+          task,
+          action,
+          scheduler,
         });
         return;
       }

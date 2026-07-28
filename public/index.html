@@ -10,8 +10,8 @@
     >
     <title>G520 采集观测台</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css?v=1.4.0">
-    <script type="module" src="/app.js?v=1.4.0"></script>
+    <link rel="stylesheet" href="/styles.css?v=1.5.0">
+    <script type="module" src="/app.js?v=1.5.0"></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -188,8 +188,8 @@
             <div class="sync-card-heading">
               <span class="sync-card-index">02</span>
               <div>
-                <strong>启动全量同步</strong>
-                <small>新商品发布，已发布商品仅更新素材</small>
+                <strong>选择同步范围</strong>
+                <small>未发布商品会上架，已发布商品只更新素材</small>
               </div>
             </div>
             <div class="configured-account-row">
@@ -204,9 +204,17 @@
               <span>分批发布</span>
             </div>
             <small class="sync-schedule" id="sync-next-run">同步计划尚未读取</small>
-            <button type="button" class="primary-action" id="run-sync">
-              同步全部商品
-            </button>
+            <div class="sync-mode-actions" aria-label="手动同步范围">
+              <button type="button" class="primary-action" id="run-sync-all">
+                全部商品
+              </button>
+              <button type="button" class="secondary-action" id="run-sync-pending">
+                未发布商品
+              </button>
+              <button type="button" class="secondary-action" id="run-sync-updated">
+                已更新商品
+              </button>
+            </div>
           </div>
           <div class="sync-run-summary sync-result-card" id="sync-run-summary">
             <div class="empty-state">还没有同步任务</div>
@@ -278,9 +286,17 @@
                 <span>下一次自动采集</span>
                 <time id="crawl-next-run">—</time>
               </div>
-              <button type="button" class="secondary-action" id="run-crawl">
-                立即采集
-              </button>
+              <div class="task-actions">
+                <button type="button" class="secondary-action" id="run-crawl">
+                  立即采集
+                </button>
+                <button type="button" class="task-control" id="interrupt-crawl">
+                  中断
+                </button>
+                <button type="button" class="task-control" id="resume-crawl">
+                  恢复
+                </button>
+              </div>
             </article>
 
             <article class="task-lane task-lane-sync">
@@ -306,17 +322,34 @@
                 >
                 <small>示例：每 6 小时使用 <code>0 */6 * * *</code></small>
               </label>
+              <label class="cron-field">
+                <span>定时同步范围</span>
+                <select id="sync-mode">
+                  <option value="all">全部待处理商品</option>
+                  <option value="pending">未发布商品</option>
+                  <option value="updated">已更新商品</option>
+                </select>
+                <small>定时触发时按这里保存的范围执行</small>
+              </label>
               <div class="task-next-run">
                 <span>下一次自动同步</span>
                 <time id="schedule-sync-next-run">—</time>
               </div>
-              <button
-                type="button"
-                class="secondary-action"
-                id="run-sync-schedule"
-              >
-                立即同步
-              </button>
+              <div class="task-actions">
+                <button
+                  type="button"
+                  class="secondary-action"
+                  id="run-sync-schedule"
+                >
+                  按定时范围执行
+                </button>
+                <button type="button" class="task-control" id="interrupt-sync">
+                  中断
+                </button>
+                <button type="button" class="task-control" id="resume-sync">
+                  恢复
+                </button>
+              </div>
             </article>
           </div>
         </form>

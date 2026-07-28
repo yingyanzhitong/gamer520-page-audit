@@ -290,6 +290,15 @@ test("已发布商品更新只更新素材，切换账号后才重新发布", as
     const first = await service.run({ trigger: "test", limit: 20 });
     assert.equal(first.publishSuccess, 1);
     assert.equal(client.publishCalls.length, 1);
+    const publishedDatabase = new CrawlerDatabase(databasePath);
+    assert.equal(
+      publishedDatabase.queryOne(
+        "SELECT xianyu_item_id FROM games WHERE id = ?",
+        discovered.id,
+      ).xianyu_item_id,
+      "item-account-a-1",
+    );
+    publishedDatabase.close();
 
     const updatedDatabase = new CrawlerDatabase(databasePath);
     updatedDatabase.saveGameSuccess(
@@ -331,6 +340,83 @@ test("已发布商品更新只更新素材，切换账号后才重新发布", as
     assert.equal(switched.publishSuccess, 1);
     assert.equal(client.publishCalls.length, 2);
     assert.equal(client.publishCalls.at(-1).accountId, "account-b");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("未发布和已更新同步范围只处理对应商品", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-mode-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const firstAt = "2026-07-28T00:00:00.000Z";
+  const firstGame = game(501);
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    database.upsertDiscoveredGames([firstGame], firstAt);
+    database.saveGameSuccess(
+      firstGame,
+      result(firstGame.id, "初始简介"),
+      firstAt,
+    );
+    database.setXianyuAccountId("account-a", firstAt);
+  } finally {
+    database.close();
+  }
+
+  const client = new FakeXianyuClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    await service.run({ trigger: "test", mode: "all" });
+    const repeatedAll = await service.run({
+      trigger: "test",
+      mode: "all",
+    });
+    assert.equal(repeatedAll.selectedCount, 1);
+    assert.equal(repeatedAll.publishSubmitted, 0);
+    assert.equal(client.publishCalls.length, 1);
+
+    const changedAt = "2026-07-29T00:00:00.000Z";
+    const secondGame = game(502);
+    const changedDatabase = new CrawlerDatabase(databasePath);
+    changedDatabase.saveGameSuccess(
+      firstGame,
+      result(firstGame.id, "更新后的简介"),
+      changedAt,
+    );
+    changedDatabase.upsertDiscoveredGames([secondGame], changedAt);
+    changedDatabase.saveGameSuccess(
+      secondGame,
+      result(secondGame.id, "新商品简介"),
+      changedAt,
+    );
+    changedDatabase.close();
+
+    const pending = await service.run({
+      trigger: "test",
+      mode: "pending",
+    });
+    assert.equal(pending.mode, "pending");
+    assert.equal(pending.selectedCount, 1);
+    assert.equal(pending.publishSuccess, 1);
+    assert.equal(
+      client.upsertCalls.at(-1)[0].external_id,
+      String(secondGame.id),
+    );
+
+    const updated = await service.run({
+      trigger: "test",
+      mode: "updated",
+    });
+    assert.equal(updated.mode, "updated");
+    assert.equal(updated.selectedCount, 1);
+    assert.equal(updated.publishSubmitted, 0);
+    assert.equal(
+      client.upsertCalls.at(-1)[0].external_id,
+      String(firstGame.id),
+    );
+    assert.equal(client.publishCalls.length, 2);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

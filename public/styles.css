@@ -1665,6 +1665,29 @@ footer {
   color: #111827;
 }
 
+.sync-mode-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sync-mode-actions button {
+  min-width: 0;
+  padding-inline: 10px;
+  font-size: 11px;
+}
+
+.sync-launch-card .sync-mode-actions .secondary-action {
+  border-color: rgb(255 255 255 / 30%);
+  color: #e2e8f0;
+}
+
+.sync-launch-card .sync-mode-actions .secondary-action:hover:not(:disabled) {
+  border-color: #818cf8;
+  background: rgb(129 140 248 / 12%);
+  color: white;
+}
+
 .sync-run-summary {
   display: grid;
   align-content: center;
@@ -1767,7 +1790,8 @@ footer {
 }
 
 .schedule-control-bar input,
-.cron-field input {
+.cron-field input,
+.cron-field select {
   width: 100%;
   min-height: 44px;
   padding: 0 12px;
@@ -1919,9 +1943,34 @@ footer {
   font-size: 12px;
 }
 
-.task-lane > .secondary-action {
+.task-actions {
   grid-column: 1 / -1;
-  justify-self: end;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.task-control {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--line-dark);
+  border-radius: 10px;
+  background: #f8fafc;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.task-control:hover:not(:disabled) {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+  color: #8a5a00;
+}
+
+.task-control:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
 }
 
 .detail-credentials {
@@ -2097,6 +2146,10 @@ footer {
     width: 100%;
   }
 
+  .sync-mode-actions {
+    grid-template-columns: 1fr;
+  }
+
   .automation-panel .panel-heading {
     align-items: flex-start;
     gap: 14px;
@@ -2131,7 +2184,13 @@ footer {
     min-width: 0;
   }
 
-  .task-lane > .secondary-action {
+  .task-actions {
+    display: grid;
+    grid-template-columns: 1fr 0.7fr 0.7fr;
+    width: 100%;
+  }
+
+  .task-actions button {
     width: 100%;
   }
 

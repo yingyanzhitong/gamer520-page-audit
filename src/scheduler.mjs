@@ -5,11 +5,14 @@ import { runCrawl } from "./crawler.mjs";
 import { CrawlerDatabase } from "./database.mjs";
 import { startDashboardServer } from "./dashboard-server.mjs";
 import { XianyuSyncService } from "./sync-service.mjs";
+import { TaskControl } from "./task-control.mjs";
 import { nowIso, serializeError } from "./utils.mjs";
 
 const config = loadConfig();
 let activeRun = null;
 let activeSync = null;
+let crawlControl = null;
+let syncControl = null;
 let deferredSync = null;
 let deferredCrawl = null;
 let stopping = false;
@@ -36,6 +39,7 @@ function settingsFromRow(row) {
     crawlEnabled: Boolean(row.crawl_enabled),
     syncCronSchedule: row.sync_cron_schedule,
     syncEnabled: Boolean(row.sync_enabled),
+    syncMode: row.sync_mode ?? "all",
     updatedAt: row.updated_at,
   };
 }
@@ -47,12 +51,18 @@ function normalizeScheduleSettings(input) {
     crawlEnabled: input.crawlEnabled,
     syncCronSchedule: String(input.syncCronSchedule ?? "").trim(),
     syncEnabled: input.syncEnabled,
+    syncMode: String(input.syncMode ?? "").trim(),
   };
   if (
     !normalized.cronTimezone ||
     normalized.cronTimezone.length > 80
   ) {
     const error = new Error("任务时区不能为空且不能超过 80 个字符");
+    error.statusCode = 422;
+    throw error;
+  }
+  if (!new Set(["all", "pending", "updated"]).has(normalized.syncMode)) {
+    const error = new Error("定时同步范围必须是 all、pending 或 updated");
     error.statusCode = 422;
     throw error;
   }
@@ -109,7 +119,9 @@ function triggerCrawl(reason) {
     return activeSync;
   }
 
-  activeRun = runCrawl({ trigger: reason })
+  crawlControl = new TaskControl();
+  const control = crawlControl;
+  activeRun = runCrawl({ trigger: reason, control })
     .catch((error) => {
       log("scheduled_crawl_failed", {
         reason,
@@ -118,16 +130,17 @@ function triggerCrawl(reason) {
     })
     .finally(() => {
       activeRun = null;
+      if (crawlControl === control) crawlControl = null;
       if (deferredSync && !stopping) {
         const deferred = deferredSync;
         deferredSync = null;
-        void triggerSync(deferred.reason);
+        void triggerSync(deferred.reason, deferred.mode);
       }
     });
   return activeRun;
 }
 
-function triggerSync(reason) {
+function triggerSync(reason, mode = schedulerSettings.syncMode) {
   if (
     stopping ||
     (reason.startsWith("schedule") && !schedulerSettings.syncEnabled)
@@ -142,7 +155,7 @@ function triggerSync(reason) {
     return activeSync;
   }
   if (activeRun) {
-    deferredSync = { reason: `${reason}-deferred` };
+    deferredSync = { reason: `${reason}-deferred`, mode };
     log("sync_deferred", {
       reason,
       message: "采集任务正在运行，闲鱼同步将在采集结束后补跑",
@@ -150,8 +163,10 @@ function triggerSync(reason) {
     return activeRun;
   }
 
+  syncControl = new TaskControl();
+  const control = syncControl;
   activeSync = syncService
-    .run({ trigger: reason })
+    .run({ trigger: reason, mode, control })
     .then((result) => {
       log("xianyu_sync_completed", result);
       return result;
@@ -164,6 +179,7 @@ function triggerSync(reason) {
     })
     .finally(() => {
       activeSync = null;
+      if (syncControl === control) syncControl = null;
       if (deferredCrawl && !stopping) {
         const deferred = deferredCrawl;
         deferredCrawl = null;
@@ -191,7 +207,7 @@ function buildScheduledJobs(settings) {
         settings.syncCronSchedule,
         { timezone: settings.cronTimezone },
         () => {
-          void triggerSync("schedule");
+          void triggerSync("schedule", settings.syncMode);
         },
       );
     }
@@ -238,6 +254,39 @@ function updateScheduleSettings(input) {
     crawlEnabled: schedulerSettings.crawlEnabled,
     syncCronSchedule: schedulerSettings.syncCronSchedule,
     syncEnabled: schedulerSettings.syncEnabled,
+    syncMode: schedulerSettings.syncMode,
+  });
+  return scheduleRuntime();
+}
+
+function controlTask(task, action) {
+  const control =
+    task === "crawl"
+      ? crawlControl
+      : task === "sync"
+        ? syncControl
+        : null;
+  const active = task === "crawl" ? activeRun : activeSync;
+  if (!control || !active) {
+    const error = new Error(
+      task === "crawl" ? "当前没有采集任务" : "当前没有同步任务",
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+  if (action === "interrupt") {
+    control.interrupt();
+  } else if (action === "resume") {
+    control.resume();
+  } else {
+    const error = new Error("任务控制操作无效");
+    error.statusCode = 422;
+    throw error;
+  }
+  log("task_control_changed", {
+    task,
+    action,
+    interrupted: control.interrupted,
   });
   return scheduleRuntime();
 }
@@ -245,6 +294,7 @@ function updateScheduleSettings(input) {
 function scheduleRuntime() {
   return {
     active: Boolean(activeRun),
+    interrupted: Boolean(crawlControl?.interrupted),
     enabled: schedulerSettings.crawlEnabled,
     cronSchedule: schedulerSettings.crawlCronSchedule,
     cronTimezone: schedulerSettings.cronTimezone,
@@ -253,12 +303,14 @@ function scheduleRuntime() {
     updatedAt: schedulerSettings.updatedAt,
     sync: {
       active: Boolean(activeSync),
+      interrupted: Boolean(syncControl?.interrupted),
       enabled: schedulerSettings.syncEnabled,
       deferred: Boolean(deferredSync),
       cronSchedule: schedulerSettings.syncCronSchedule,
       cronTimezone: schedulerSettings.cronTimezone,
       nextRun: syncJob?.nextRun()?.toISOString() ?? null,
       batchSize: config.syncRunLimit,
+      mode: schedulerSettings.syncMode,
     },
   };
 }
@@ -273,6 +325,7 @@ schedulerSettings = settingsFromRow(
       crawlEnabled: config.crawlEnabled,
       syncCronSchedule: config.syncCronSchedule,
       syncEnabled: config.syncEnabled,
+      syncMode: "all",
     },
     nowIso(),
   ),
@@ -289,10 +342,11 @@ dashboard = await startDashboardServer(config, scheduleRuntime, {
     void triggerCrawl(reason);
     return { active: true, mode: "full" };
   },
-  triggerSync: (reason) => {
-    void triggerSync(reason);
-    return { active: true, mode: "full" };
+  triggerSync: (reason, mode) => {
+    void triggerSync(reason, mode);
+    return { active: true, mode };
   },
+  controlTask,
 });
 
 async function shutdown(signal) {
@@ -300,6 +354,8 @@ async function shutdown(signal) {
   stopping = true;
   crawlJob?.stop();
   syncJob?.stop();
+  crawlControl?.resume();
+  syncControl?.resume();
   log("scheduler_stopping", { signal });
   await Promise.allSettled(
     [activeRun, activeSync].filter(Boolean),

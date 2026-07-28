@@ -27,10 +27,11 @@ function createStatistics() {
   };
 }
 
-async function runWithRetry(operation, config) {
+async function runWithRetry(operation, config, control = null) {
   let lastError;
   for (let attempt = 1; attempt <= config.maxRetries + 1; attempt += 1) {
     try {
+      await control?.checkpoint();
       return {
         value: await operation(attempt),
         attemptCount: attempt,
@@ -60,6 +61,7 @@ function log(event, fields = {}) {
 export async function runCrawl({
   trigger = "manual",
   overrides = {},
+  control = null,
 } = {}) {
   const config = loadConfig(overrides);
   const database = new CrawlerDatabase(config.dbPath);
@@ -82,12 +84,14 @@ export async function runCrawl({
   });
 
   try {
+    await control?.checkpoint();
     browser = await launchBrowser(config);
     const listContext = await createCrawlerContext(browser);
     const discovered = new Map();
 
     try {
       for (let pageNumber = 1; pageNumber <= config.pageCount; pageNumber += 1) {
+        await control?.checkpoint();
         const pageUrl = buildListPageUrl(config.listUrl, pageNumber);
         try {
           const { value: items } = await runWithRetry(
@@ -99,6 +103,7 @@ export async function runCrawl({
                 config,
               ),
             config,
+            control,
           );
           statistics.listPagesSucceeded += 1;
 
@@ -167,6 +172,7 @@ export async function runCrawl({
       const context = await createCrawlerContext(browser);
       try {
         while (!abortReason) {
+          await control?.checkpoint();
           const currentIndex = cursor;
           cursor += 1;
           const game = queue[currentIndex];
@@ -182,6 +188,7 @@ export async function runCrawl({
                   lastScrapedAt: refreshState.last_scraped_at,
                 }),
               config,
+              control,
             );
             if (result.unchanged) {
               database.saveGameUnchanged(

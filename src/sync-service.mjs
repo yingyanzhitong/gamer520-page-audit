@@ -4,6 +4,8 @@ import { CrawlerDatabase } from "./database.mjs";
 import { nowIso, serializeError } from "./utils.mjs";
 import { XianyuClient } from "./xianyu-client.mjs";
 
+const syncModes = new Set(["all", "pending", "updated"]);
+
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -115,7 +117,16 @@ export class XianyuSyncService {
     return account;
   }
 
-  async run({ trigger = "manual" } = {}) {
+  async run({
+    trigger = "manual",
+    mode = "all",
+    control = null,
+  } = {}) {
+    if (!syncModes.has(mode)) {
+      const error = new Error("同步范围必须是 all、pending 或 updated");
+      error.statusCode = 422;
+      throw error;
+    }
     const database = new CrawlerDatabase(this.config.dbPath);
     const settings = database.getXianyuSyncSettings();
     const accountId = settings.account_id;
@@ -131,6 +142,7 @@ export class XianyuSyncService {
     const runId = database.startSyncRun(
       trigger,
       accountId,
+      mode,
       batchSize,
       startedAt,
     );
@@ -148,9 +160,15 @@ export class XianyuSyncService {
     let latestBatchId = null;
 
     try {
+      await control?.checkpoint();
       await this.validateAccount(accountId);
+      await control?.checkpoint();
       database.recordMissingImageSyncErrors(nowIso());
-      const candidates = database.listSyncCandidates(accountId, 100_000);
+      const candidates = database.listSyncCandidates(
+        accountId,
+        100_000,
+        mode,
+      );
       database.updateSyncRun(runId, {
         selected_count: candidates.length,
       });
@@ -163,6 +181,7 @@ export class XianyuSyncService {
         return {
           runId,
           accountId,
+          mode,
           selectedCount: 0,
           batchCount: 0,
           status: "success",
@@ -171,6 +190,7 @@ export class XianyuSyncService {
 
       const batches = splitIntoBatches(candidates, batchSize);
       for (const batchCandidates of batches) {
+        await control?.checkpoint();
         totals.batch_count += 1;
         const upsertPayload = batchCandidates.map((game) => ({
           external_id: String(game.id),
@@ -188,6 +208,7 @@ export class XianyuSyncService {
 
         let materialResults;
         try {
+          await control?.checkpoint();
           materialResults = await this.client.upsertMaterials(upsertPayload);
         } catch (error) {
           const failedAt = nowIso();
@@ -255,6 +276,7 @@ export class XianyuSyncService {
           continue;
         }
 
+        await control?.checkpoint();
         const requestId = randomUUID();
         const materialIds = publishCandidates.map(
           (candidate) => materialByGame.get(candidate.id).materialId,
@@ -325,6 +347,7 @@ export class XianyuSyncService {
           return {
             runId,
             accountId,
+            mode,
             selectedCount: candidates.length,
             batchCount: totals.batch_count,
             batchId,
@@ -364,6 +387,7 @@ export class XianyuSyncService {
           return {
             runId,
             accountId,
+            mode,
             selectedCount: candidates.length,
             batchCount: totals.batch_count,
             batchId,
@@ -446,6 +470,7 @@ export class XianyuSyncService {
       return {
         runId,
         accountId,
+        mode,
         selectedCount: candidates.length,
         materialSkipped: totals.material_skipped,
         publishSubmitted: totals.publish_submitted,
@@ -477,9 +502,11 @@ export class XianyuSyncService {
         return {
           runId,
           accountId,
+          mode,
           selectedCount: database.listSyncCandidates(
             accountId,
             100_000,
+            mode,
           ).length,
           batchCount: totals.batch_count,
           batchId: submittedPublication.batchId,
