@@ -1,0 +1,1161 @@
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+
+function transaction(database, callback) {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const result = callback();
+    database.exec("COMMIT");
+    return result;
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function normalizeHashValue(value) {
+  return typeof value === "string" ? value.trim() : (value ?? null);
+}
+
+export function computeGameContentHash(game, downloads = []) {
+  const canonicalDownloads = downloads
+    .map((download) => ({
+      provider: normalizeHashValue(download.provider),
+      url: normalizeHashValue(download.url),
+      password: normalizeHashValue(download.password),
+      extractionCode: normalizeHashValue(
+        download.extractionCode ?? download.extraction_code,
+      ),
+      qrImageUrl: normalizeHashValue(
+        download.qrImageUrl ?? download.qr_image_url,
+      ),
+      decodeMethod: normalizeHashValue(
+        download.qrDecodeMethod ??
+          download.decodeMethod ??
+          download.decode_method,
+      ),
+    }))
+    .sort((left, right) =>
+      JSON.stringify(left).localeCompare(JSON.stringify(right)),
+    );
+
+  const canonical = {
+    title: normalizeHashValue(game.title),
+    description: normalizeHashValue(
+      game.description ?? game.gameDescription,
+    ),
+    imageUrl: normalizeHashValue(
+      game.imageUrl ?? game.image ?? game.image_url,
+    ),
+    resourceCode: normalizeHashValue(
+      game.resourceCode ?? game.resource_code,
+    ),
+    detailPageUrl: normalizeHashValue(
+      game.detailPageUrl ?? game.detail_page_url,
+    ),
+    archivePassword: normalizeHashValue(
+      game.archivePassword ?? game.archive_password,
+    ),
+    downloads: canonicalDownloads,
+  };
+  return createHash("sha256")
+    .update(JSON.stringify(canonical))
+    .digest("hex");
+}
+
+export class CrawlerDatabase {
+  constructor(databasePath) {
+    fs.mkdirSync(path.dirname(path.resolve(databasePath)), {
+      recursive: true,
+    });
+    this.database = new DatabaseSync(databasePath);
+    this.database.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA foreign_keys = ON;
+      PRAGMA busy_timeout = 5000;
+
+      CREATE TABLE IF NOT EXISTS games (
+        id INTEGER PRIMARY KEY,
+        source_url TEXT NOT NULL UNIQUE,
+        title TEXT,
+        description TEXT,
+        image_url TEXT,
+        resource_code TEXT,
+        detail_page_url TEXT,
+        archive_password TEXT,
+        hot_page INTEGER,
+        hot_position INTEGER,
+        hot_rank INTEGER,
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        last_scraped_at TEXT,
+        last_attempt_at TEXT,
+        source_updated_at TEXT,
+        sale_price REAL,
+        scrape_status TEXT NOT NULL DEFAULT 'pending',
+        last_error TEXT,
+        content_hash TEXT,
+        last_change_type TEXT,
+        last_changed_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS games_hot_rank_idx
+      ON games(hot_rank);
+
+      CREATE INDEX IF NOT EXISTS games_last_seen_at_idx
+      ON games(last_seen_at);
+
+      CREATE TABLE IF NOT EXISTS downloads (
+        game_id INTEGER NOT NULL,
+        provider TEXT NOT NULL,
+        url TEXT NOT NULL,
+        password TEXT,
+        extraction_code TEXT,
+        qr_image_url TEXT,
+        decode_method TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (game_id, provider, url),
+        FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS crawl_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trigger_type TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        list_pages_succeeded INTEGER NOT NULL DEFAULT 0,
+        list_pages_failed INTEGER NOT NULL DEFAULT 0,
+        discovered_count INTEGER NOT NULL DEFAULT 0,
+        detail_succeeded INTEGER NOT NULL DEFAULT 0,
+        detail_failed INTEGER NOT NULL DEFAULT 0,
+        detail_skipped INTEGER NOT NULL DEFAULT 0,
+        error_summary TEXT,
+        config_json TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS crawl_errors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,
+        game_id INTEGER,
+        target_url TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL,
+        error_name TEXT NOT NULL,
+        error_message TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES crawl_runs(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS xianyu_sync_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        account_id TEXT,
+        default_price REAL NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS scheduler_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        cron_timezone TEXT NOT NULL,
+        crawl_cron_schedule TEXT NOT NULL,
+        crawl_enabled INTEGER NOT NULL DEFAULT 1,
+        sync_cron_schedule TEXT NOT NULL,
+        sync_enabled INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS xianyu_material_sync (
+        game_id INTEGER PRIMARY KEY,
+        material_id INTEGER,
+        synced_content_hash TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        last_error TEXT,
+        last_synced_at TEXT,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS xianyu_publications (
+        game_id INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        material_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'pending',
+        batch_id TEXT,
+        item_id TEXT,
+        item_url TEXT,
+        last_error TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TEXT,
+        published_at TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (game_id, account_id),
+        FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS xianyu_publications_account_status_idx
+      ON xianyu_publications(account_id, status);
+
+      CREATE TABLE IF NOT EXISTS xianyu_sync_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trigger_type TEXT NOT NULL,
+        account_id TEXT,
+        requested_limit INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        selected_count INTEGER NOT NULL DEFAULT 0,
+        material_created INTEGER NOT NULL DEFAULT 0,
+        material_updated INTEGER NOT NULL DEFAULT 0,
+        material_unchanged INTEGER NOT NULL DEFAULT 0,
+        material_skipped INTEGER NOT NULL DEFAULT 0,
+        publish_submitted INTEGER NOT NULL DEFAULT 0,
+        publish_success INTEGER NOT NULL DEFAULT 0,
+        publish_failed INTEGER NOT NULL DEFAULT 0,
+        batch_count INTEGER NOT NULL DEFAULT 0,
+        batch_id TEXT,
+        error_summary TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+    `);
+
+    this.#migrateSchema();
+    this.#backfillContentHashes();
+    this.database.exec("PRAGMA user_version = 4;");
+  }
+
+  #migrateSchema() {
+    const gameColumns = new Set(
+      this.database
+        .prepare("PRAGMA table_info(games)")
+        .all()
+        .map((column) => column.name),
+    );
+    const additions = [
+      ["content_hash", "TEXT"],
+      ["last_change_type", "TEXT"],
+      ["last_changed_at", "TEXT"],
+      ["source_updated_at", "TEXT"],
+      ["sale_price", "REAL"],
+    ];
+    for (const [name, definition] of additions) {
+      if (!gameColumns.has(name)) {
+        this.database.exec(`ALTER TABLE games ADD COLUMN ${name} ${definition}`);
+      }
+    }
+
+    const syncRunColumns = new Set(
+      this.database
+        .prepare("PRAGMA table_info(xianyu_sync_runs)")
+        .all()
+        .map((column) => column.name),
+    );
+    const syncRunAdditions = [
+      ["material_skipped", "INTEGER NOT NULL DEFAULT 0"],
+      ["batch_count", "INTEGER NOT NULL DEFAULT 0"],
+    ];
+    for (const [name, definition] of syncRunAdditions) {
+      if (!syncRunColumns.has(name)) {
+        this.database.exec(
+          `ALTER TABLE xianyu_sync_runs ADD COLUMN ${name} ${definition}`,
+        );
+      }
+    }
+
+    const xianyuSettingsColumns = new Set(
+      this.database
+        .prepare("PRAGMA table_info(xianyu_sync_settings)")
+        .all()
+        .map((column) => column.name),
+    );
+    if (!xianyuSettingsColumns.has("default_price")) {
+      this.database.exec(
+        "ALTER TABLE xianyu_sync_settings ADD COLUMN default_price REAL NOT NULL DEFAULT 1",
+      );
+    }
+  }
+
+  #backfillContentHashes() {
+    const rows = this.database
+      .prepare(
+        `SELECT *
+         FROM games
+         WHERE content_hash IS NULL`,
+      )
+      .all();
+    if (rows.length === 0) return;
+
+    const downloadStatement = this.database.prepare(
+      "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
+    );
+    const updateStatement = this.database.prepare(`
+      UPDATE games
+      SET content_hash = ?,
+          last_change_type = COALESCE(last_change_type, 'new'),
+          last_changed_at = COALESCE(last_changed_at, last_scraped_at, updated_at)
+      WHERE id = ?
+    `);
+    const now = new Date().toISOString();
+    const ensureMaterialStatement = this.database.prepare(`
+      INSERT INTO xianyu_material_sync (
+        game_id, status, updated_at
+      ) VALUES (?, 'pending', ?)
+      ON CONFLICT(game_id) DO NOTHING
+    `);
+
+    transaction(this.database, () => {
+      for (const row of rows) {
+        const downloads = downloadStatement.all(row.id);
+        updateStatement.run(computeGameContentHash(row, downloads), row.id);
+        if (downloads.length > 0) {
+          ensureMaterialStatement.run(row.id, now);
+        }
+      }
+    });
+  }
+
+  close() {
+    this.database.close();
+  }
+
+  markInterruptedRuns(timestamp) {
+    this.database
+      .prepare(`
+        UPDATE crawl_runs
+        SET status = 'interrupted',
+            finished_at = COALESCE(finished_at, ?),
+            error_summary = COALESCE(error_summary, '进程在任务完成前退出')
+        WHERE status = 'running'
+      `)
+      .run(timestamp);
+    this.database
+      .prepare(`
+        UPDATE xianyu_sync_runs
+        SET status = 'interrupted',
+            finished_at = COALESCE(finished_at, ?),
+            error_summary = COALESCE(error_summary, '进程在同步完成前退出')
+        WHERE status IN ('running', 'publishing')
+      `)
+      .run(timestamp);
+  }
+
+  startRun(triggerType, startedAt, publicConfig) {
+    const result = this.database
+      .prepare(`
+        INSERT INTO crawl_runs (
+          trigger_type,
+          started_at,
+          status,
+          config_json
+        ) VALUES (?, ?, 'running', ?)
+      `)
+      .run(triggerType, startedAt, JSON.stringify(publicConfig));
+    return Number(result.lastInsertRowid);
+  }
+
+  updateRunProgress(runId, statistics) {
+    this.database
+      .prepare(`
+        UPDATE crawl_runs
+        SET list_pages_succeeded = ?,
+            list_pages_failed = ?,
+            discovered_count = ?,
+            detail_succeeded = ?,
+            detail_failed = ?,
+            detail_skipped = ?
+        WHERE id = ?
+      `)
+      .run(
+        statistics.listPagesSucceeded,
+        statistics.listPagesFailed,
+        statistics.discoveredCount,
+        statistics.detailSucceeded,
+        statistics.detailFailed,
+        statistics.detailSkipped,
+        runId,
+      );
+  }
+
+  finishRun(runId, status, finishedAt, statistics, errorSummary = null) {
+    this.database
+      .prepare(`
+        UPDATE crawl_runs
+        SET finished_at = ?,
+            status = ?,
+            list_pages_succeeded = ?,
+            list_pages_failed = ?,
+            discovered_count = ?,
+            detail_succeeded = ?,
+            detail_failed = ?,
+            detail_skipped = ?,
+            error_summary = ?
+        WHERE id = ?
+      `)
+      .run(
+        finishedAt,
+        status,
+        statistics.listPagesSucceeded,
+        statistics.listPagesFailed,
+        statistics.discoveredCount,
+        statistics.detailSucceeded,
+        statistics.detailFailed,
+        statistics.detailSkipped,
+        errorSummary,
+        runId,
+      );
+  }
+
+  recordError({
+    runId,
+    gameId = null,
+    targetUrl,
+    stage,
+    attemptCount,
+    errorName,
+    errorMessage,
+    createdAt,
+  }) {
+    this.database
+      .prepare(`
+        INSERT INTO crawl_errors (
+          run_id,
+          game_id,
+          target_url,
+          stage,
+          attempt_count,
+          error_name,
+          error_message,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        runId,
+        gameId,
+        targetUrl,
+        stage,
+        attemptCount,
+        errorName,
+        errorMessage.slice(0, 4_000),
+        createdAt,
+      );
+  }
+
+  upsertDiscoveredGames(games, seenAt) {
+    const statement = this.database.prepare(`
+      INSERT INTO games (
+        id,
+        source_url,
+        title,
+        image_url,
+        hot_page,
+        hot_position,
+        hot_rank,
+        first_seen_at,
+        last_seen_at,
+        scrape_status,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      ON CONFLICT(id) DO UPDATE SET
+        source_url = excluded.source_url,
+        title = CASE
+          WHEN games.last_scraped_at IS NULL
+          THEN COALESCE(excluded.title, games.title)
+          ELSE games.title
+        END,
+        image_url = CASE
+          WHEN games.last_scraped_at IS NULL
+          THEN COALESCE(excluded.image_url, games.image_url)
+          ELSE games.image_url
+        END,
+        hot_page = excluded.hot_page,
+        hot_position = excluded.hot_position,
+        hot_rank = excluded.hot_rank,
+        last_seen_at = excluded.last_seen_at,
+        scrape_status = 'pending',
+        updated_at = excluded.updated_at
+    `);
+
+    transaction(this.database, () => {
+      for (const game of games) {
+        statement.run(
+          game.id,
+          game.sourceUrl,
+          game.title,
+          game.imageUrl,
+          game.hotPage,
+          game.hotPosition,
+          game.hotRank,
+          seenAt,
+          seenAt,
+          seenAt,
+        );
+      }
+    });
+  }
+
+  markGameAttempt(gameId, attemptedAt) {
+    this.database
+      .prepare(`
+        UPDATE games
+        SET last_attempt_at = ?,
+            scrape_status = 'running',
+            updated_at = ?
+        WHERE id = ?
+      `)
+      .run(attemptedAt, attemptedAt, gameId);
+  }
+
+  getGameRefreshState(gameId) {
+    return this.database
+      .prepare(`
+        SELECT
+          source_updated_at,
+          last_scraped_at,
+          scrape_status,
+          (SELECT COUNT(*) FROM downloads WHERE game_id = games.id) AS download_count
+        FROM games
+        WHERE id = ?
+      `)
+      .get(gameId);
+  }
+
+  saveGameUnchanged(gameId, sourceUpdatedAt, checkedAt) {
+    this.database
+      .prepare(`
+        UPDATE games
+        SET source_updated_at = ?,
+            last_attempt_at = ?,
+            scrape_status = 'success',
+            last_error = NULL,
+            updated_at = ?
+        WHERE id = ?
+      `)
+      .run(sourceUpdatedAt, checkedAt, checkedAt, gameId);
+  }
+
+  saveGameSuccess(game, result, savedAt) {
+    transaction(this.database, () => {
+      const previous = this.database
+        .prepare("SELECT * FROM games WHERE id = ?")
+        .get(game.id);
+      const previousDownloads = this.database
+        .prepare(
+          "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
+        )
+        .all(game.id);
+      const nextDownloads = result.resource.downloads ?? [];
+      const nextHash = computeGameContentHash(
+        {
+          title: result.page.title,
+          description: result.page.gameDescription,
+          imageUrl: result.page.image,
+          resourceCode: result.resource.resourceCode,
+          detailPageUrl: result.resource.detailPageUrl,
+          archivePassword: result.resource.archivePassword,
+        },
+        nextDownloads,
+      );
+      const previousHash = previous?.last_scraped_at
+        ? (previous.content_hash ??
+          computeGameContentHash(previous, previousDownloads))
+        : null;
+      const contentChanged = previousHash !== nextHash;
+      const changeType = !previousHash
+        ? "new"
+        : contentChanged
+          ? "updated"
+          : (previous?.last_change_type ?? "unchanged");
+      const changedAt = contentChanged
+        ? savedAt
+        : (previous?.last_changed_at ?? savedAt);
+
+      this.database
+        .prepare(`
+          UPDATE games
+          SET source_url = ?,
+              title = ?,
+              description = ?,
+              image_url = ?,
+              resource_code = ?,
+              detail_page_url = ?,
+              archive_password = ?,
+              last_scraped_at = ?,
+              last_attempt_at = ?,
+              source_updated_at = ?,
+              scrape_status = 'success',
+              last_error = NULL,
+              content_hash = ?,
+              last_change_type = ?,
+              last_changed_at = ?,
+              updated_at = ?
+          WHERE id = ?
+        `)
+        .run(
+          result.page.url || game.sourceUrl,
+          result.page.title,
+          result.page.gameDescription,
+          result.page.image,
+          result.resource.resourceCode,
+          result.resource.detailPageUrl,
+          result.resource.archivePassword,
+          savedAt,
+          savedAt,
+          result.page.sourceUpdatedAt ?? null,
+          nextHash,
+          changeType,
+          changedAt,
+          savedAt,
+          game.id,
+        );
+
+      this.database
+        .prepare("DELETE FROM downloads WHERE game_id = ?")
+        .run(game.id);
+
+      const insertDownload = this.database.prepare(`
+        INSERT INTO downloads (
+          game_id,
+          provider,
+          url,
+          password,
+          extraction_code,
+          qr_image_url,
+          decode_method,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const download of nextDownloads) {
+        insertDownload.run(
+          game.id,
+          download.provider,
+          download.url,
+          download.password,
+          download.extractionCode,
+          download.qrImageUrl,
+          download.qrDecodeMethod,
+          savedAt,
+          savedAt,
+        );
+      }
+
+      if (nextDownloads.length > 0) {
+        this.database
+          .prepare(`
+            INSERT INTO xianyu_material_sync (
+              game_id,
+              status,
+              updated_at
+            ) VALUES (?, 'pending', ?)
+            ON CONFLICT(game_id) DO UPDATE SET
+              status = CASE
+                WHEN xianyu_material_sync.synced_content_hash IS NULL
+                  OR xianyu_material_sync.synced_content_hash != ?
+                THEN 'pending'
+                ELSE xianyu_material_sync.status
+              END,
+              last_error = CASE
+                WHEN xianyu_material_sync.synced_content_hash IS NULL
+                  OR xianyu_material_sync.synced_content_hash != ?
+                THEN NULL
+                ELSE xianyu_material_sync.last_error
+              END,
+              updated_at = excluded.updated_at
+          `)
+          .run(game.id, savedAt, nextHash, nextHash);
+      } else if (previousDownloads.length > 0) {
+        this.database
+          .prepare(`
+            INSERT INTO xianyu_material_sync (
+              game_id,
+              status,
+              last_error,
+              updated_at
+            ) VALUES (?, 'failed', '下载资源已消失，未修改或下架线上闲鱼商品', ?)
+            ON CONFLICT(game_id) DO UPDATE SET
+              status = 'failed',
+              last_error = excluded.last_error,
+              updated_at = excluded.updated_at
+          `)
+          .run(game.id, savedAt);
+      }
+    });
+  }
+
+  saveGameFailure(gameId, errorMessage, attemptedAt) {
+    this.database
+      .prepare(`
+        UPDATE games
+        SET last_attempt_at = ?,
+            scrape_status = 'failed',
+            last_error = ?,
+            updated_at = ?
+        WHERE id = ?
+      `)
+      .run(
+        attemptedAt,
+        errorMessage.slice(0, 4_000),
+        attemptedAt,
+        gameId,
+      );
+  }
+
+  getXianyuSyncSettings() {
+    return (
+      this.database
+        .prepare(
+          `SELECT account_id, default_price, updated_at
+           FROM xianyu_sync_settings
+           WHERE id = 1`,
+        )
+        .get() ?? {
+          account_id: null,
+          default_price: 1,
+          updated_at: null,
+        }
+    );
+  }
+
+  setXianyuSettings(accountId, defaultPrice, updatedAt) {
+    transaction(this.database, () => {
+      const previous = this.getXianyuSyncSettings();
+      this.database
+        .prepare(`
+          INSERT INTO xianyu_sync_settings (
+            id,
+            account_id,
+            default_price,
+            updated_at
+          ) VALUES (1, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            account_id = excluded.account_id,
+            default_price = excluded.default_price,
+            updated_at = excluded.updated_at
+        `)
+        .run(accountId, defaultPrice, updatedAt);
+      if (Number(previous.default_price) !== Number(defaultPrice)) {
+        this.database
+          .prepare(`
+            UPDATE xianyu_material_sync
+            SET status = 'pending',
+                updated_at = ?
+            WHERE game_id IN (
+              SELECT id FROM games WHERE sale_price IS NULL
+            )
+          `)
+          .run(updatedAt);
+      }
+    });
+  }
+
+  setXianyuAccountId(accountId, updatedAt) {
+    const settings = this.getXianyuSyncSettings();
+    this.setXianyuSettings(
+      accountId,
+      Number(settings.default_price ?? 1),
+      updatedAt,
+    );
+  }
+
+  setGameSalePrice(gameId, salePrice, updatedAt) {
+    const result = this.database
+      .prepare(`
+        UPDATE games
+        SET sale_price = ?,
+            updated_at = ?
+        WHERE id = ?
+      `)
+      .run(salePrice, updatedAt, gameId);
+    if (result.changes === 0) return false;
+    this.database
+      .prepare(`
+        UPDATE xianyu_material_sync
+        SET status = 'pending',
+            updated_at = ?
+        WHERE game_id = ?
+      `)
+      .run(updatedAt, gameId);
+    return true;
+  }
+
+  getSchedulerSettings(defaults, updatedAt) {
+    this.database
+      .prepare(`
+        INSERT OR IGNORE INTO scheduler_settings (
+          id,
+          cron_timezone,
+          crawl_cron_schedule,
+          crawl_enabled,
+          sync_cron_schedule,
+          sync_enabled,
+          updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        defaults.cronTimezone,
+        defaults.crawlCronSchedule,
+        defaults.crawlEnabled ? 1 : 0,
+        defaults.syncCronSchedule,
+        defaults.syncEnabled ? 1 : 0,
+        updatedAt,
+      );
+    return this.database
+      .prepare("SELECT * FROM scheduler_settings WHERE id = 1")
+      .get();
+  }
+
+  setSchedulerSettings(settings, updatedAt) {
+    this.database
+      .prepare(`
+        INSERT INTO scheduler_settings (
+          id,
+          cron_timezone,
+          crawl_cron_schedule,
+          crawl_enabled,
+          sync_cron_schedule,
+          sync_enabled,
+          updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          cron_timezone = excluded.cron_timezone,
+          crawl_cron_schedule = excluded.crawl_cron_schedule,
+          crawl_enabled = excluded.crawl_enabled,
+          sync_cron_schedule = excluded.sync_cron_schedule,
+          sync_enabled = excluded.sync_enabled,
+          updated_at = excluded.updated_at
+      `)
+      .run(
+        settings.cronTimezone,
+        settings.crawlCronSchedule,
+        settings.crawlEnabled ? 1 : 0,
+        settings.syncCronSchedule,
+        settings.syncEnabled ? 1 : 0,
+        updatedAt,
+      );
+    return this.database
+      .prepare("SELECT * FROM scheduler_settings WHERE id = 1")
+      .get();
+  }
+
+  startSyncRun(triggerType, accountId, requestedLimit, startedAt) {
+    const result = this.database
+      .prepare(`
+        INSERT INTO xianyu_sync_runs (
+          trigger_type,
+          account_id,
+          requested_limit,
+          status,
+          started_at
+        ) VALUES (?, ?, ?, 'running', ?)
+      `)
+      .run(triggerType, accountId, requestedLimit, startedAt);
+    return Number(result.lastInsertRowid);
+  }
+
+  updateSyncRun(runId, fields) {
+    const allowed = new Set([
+      "status",
+      "selected_count",
+      "material_created",
+      "material_updated",
+      "material_unchanged",
+      "material_skipped",
+      "publish_submitted",
+      "publish_success",
+      "publish_failed",
+      "batch_count",
+      "batch_id",
+      "error_summary",
+      "finished_at",
+    ]);
+    const entries = Object.entries(fields).filter(([key]) => allowed.has(key));
+    if (entries.length === 0) return;
+    const assignments = entries.map(([key]) => `${key} = ?`).join(", ");
+    this.database
+      .prepare(`UPDATE xianyu_sync_runs SET ${assignments} WHERE id = ?`)
+      .run(...entries.map(([, value]) => value), runId);
+  }
+
+  listSyncCandidates(accountId, limit) {
+    const rows = this.database
+      .prepare(`
+        SELECT
+          games.*,
+          COALESCE(
+            games.sale_price,
+            settings.default_price,
+            1
+          ) AS effective_price,
+          material.material_id,
+          material.synced_content_hash,
+          material.status AS material_sync_status,
+          publication.status AS publication_status,
+          publication.batch_id AS publication_batch_id,
+          publication.item_id AS publication_item_id,
+          publication.item_url AS publication_item_url
+        FROM games
+        LEFT JOIN xianyu_sync_settings AS settings
+          ON settings.id = 1
+        LEFT JOIN xianyu_material_sync AS material
+          ON material.game_id = games.id
+        LEFT JOIN xianyu_publications AS publication
+          ON publication.game_id = games.id
+         AND publication.account_id = ?
+        WHERE games.content_hash IS NOT NULL
+          AND games.title IS NOT NULL
+          AND length(trim(games.title)) > 0
+          AND games.description IS NOT NULL
+          AND length(trim(games.description)) > 0
+          AND games.image_url IS NOT NULL
+          AND length(trim(games.image_url)) > 0
+          AND EXISTS (
+            SELECT 1 FROM downloads WHERE downloads.game_id = games.id
+          )
+          AND COALESCE(publication.status, 'pending') NOT IN ('publishing', 'unknown')
+        ORDER BY
+          CASE WHEN publication.status = 'failed' THEN 0 ELSE 1 END,
+          COALESCE(games.last_changed_at, games.first_seen_at) ASC,
+          CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
+          games.hot_rank ASC
+      `)
+      .all(accountId);
+    const downloadStatement = this.database.prepare(
+      "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
+    );
+    return rows
+      .map((row) => {
+        const downloads = downloadStatement.all(row.id);
+        const syncContentHash = createHash("sha256")
+          .update(
+            JSON.stringify({
+              contentHash: row.content_hash,
+              effectivePrice: Number(row.effective_price).toFixed(2),
+              copyVersion: 2,
+            }),
+          )
+          .digest("hex");
+        return {
+          ...row,
+          sync_content_hash: syncContentHash,
+          downloads,
+        };
+      })
+      .filter(
+        (row) =>
+          row.material_id == null ||
+          row.synced_content_hash == null ||
+          row.synced_content_hash !== row.sync_content_hash ||
+          ["pending", "failed"].includes(row.material_sync_status) ||
+          (row.publication_status == null &&
+            row.material_sync_status !== "skipped") ||
+          row.publication_status === "failed",
+      )
+      .slice(0, limit);
+  }
+
+  recordMissingImageSyncErrors(updatedAt) {
+    const rows = this.database
+      .prepare(`
+        SELECT games.id
+        FROM games
+        WHERE games.content_hash IS NOT NULL
+          AND games.title IS NOT NULL
+          AND length(trim(games.title)) > 0
+          AND games.description IS NOT NULL
+          AND length(trim(games.description)) > 0
+          AND (
+            games.image_url IS NULL
+            OR length(trim(games.image_url)) = 0
+          )
+          AND EXISTS (
+            SELECT 1 FROM downloads WHERE downloads.game_id = games.id
+          )
+      `)
+      .all();
+    const statement = this.database.prepare(`
+      INSERT INTO xianyu_material_sync (
+        game_id,
+        status,
+        last_error,
+        updated_at
+      ) VALUES (?, 'failed', 'games.image_url 缺失，已跳过且未使用替代图片', ?)
+      ON CONFLICT(game_id) DO UPDATE SET
+        status = 'failed',
+        last_error = excluded.last_error,
+        updated_at = excluded.updated_at
+    `);
+    transaction(this.database, () => {
+      for (const row of rows) statement.run(row.id, updatedAt);
+    });
+    return rows.length;
+  }
+
+  markMaterialSynced(gameId, materialId, contentHash, syncedAt) {
+    this.database
+      .prepare(`
+        INSERT INTO xianyu_material_sync (
+          game_id,
+          material_id,
+          synced_content_hash,
+          status,
+          last_error,
+          last_synced_at,
+          updated_at
+        ) VALUES (?, ?, ?, 'synced', NULL, ?, ?)
+        ON CONFLICT(game_id) DO UPDATE SET
+          material_id = excluded.material_id,
+          synced_content_hash = excluded.synced_content_hash,
+          status = 'synced',
+          last_error = NULL,
+          last_synced_at = excluded.last_synced_at,
+          updated_at = excluded.updated_at
+      `)
+      .run(gameId, materialId, contentHash, syncedAt, syncedAt);
+  }
+
+  markMaterialFailed(gameId, errorMessage, updatedAt) {
+    this.database
+      .prepare(`
+        INSERT INTO xianyu_material_sync (
+          game_id,
+          status,
+          last_error,
+          updated_at
+        ) VALUES (?, 'failed', ?, ?)
+        ON CONFLICT(game_id) DO UPDATE SET
+          status = 'failed',
+          last_error = excluded.last_error,
+          updated_at = excluded.updated_at
+      `)
+      .run(gameId, String(errorMessage).slice(0, 4_000), updatedAt);
+  }
+
+  markMaterialSkipped(
+    gameId,
+    materialId,
+    contentHash,
+    reason,
+    updatedAt,
+  ) {
+    this.database
+      .prepare(`
+        INSERT INTO xianyu_material_sync (
+          game_id,
+          material_id,
+          synced_content_hash,
+          status,
+          last_error,
+          last_synced_at,
+          updated_at
+        ) VALUES (?, ?, ?, 'skipped', ?, ?, ?)
+        ON CONFLICT(game_id) DO UPDATE SET
+          material_id = excluded.material_id,
+          synced_content_hash = excluded.synced_content_hash,
+          status = 'skipped',
+          last_error = excluded.last_error,
+          last_synced_at = excluded.last_synced_at,
+          updated_at = excluded.updated_at
+      `)
+      .run(
+        gameId,
+        materialId,
+        contentHash,
+        String(reason).slice(0, 4_000),
+        updatedAt,
+        updatedAt,
+      );
+  }
+
+  markPublicationSubmitted(
+    gameId,
+    accountId,
+    materialId,
+    batchId,
+    attemptedAt,
+  ) {
+    this.database
+      .prepare(`
+        INSERT INTO xianyu_publications (
+          game_id,
+          account_id,
+          material_id,
+          status,
+          batch_id,
+          attempt_count,
+          last_attempt_at,
+          updated_at
+        ) VALUES (?, ?, ?, 'publishing', ?, 1, ?, ?)
+        ON CONFLICT(game_id, account_id) DO UPDATE SET
+          material_id = excluded.material_id,
+          status = 'publishing',
+          batch_id = excluded.batch_id,
+          last_error = NULL,
+          attempt_count = xianyu_publications.attempt_count + 1,
+          last_attempt_at = excluded.last_attempt_at,
+          updated_at = excluded.updated_at
+      `)
+      .run(
+        gameId,
+        accountId,
+        materialId,
+        batchId,
+        attemptedAt,
+        attemptedAt,
+      );
+  }
+
+  markPublicationResult({
+    gameId,
+    accountId,
+    status,
+    itemId = null,
+    itemUrl = null,
+    errorMessage = null,
+    updatedAt,
+  }) {
+    this.database
+      .prepare(`
+        UPDATE xianyu_publications
+        SET status = ?,
+            item_id = COALESCE(?, item_id),
+            item_url = COALESCE(?, item_url),
+            last_error = ?,
+            published_at = CASE WHEN ? = 'success' THEN ? ELSE published_at END,
+            updated_at = ?
+        WHERE game_id = ? AND account_id = ?
+      `)
+      .run(
+        status,
+        itemId,
+        itemUrl,
+        errorMessage ? String(errorMessage).slice(0, 4_000) : null,
+        status,
+        updatedAt,
+        updatedAt,
+        gameId,
+        accountId,
+      );
+  }
+
+  getRecentSyncRuns(limit = 20) {
+    return this.database
+      .prepare(
+        `SELECT *
+         FROM xianyu_sync_runs
+         ORDER BY id DESC
+         LIMIT ?`,
+      )
+      .all(limit);
+  }
+
+  queryOne(sql, ...parameters) {
+    return this.database.prepare(sql).get(...parameters);
+  }
+
+  queryAll(sql, ...parameters) {
+    return this.database.prepare(sql).all(...parameters);
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "gamer520-page-audit",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "audit": "node audit.mjs",
+    "audit:playwright": "node playwright-audit.mjs",
+    "crawl:once": "node src/crawl-once.mjs",
+    "scheduler": "node src/scheduler.mjs",
+    "start": "npm run scheduler",
+    "check": "node --check audit.mjs && node --check playwright-audit.mjs && node --check src/*.mjs && node --check public/app.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "croner": "10.0.1",
+    "jsqr": "^1.4.0",
+    "playwright": "1.62.0",
+    "sharp": "^0.35.3"
+  }
+}

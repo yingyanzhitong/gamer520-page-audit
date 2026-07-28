@@ -1,0 +1,14 @@
+node_modules/
+data/
+.DS_Store
+npm-debug.log*
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.sqlite
+*.sqlite-*
+*.db
+coverage/
+playwright-report/
+test-results/

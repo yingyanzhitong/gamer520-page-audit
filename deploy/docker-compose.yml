@@ -1,0 +1,52 @@
+services:
+  crawler:
+    image: ${IMAGE_NAME:?请在 .env 中设置 Docker Hub 镜像名}:${IMAGE_TAG:-1.4.0}
+    pull_policy: always
+    init: true
+    ipc: host
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DASHBOARD_HOST_PORT:-13520}:3000"
+    environment:
+      LIST_URL: ${LIST_URL:-https://www.gamer520.com/pcplay?order=hot}
+      PAGE_COUNT: ${PAGE_COUNT:-100}
+      DETAIL_CONCURRENCY: ${DETAIL_CONCURRENCY:-3}
+      MAX_RETRIES: ${MAX_RETRIES:-2}
+      NAVIGATION_TIMEOUT_MS: ${NAVIGATION_TIMEOUT_MS:-30000}
+      LIST_DELAY_MS: ${LIST_DELAY_MS:-250}
+      DETAIL_DELAY_MIN_MS: ${DETAIL_DELAY_MIN_MS:-750}
+      DETAIL_DELAY_MAX_MS: ${DETAIL_DELAY_MAX_MS:-1500}
+      ACCESS_BLOCK_THRESHOLD: ${ACCESS_BLOCK_THRESHOLD:-10}
+      DB_PATH: /app/data/gamer520.sqlite
+      CRON_SCHEDULE: ${CRON_SCHEDULE:-0 3 * * *}
+      CRON_TIMEZONE: ${CRON_TIMEZONE:-Asia/Shanghai}
+      RUN_ON_START: ${RUN_ON_START:-true}
+      CRAWL_ENABLED: ${CRAWL_ENABLED:-true}
+      HEADLESS: "true"
+      PLAYWRIGHT_CHANNEL: chromium
+      NODE_OPTIONS: --disable-warning=ExperimentalWarning
+      DASHBOARD_HOST: 0.0.0.0
+      DASHBOARD_PORT: "3000"
+      XIANYU_BASE_URL: ${XIANYU_BASE_URL:-https://xianyu.xyyamsz.cn}
+      XIANYU_API_KEY: ${XIANYU_API_KEY:?请在 .env 中配置闲鱼用户 API Key}
+      GAMER520_READ_API_KEY: ${GAMER520_READ_API_KEY:?请在 .env 中配置下载只读 Key}
+      SYNC_CRON_SCHEDULE: ${SYNC_CRON_SCHEDULE:-0 */6 * * *}
+      SYNC_RUN_LIMIT: ${SYNC_RUN_LIMIT:-20}
+      SYNC_POLL_INTERVAL_MS: ${SYNC_POLL_INTERVAL_MS:-10000}
+      SYNC_BATCH_TIMEOUT_MS: ${SYNC_BATCH_TIMEOUT_MS:-7200000}
+      SYNC_ENABLED: ${SYNC_ENABLED:-true}
+    volumes:
+      - gamer520-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  gamer520-data:

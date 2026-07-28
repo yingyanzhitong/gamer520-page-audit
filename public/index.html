@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#eef1f4">
+    <meta
+      name="description"
+      content="Gamer520 热度榜采集任务与游戏数据观测台"
+    >
+    <title>G520 采集观测台</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css?v=1.4.0">
+    <script type="module" src="/app.js?v=1.4.0"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="G520 采集观测台首页">
+        <span class="brand-mark">G<span>520</span></span>
+        <span class="brand-copy">
+          <strong>采集观测台</strong>
+          <small>HOTLIST OBSERVATORY</small>
+        </span>
+      </a>
+      <div class="header-actions">
+        <div class="sync-time">
+          <span>界面同步</span>
+          <time id="generated-at">—</time>
+        </div>
+        <button class="refresh-button" id="refresh-button" type="button">
+          <span class="refresh-icon" aria-hidden="true">↻</span>
+          刷新数据
+        </button>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="mission-panel" aria-labelledby="mission-title">
+        <div class="mission-copy">
+          <div class="eyebrow">
+            <span class="status-pulse" id="status-pulse"></span>
+            <span id="service-status">正在连接采集服务</span>
+          </div>
+          <h1 id="mission-title">
+            热度前 <em>100</em> 页，<br>
+            一次看清。
+          </h1>
+          <p>
+            追踪 Gamer520 PC PLAY 热度榜，保留每次任务、失败现场与当前资源数据。
+          </p>
+        </div>
+
+        <div class="schedule-card" aria-label="定时任务状态">
+          <div class="schedule-topline">
+            <span>下一次自动采集</span>
+            <span class="timezone" id="timezone">Asia/Shanghai</span>
+          </div>
+          <time class="next-run" id="next-run">—</time>
+          <div class="schedule-rule">
+            <span id="cron-schedule">0 3 * * *</span>
+            <span>每天北京时间 03:00</span>
+          </div>
+          <div class="current-progress" id="current-progress">
+            <div>
+              <span>当前任务</span>
+              <strong id="current-progress-label">待命</strong>
+            </div>
+            <div
+              class="progress-track"
+              role="progressbar"
+              aria-label="当前任务进度"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+              id="detail-progress"
+            >
+              <span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hot-rail-wrap">
+          <div class="rail-label">
+            <span>HOT PAGE COVERAGE</span>
+            <strong id="rail-summary">0 / 100</strong>
+          </div>
+          <div
+            class="hot-rail"
+            id="hot-rail"
+            role="img"
+            aria-label="热度榜页面覆盖进度"
+          ></div>
+          <div class="rail-scale" aria-hidden="true">
+            <span>01</span>
+            <span>25</span>
+            <span>50</span>
+            <span>75</span>
+            <span>100</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="stat-grid" aria-label="数据概览">
+        <article class="stat-card stat-primary">
+          <span>游戏总数</span>
+          <strong id="total-games">—</strong>
+          <small>历史记录持续保留</small>
+        </article>
+        <article class="stat-card">
+          <span>下载源</span>
+          <strong id="total-downloads">—</strong>
+          <small>链接与提取码</small>
+        </article>
+        <article class="stat-card">
+          <span>成功详情</span>
+          <strong id="successful-games">—</strong>
+          <small id="success-ratio">等待数据</small>
+        </article>
+        <article class="stat-card stat-alert">
+          <span>待处理失败</span>
+          <strong id="failed-games">—</strong>
+          <small>失败不会覆盖旧数据</small>
+        </article>
+      </section>
+
+      <section class="xianyu-panel" aria-labelledby="xianyu-title">
+        <div class="panel-heading">
+          <div>
+            <span class="section-kicker">闲鱼发布中心</span>
+            <h2 id="xianyu-title">全量商品同步</h2>
+            <p class="panel-description">
+              同步所有符合条件的游戏，每批处理 20 条；素材库中名称相同的商品会自动跳过。
+            </p>
+          </div>
+          <span class="sync-state-badge" id="xianyu-sync-state">等待配置</span>
+        </div>
+        <div class="xianyu-layout">
+          <form class="xianyu-form sync-config-card" id="xianyu-settings-form">
+            <div class="sync-card-heading">
+              <span class="sync-card-index">01</span>
+              <div>
+                <strong>连接发布账号</strong>
+                <small>API Key 同时用于页面控制操作</small>
+              </div>
+            </div>
+            <label>
+              <span>页面控制 API Key</span>
+              <input
+                type="password"
+                id="admin-key"
+                placeholder="xyk_… · 仅保存在当前浏览器会话"
+                autocomplete="off"
+              >
+            </label>
+            <label>
+              <span>发布 account_id</span>
+              <select id="xianyu-account">
+                <option value="">请先加载账号</option>
+              </select>
+            </label>
+            <label>
+              <span>默认售卖价格</span>
+              <span class="money-input">
+                <b>¥</b>
+                <input
+                  type="number"
+                  id="default-price"
+                  min="0.01"
+                  max="999999"
+                  step="0.01"
+                  value="1"
+                  inputmode="decimal"
+                >
+              </span>
+            </label>
+            <div class="xianyu-form-actions">
+              <button type="button" class="secondary-action" id="load-accounts">
+                刷新账号列表
+              </button>
+              <button type="submit" class="primary-action" id="save-account">
+                保存发布账号
+              </button>
+            </div>
+          </form>
+          <div class="xianyu-run-card sync-launch-card">
+            <div class="sync-card-heading">
+              <span class="sync-card-index">02</span>
+              <div>
+                <strong>启动全量同步</strong>
+                <small>新商品发布，已发布商品仅更新素材</small>
+              </div>
+            </div>
+            <div class="configured-account-row">
+              <span>当前发布账号</span>
+              <strong id="configured-account">未配置</strong>
+            </div>
+            <div class="sync-route" aria-label="同步处理流程">
+              <span>读取全部</span>
+              <i aria-hidden="true"></i>
+              <span>同名检查</span>
+              <i aria-hidden="true"></i>
+              <span>分批发布</span>
+            </div>
+            <small class="sync-schedule" id="sync-next-run">同步计划尚未读取</small>
+            <button type="button" class="primary-action" id="run-sync">
+              同步全部商品
+            </button>
+          </div>
+          <div class="sync-run-summary sync-result-card" id="sync-run-summary">
+            <div class="empty-state">还没有同步任务</div>
+          </div>
+        </div>
+        <div class="xianyu-warning">
+          <strong>账号切换说明</strong>
+          <span>切换后，未在新账号发布过的有效商品会进入新账号队列；旧账号商品不会自动删除。</span>
+        </div>
+      </section>
+
+      <section class="automation-panel" aria-labelledby="automation-title">
+        <div class="panel-heading">
+          <div>
+            <span class="section-kicker">PIPELINE SCHEDULER</span>
+            <h2 id="automation-title">自动任务调度</h2>
+            <p class="panel-description">
+              分别控制采集与闲鱼同步。保存后立即重排下一次任务，无需重启服务。
+            </p>
+          </div>
+          <span class="sync-state-badge" id="schedule-save-state">已读取线上配置</span>
+        </div>
+        <form id="schedule-settings-form">
+          <div class="schedule-control-bar">
+            <label>
+              <span>任务时区</span>
+              <input
+                type="text"
+                id="schedule-timezone"
+                value="Asia/Shanghai"
+                maxlength="80"
+                autocomplete="off"
+              >
+            </label>
+            <div class="schedule-control-copy">
+              <strong>采集与同步不会并行运行</strong>
+              <span>任务冲突时会先完成当前任务，再执行等待中的自动任务。</span>
+            </div>
+            <button type="submit" class="primary-action" id="save-schedule">
+              保存定时设置
+            </button>
+          </div>
+
+          <div class="task-lanes">
+            <article class="task-lane task-lane-crawl">
+              <header>
+                <span class="task-code">CRAWL</span>
+                <div>
+                  <strong>定时采集</strong>
+                  <small>读取热度前 100 页并更新发生变化的游戏</small>
+                </div>
+                <label class="task-switch">
+                  <input type="checkbox" id="crawl-enabled" checked>
+                  <span>自动执行</span>
+                </label>
+              </header>
+              <label class="cron-field">
+                <span>Cron 表达式</span>
+                <input
+                  type="text"
+                  id="crawl-cron"
+                  value="0 3 * * *"
+                  maxlength="100"
+                  autocomplete="off"
+                >
+                <small>示例：每天 03:00 使用 <code>0 3 * * *</code></small>
+              </label>
+              <div class="task-next-run">
+                <span>下一次自动采集</span>
+                <time id="crawl-next-run">—</time>
+              </div>
+              <button type="button" class="secondary-action" id="run-crawl">
+                立即采集
+              </button>
+            </article>
+
+            <article class="task-lane task-lane-sync">
+              <header>
+                <span class="task-code">SYNC</span>
+                <div>
+                  <strong>定时同步</strong>
+                  <small>按售价、图片与动态商品介绍同步到闲鱼</small>
+                </div>
+                <label class="task-switch">
+                  <input type="checkbox" id="sync-enabled" checked>
+                  <span>自动执行</span>
+                </label>
+              </header>
+              <label class="cron-field">
+                <span>Cron 表达式</span>
+                <input
+                  type="text"
+                  id="sync-cron"
+                  value="0 */6 * * *"
+                  maxlength="100"
+                  autocomplete="off"
+                >
+                <small>示例：每 6 小时使用 <code>0 */6 * * *</code></small>
+              </label>
+              <div class="task-next-run">
+                <span>下一次自动同步</span>
+                <time id="schedule-sync-next-run">—</time>
+              </div>
+              <button
+                type="button"
+                class="secondary-action"
+                id="run-sync-schedule"
+              >
+                立即同步
+              </button>
+            </article>
+          </div>
+        </form>
+      </section>
+
+      <section class="operations-grid">
+        <article class="panel runs-panel" aria-labelledby="runs-title">
+          <div class="panel-heading">
+            <div>
+              <span class="section-kicker">CRAWL RUNS</span>
+              <h2 id="runs-title">任务记录</h2>
+            </div>
+            <span class="panel-note">最近 12 次</span>
+          </div>
+          <div class="run-list" id="run-list">
+            <div class="loading-block">正在读取任务记录…</div>
+          </div>
+        </article>
+
+        <article class="panel errors-panel" aria-labelledby="errors-title">
+          <div class="panel-heading">
+            <div>
+              <span class="section-kicker">RECENT SIGNALS</span>
+              <h2 id="errors-title">最近异常</h2>
+            </div>
+            <span class="panel-note">最多 6 条</span>
+          </div>
+          <div class="error-list" id="error-list">
+            <div class="loading-block">正在读取错误记录…</div>
+          </div>
+        </article>
+      </section>
+
+      <section class="catalog-panel" aria-labelledby="catalog-title">
+        <div class="catalog-heading">
+          <div>
+            <span class="section-kicker">CURRENT DATASET</span>
+            <h2 id="catalog-title">当前游戏数据</h2>
+          </div>
+          <p id="catalog-count">正在读取…</p>
+        </div>
+
+        <div class="catalog-tools">
+          <label class="search-field">
+            <span class="visually-hidden">按标题或 ID 搜索</span>
+            <span aria-hidden="true">⌕</span>
+            <input
+              type="search"
+              id="game-search"
+              placeholder="搜索标题或数字 ID"
+              autocomplete="off"
+            >
+          </label>
+          <label class="filter-field">
+            <span>采集状态</span>
+            <select id="status-filter">
+              <option value="all">全部状态</option>
+              <option value="success">成功</option>
+              <option value="failed">失败</option>
+              <option value="running">采集中</option>
+              <option value="pending">等待中</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="game-table-wrap">
+          <table class="game-table">
+            <thead>
+              <tr>
+                <th scope="col">热度</th>
+                <th scope="col">游戏</th>
+                <th scope="col">资源</th>
+                <th scope="col">售价</th>
+                <th scope="col">采集状态</th>
+                <th scope="col">来源更新</th>
+                <th scope="col">闲鱼状态</th>
+                <th scope="col">最近采集</th>
+                <th scope="col"><span class="visually-hidden">查看</span></th>
+              </tr>
+            </thead>
+            <tbody id="game-table-body">
+              <tr>
+                <td colspan="9" class="table-message">正在读取游戏数据…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <nav class="pagination" aria-label="游戏数据分页">
+          <button type="button" id="previous-page">上一页</button>
+          <span id="page-label">第 1 页</span>
+          <button type="button" id="next-page">下一页</button>
+        </nav>
+      </section>
+    </main>
+
+    <footer>
+      <span>G520 Observatory · 采集与发布控制台</span>
+      <span>数据来自 Playwright 采集，发布由受保护接口执行</span>
+    </footer>
+
+    <dialog class="game-dialog" id="game-dialog">
+      <div class="dialog-shell">
+        <button class="dialog-close" id="dialog-close" type="button">
+          <span aria-hidden="true">×</span>
+          <span class="visually-hidden">关闭详情</span>
+        </button>
+        <div id="game-detail"></div>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

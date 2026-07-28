@@ -1,0 +1,10 @@
+# gamer520-route-version: 1.0.1
+tunnel: 080324bd-97f7-4464-9f33-bb2053cedc0b
+credentials-file: /home/ma/.cloudflared/080324bd-97f7-4464-9f33-bb2053cedc0b.json
+
+ingress:
+  - hostname: ssh.xyyamsz.cn
+    service: ssh://localhost:22
+  - hostname: gamer520.xyyamsz.cn
+    service: http://127.0.0.1:13520
+  - service: http_status:404
