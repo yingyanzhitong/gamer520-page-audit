@@ -191,6 +191,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(sources.game.id, 118842);
     assert.equal(sources.resourceCode, "A310235");
     assert.equal(sources.archivePassword, "laoquzhang.com");
+    assert.equal(
+      sources.data,
+      "解压密码：laoquzhang.com\n百度网盘：https://pan.example/download?pwd=e15a 提取码：e15a",
+    );
 
     const sourcesByPrefixedName = await fetch(
       `${baseUrl}/api/download-sources?name=${encodeURIComponent("【秒发 】 黄昏远征军")}`,
@@ -203,6 +207,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       "黄昏远征军",
     );
     assert.equal(sourcesByPrefixedName.downloads.length, 1);
+    assert.equal(
+      sourcesByPrefixedName.data.split("\n").length,
+      2,
+    );
 
     const compactPrefix = await fetch(
       `${baseUrl}/api/download-sources?name=${encodeURIComponent("【秒发】黄昏远征军")}`,

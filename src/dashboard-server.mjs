@@ -113,6 +113,19 @@ function normalizeDownloadLookupName(value) {
     .trim();
 }
 
+function buildDownloadData(archivePassword, downloads) {
+  return [
+    `解压密码：${archivePassword ?? ""}`,
+    ...downloads.map((download) => {
+      const extractionCode =
+        download.extractionCode ?? download.password;
+      return `${download.provider}：${download.url}${
+        extractionCode ? ` 提取码：${extractionCode}` : ""
+      }`;
+    }),
+  ].join("\n");
+}
+
 function integerParameter(value, fallback, min, max) {
   const parsed = Number.parseInt(value ?? "", 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -459,6 +472,12 @@ function downloadSources(database, requestUrl) {
   }
 
   const row = rows[0];
+  const downloads = database
+    .prepare(
+      "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
+    )
+    .all(row.id)
+    .map(mapDownload);
   return {
     status: 200,
     payload: {
@@ -470,18 +489,12 @@ function downloadSources(database, requestUrl) {
         : null,
       resourceCode: row.resource_code,
       archivePassword: row.archive_password,
+      data: buildDownloadData(row.archive_password, downloads),
       game: mapGame({
         ...row,
-        download_count: database
-          .prepare("SELECT COUNT(*) AS count FROM downloads WHERE game_id = ?")
-          .get(row.id).count,
+        download_count: downloads.length,
       }),
-      downloads: database
-        .prepare(
-          "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
-        )
-        .all(row.id)
-        .map(mapDownload),
+      downloads,
     },
   };
 }

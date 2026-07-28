@@ -175,6 +175,7 @@ curl -H 'X-API-Key: <下载只读Key>' \
   },
   "resourceCode": "资源编号",
   "archivePassword": "解压密码",
+  "data": "解压密码：解压密码\n百度网盘：https://pan.example/example 提取码：abcd",
   "game": {
     "id": 118842,
     "title": "游戏名称"
@@ -189,6 +190,10 @@ curl -H 'X-API-Key: <下载只读Key>' \
   ]
 }
 ```
+
+`data` 是可直接用于自动发货的字符串：第一行固定为
+`解压密码：<密码>`，后续每个下载源一行，格式为
+`<网盘名称>：<下载地址> 提取码：<提取码>`；没有提取码时省略同行的提取码部分。
 
 数据库启用了 WAL、外键和 `busy_timeout`。可直接查询命名卷中的数据库：
 
