@@ -189,6 +189,32 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     ).then((response) => response.json());
     assert.equal(sources.downloads[0].extractionCode, "e15a");
     assert.equal(sources.game.id, 118842);
+    assert.equal(sources.resourceCode, "A310235");
+    assert.equal(sources.archivePassword, "laoquzhang.com");
+
+    const sourcesByPrefixedName = await fetch(
+      `${baseUrl}/api/download-sources?name=${encodeURIComponent("【秒发 】 黄昏远征军")}`,
+      { headers: { "X-API-Key": "download-secret" } },
+    ).then((response) => response.json());
+    assert.equal(sourcesByPrefixedName.game.id, 118842);
+    assert.equal(sourcesByPrefixedName.archivePassword, "laoquzhang.com");
+    assert.equal(
+      sourcesByPrefixedName.lookup.normalizedName,
+      "黄昏远征军",
+    );
+    assert.equal(sourcesByPrefixedName.downloads.length, 1);
+
+    const compactPrefix = await fetch(
+      `${baseUrl}/api/download-sources?name=${encodeURIComponent("【秒发】黄昏远征军")}`,
+      { headers: { "X-API-Key": "download-secret" } },
+    );
+    assert.equal(compactPrefix.status, 200);
+
+    const emptyPrefixedName = await fetch(
+      `${baseUrl}/api/download-sources?name=${encodeURIComponent("【秒发 】")}`,
+      { headers: { "X-API-Key": "download-secret" } },
+    );
+    assert.equal(emptyPrefixedName.status, 422);
 
     const invalidQuery = await fetch(
       `${baseUrl}/api/download-sources?id=118842&name=黄昏远征军`,

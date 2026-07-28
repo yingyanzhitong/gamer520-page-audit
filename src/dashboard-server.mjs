@@ -106,6 +106,13 @@ function mapDownload(row) {
   };
 }
 
+function normalizeDownloadLookupName(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/^【\s*秒发\s*】\s*/u, "")
+    .trim();
+}
+
 function integerParameter(value, fallback, min, max) {
   const parsed = Number.parseInt(value ?? "", 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -407,11 +414,20 @@ function gameDetail(database, gameId) {
 
 function downloadSources(database, requestUrl) {
   const idValue = requestUrl.searchParams.get("id")?.trim() ?? "";
-  const nameValue = requestUrl.searchParams.get("name")?.trim() ?? "";
-  if (Boolean(idValue) === Boolean(nameValue)) {
+  const requestedName =
+    requestUrl.searchParams.get("name")?.trim() ?? "";
+  if (Boolean(idValue) === Boolean(requestedName)) {
     return {
       status: 422,
       error: "id 和 name 必须且只能提供一个",
+    };
+  }
+
+  const nameValue = normalizeDownloadLookupName(requestedName);
+  if (requestedName && !nameValue) {
+    return {
+      status: 422,
+      error: "name 去除秒发前缀后不能为空",
     };
   }
 
@@ -446,6 +462,14 @@ function downloadSources(database, requestUrl) {
   return {
     status: 200,
     payload: {
+      lookup: requestedName
+        ? {
+            requestedName,
+            normalizedName: nameValue,
+          }
+        : null,
+      resourceCode: row.resource_code,
+      archivePassword: row.archive_password,
       game: mapGame({
         ...row,
         download_count: database

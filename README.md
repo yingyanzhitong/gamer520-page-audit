@@ -156,12 +156,39 @@ curl -X PUT \
   -d '{"price":6.8}' \
   http://127.0.0.1:13520/api/games/118842/price
 
-# 按 ID 查询下载源；也可只传 name 做精确名称匹配
+# 按名称查询；开头的【秒发】或【秒发 】会自动移除
 curl -H 'X-API-Key: <下载只读Key>' \
-  'http://127.0.0.1:13520/api/download-sources?id=118842'
+  --get \
+  --data-urlencode 'name=【秒发 】游戏名称' \
+  'http://127.0.0.1:13520/api/download-sources'
 ```
 
-下载源接口的 `id` 和 `name` 必须且只能提供一个。名称重名返回 `409` 和候选 ID；无效 Key 返回 `401`；商品或账号不存在返回 `404`；任务冲突返回 `409`；参数或素材不可发布返回 `422`。
+下载源接口的 `id` 和 `name` 必须且只能提供一个。`name` 会先移除开头的 `【秒发】` 或 `【秒发 】` 及相邻空格，再做精确名称匹配。名称重名返回 `409` 和候选 ID；无效 Key 返回 `401`；商品或账号不存在返回 `404`；任务冲突返回 `409`；参数或素材不可发布返回 `422`。
+
+成功响应同时提供顶层资源凭证和完整下载源：
+
+```json
+{
+  "lookup": {
+    "requestedName": "【秒发 】游戏名称",
+    "normalizedName": "游戏名称"
+  },
+  "resourceCode": "资源编号",
+  "archivePassword": "解压密码",
+  "game": {
+    "id": 118842,
+    "title": "游戏名称"
+  },
+  "downloads": [
+    {
+      "provider": "百度网盘",
+      "url": "https://pan.example/example",
+      "password": "abcd",
+      "extractionCode": "abcd"
+    }
+  ]
+}
+```
 
 数据库启用了 WAL、外键和 `busy_timeout`。可直接查询命名卷中的数据库：
 
