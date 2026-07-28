@@ -298,17 +298,26 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
 
     const sourcesByItem = await postDownloadSources(
       baseUrl,
-      { item_id: "1067769058126" },
+      {
+        item_id: "1067769058126",
+        name: "不存在的名称",
+        id: 999999,
+      },
       "download-secret",
     ).then((response) => response.json());
     assert.equal(sourcesByItem.itemId, "1067769058126");
     assert.equal(sourcesByItem.game.id, 118842);
     assert.equal(sourcesByItem.archivePassword, "laoquzhang.com");
     assert.equal(sourcesByItem.downloads.length, 1);
+    assert.equal(sourcesByItem.lookup.strategy, "item_id");
 
     const sourcesByPrefixedName = await postDownloadSources(
       baseUrl,
-      { name: "【秒发 】 黄昏远征军" },
+      {
+        item_id: "不存在的商品编号",
+        name: "【秒发 】 黄昏远征军",
+        id: 999999,
+      },
       "download-secret",
     ).then((response) => response.json());
     assert.equal(sourcesByPrefixedName.game.id, 118842);
@@ -317,11 +326,24 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       sourcesByPrefixedName.lookup.normalizedName,
       "黄昏远征军",
     );
+    assert.equal(sourcesByPrefixedName.lookup.strategy, "name");
     assert.equal(sourcesByPrefixedName.downloads.length, 1);
     assert.equal(
       sourcesByPrefixedName.data.split("\n").length,
       2,
     );
+
+    const sourcesByFallbackId = await postDownloadSources(
+      baseUrl,
+      {
+        item_id: "不存在的商品编号",
+        name: "不存在的名称",
+        id: 118842,
+      },
+      "download-secret",
+    ).then((response) => response.json());
+    assert.equal(sourcesByFallbackId.game.id, 118842);
+    assert.equal(sourcesByFallbackId.lookup.strategy, "id");
 
     const compactPrefix = await postDownloadSources(
       baseUrl,
@@ -337,12 +359,12 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     );
     assert.equal(emptyPrefixedName.status, 422);
 
-    const invalidQuery = await postDownloadSources(
+    const missingQuery = await postDownloadSources(
       baseUrl,
-      { id: 118842, name: "黄昏远征军" },
+      {},
       "download-secret",
     );
-    assert.equal(invalidQuery.status, 422);
+    assert.equal(missingQuery.status, 422);
 
     const runs = await fetch(`${baseUrl}/api/runs?limit=12`).then(
       (response) => response.json(),

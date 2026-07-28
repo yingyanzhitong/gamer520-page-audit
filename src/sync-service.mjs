@@ -184,6 +184,7 @@ export class XianyuSyncService {
         const result = await this.client.bindCards({
           cardIds: [deliveryCardId],
           itemIds: [String(itemId)],
+          itemTitle: `【秒发】${candidate.title}`.slice(0, 200),
         });
         if (Number(result.fail_count ?? 0) > 0) {
           throw new Error(`卡券关联失败：${result.fail_count} 条未成功`);

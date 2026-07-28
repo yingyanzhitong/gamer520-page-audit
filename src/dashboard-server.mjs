@@ -453,13 +453,10 @@ function downloadSources(database, input) {
   const idValue = String(input?.id ?? "").trim();
   const itemIdValue = String(input?.item_id ?? "").trim();
   const requestedName = String(input?.name ?? "").trim();
-  const providedCount = [idValue, itemIdValue, requestedName].filter(
-    Boolean,
-  ).length;
-  if (providedCount !== 1) {
+  if (![idValue, itemIdValue, requestedName].some(Boolean)) {
     return {
       status: 422,
-      error: "id、item_id 和 name 必须且只能提供一个",
+      error: "id、item_id 和 name 至少提供一个",
     };
   }
 
@@ -470,19 +467,16 @@ function downloadSources(database, input) {
       error: "name 去除秒发前缀后不能为空",
     };
   }
+  if (itemIdValue.length > 100) {
+    return { status: 422, error: "item_id 不能超过 100 个字符" };
+  }
+  if (idValue && !/^\d+$/.test(idValue)) {
+    return { status: 422, error: "id 必须是数字" };
+  }
 
-  let rows;
-  if (idValue) {
-    if (!/^\d+$/.test(idValue)) {
-      return { status: 422, error: "id 必须是数字" };
-    }
-    rows = database
-      .prepare("SELECT * FROM games WHERE id = ?")
-      .all(Number(idValue));
-  } else if (itemIdValue) {
-    if (itemIdValue.length > 100) {
-      return { status: 422, error: "item_id 不能超过 100 个字符" };
-    }
+  let rows = [];
+  let strategy = null;
+  if (itemIdValue) {
     rows = database
       .prepare(`
         SELECT DISTINCT games.*
@@ -497,12 +491,21 @@ function downloadSources(database, input) {
         ORDER BY games.id
       `)
       .all(itemIdValue, itemIdValue);
-  } else {
+    if (rows.length > 0) strategy = "item_id";
+  }
+  if (rows.length === 0 && requestedName) {
     rows = database
       .prepare(
         "SELECT * FROM games WHERE trim(title) = ? COLLATE NOCASE ORDER BY id",
       )
       .all(nameValue);
+    if (rows.length > 0) strategy = "name";
+  }
+  if (rows.length === 0 && idValue) {
+    rows = database
+      .prepare("SELECT * FROM games WHERE id = ?")
+      .all(Number(idValue));
+    if (rows.length > 0) strategy = "id";
   }
 
   if (rows.length === 0) {
@@ -526,15 +529,21 @@ function downloadSources(database, input) {
   return {
     status: 200,
     payload: {
-      lookup: requestedName
-        ? {
-            requestedName,
-            normalizedName: nameValue,
-          }
-        : itemIdValue
-          ? { itemId: itemIdValue }
-          : null,
-      itemId: itemIdValue || row.xianyu_item_id || null,
+      lookup: {
+        strategy,
+        ...(itemIdValue ? { itemId: itemIdValue } : {}),
+        ...(requestedName
+          ? {
+              requestedName,
+              normalizedName: nameValue,
+            }
+          : {}),
+        ...(idValue ? { id: Number(idValue) } : {}),
+      },
+      itemId:
+        strategy === "item_id"
+          ? itemIdValue
+          : row.xianyu_item_id || null,
       resourceCode: row.resource_code,
       archivePassword: row.archive_password,
       data: buildDownloadData(row.archive_password, downloads),

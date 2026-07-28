@@ -227,7 +227,8 @@ test("全量同步严格逐商品处理并报告进度", async () => {
         (payload) =>
           payload.itemIds.length === 1 &&
           payload.cardIds.length === 1 &&
-          payload.cardIds[0] === 6,
+          payload.cardIds[0] === 6 &&
+          payload.itemTitle.startsWith("【秒发】"),
       ),
     );
     assert.equal(progressEvents[0].total, 21);

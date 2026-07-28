@@ -102,12 +102,13 @@ export class XianyuClient {
     return payload?.data ?? {};
   }
 
-  async bindCards({ cardIds, itemIds }) {
+  async bindCards({ cardIds, itemIds, itemTitle }) {
     const payload = await this.request("/api/v1/cards/batch-bind", {
       method: "POST",
       body: {
         card_ids: cardIds,
         item_ids: itemIds,
+        item_title: itemTitle,
       },
     });
     return payload?.data ?? {};
