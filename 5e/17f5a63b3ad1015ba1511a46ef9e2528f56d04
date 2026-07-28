@@ -1,0 +1,50 @@
+README.md
+  s_bfd82453425369::t_e8bfa5fb0b0f9f 1-210
+deploy/.env.example
+  s_bfd82453425369::t_9dedada434ca13 1-28
+deploy/cloudflared-config.yml
+  s_bfd82453425369::t_d798557f7bbecf 1-10
+deploy/docker-compose.yml
+  s_bfd82453425369::t_d883cfa88955bd 1-52
+docker-compose.yml
+  s_bfd82453425369::t_ca02e2703ff2da 1-53
+package-lock.json
+  s_bfd82453425369::t_46a321ce3f81fa 1-677
+package.json
+  s_bfd82453425369::t_03dd55052338de 1-24
+public/favicon.svg
+  s_087abf70a5aadd::t_1b6f78bb8ef2c5 1-5
+src/dashboard-server.mjs
+  s_bfd82453425369::t_77c929f253975b 1-936
+src/utils.mjs
+  s_087abf70a5aadd::t_2dbbfcead31398 1-91
+test/sync-service.test.mjs
+  s_bfd82453425369::t_990a79ade21e2f 1-380
+test/utils.test.mjs
+  s_087abf70a5aadd::t_af53e0bda5a91e 1-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "5e17f5a63b3ad1015ba1511a46ef9e2528f56d04",
+  "prompts": {},
+  "logical_commit_id": "5e17f5a63b3ad1015ba1511a46ef9e2528f56d04",
+  "sessions": {
+    "s_087abf70a5aadd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa6d7-44df-7d32-be69-583d9b967505",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>"
+    },
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>"
+    }
+  }
+}
