@@ -13,6 +13,7 @@ let activeRun = null;
 let activeSync = null;
 let crawlControl = null;
 let syncControl = null;
+let syncProgress = null;
 let deferredSync = null;
 let deferredCrawl = null;
 let stopping = false;
@@ -165,8 +166,22 @@ function triggerSync(reason, mode = schedulerSettings.syncMode) {
 
   syncControl = new TaskControl();
   const control = syncControl;
+  syncProgress = {
+    total: 0,
+    completed: 0,
+    currentGameId: null,
+    currentTitle: null,
+    phase: "preparing",
+  };
   activeSync = syncService
-    .run({ trigger: reason, mode, control })
+    .run({
+      trigger: reason,
+      mode,
+      control,
+      onProgress: (progress) => {
+        syncProgress = progress;
+      },
+    })
     .then((result) => {
       log("xianyu_sync_completed", result);
       return result;
@@ -180,6 +195,7 @@ function triggerSync(reason, mode = schedulerSettings.syncMode) {
     .finally(() => {
       activeSync = null;
       if (syncControl === control) syncControl = null;
+      syncProgress = null;
       if (deferredCrawl && !stopping) {
         const deferred = deferredCrawl;
         deferredCrawl = null;
@@ -309,8 +325,9 @@ function scheduleRuntime() {
       cronSchedule: schedulerSettings.syncCronSchedule,
       cronTimezone: schedulerSettings.cronTimezone,
       nextRun: syncJob?.nextRun()?.toISOString() ?? null,
-      batchSize: config.syncRunLimit,
+      batchSize: 1,
       mode: schedulerSettings.syncMode,
+      progress: syncProgress,
     },
   };
 }

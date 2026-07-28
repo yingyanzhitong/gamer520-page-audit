@@ -112,11 +112,6 @@ export function loadConfig(overrides = {}) {
       overrides.syncCronSchedule ??
       env.SYNC_CRON_SCHEDULE ??
       "0 */6 * * *",
-    syncRunLimit: integerValue(
-      overrides.syncRunLimit ?? env.SYNC_RUN_LIMIT,
-      20,
-      { min: 1, max: 20 },
-    ),
     syncPollIntervalMs: integerValue(
       overrides.syncPollIntervalMs ?? env.SYNC_POLL_INTERVAL_MS,
       10_000,
@@ -176,7 +171,6 @@ export function publicConfig(config) {
     xianyuConfigured: Boolean(config.xianyuApiKey),
     downloadReadApiConfigured: Boolean(config.downloadReadApiKey),
     syncCronSchedule: config.syncCronSchedule,
-    syncRunLimit: config.syncRunLimit,
     syncEnabled: config.syncEnabled,
   };
 }

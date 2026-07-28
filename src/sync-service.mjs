@@ -5,17 +5,10 @@ import { nowIso, serializeError } from "./utils.mjs";
 import { XianyuClient } from "./xianyu-client.mjs";
 
 const syncModes = new Set(["all", "pending", "updated"]);
+const deliveryCardId = 6;
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function splitIntoBatches(items, size) {
-  const batches = [];
-  for (let offset = 0; offset < items.length; offset += size) {
-    batches.push(items.slice(offset, offset + size));
-  }
-  return batches;
 }
 
 function countActions(items) {
@@ -121,6 +114,7 @@ export class XianyuSyncService {
     trigger = "manual",
     mode = "all",
     control = null,
+    onProgress = () => {},
   } = {}) {
     if (!syncModes.has(mode)) {
       const error = new Error("同步范围必须是 all、pending 或 updated");
@@ -137,7 +131,7 @@ export class XianyuSyncService {
       throw error;
     }
 
-    const batchSize = Math.min(20, Math.max(1, this.config.syncRunLimit));
+    const batchSize = 1;
     const startedAt = nowIso();
     const runId = database.startSyncRun(
       trigger,
@@ -154,23 +148,88 @@ export class XianyuSyncService {
       publish_submitted: 0,
       publish_success: 0,
       publish_failed: 0,
+      card_bound: 0,
+      card_bind_failed: 0,
       batch_count: 0,
     };
     let submittedPublication = null;
     let latestBatchId = null;
+    let processedCount = 0;
+    const reportProgress = (progress) => {
+      try {
+        onProgress({
+          runId,
+          accountId,
+          mode,
+          total: 0,
+          completed: processedCount,
+          currentGameId: null,
+          currentTitle: null,
+          phase: "preparing",
+          ...progress,
+        });
+      } catch {
+        // 页面进度回调不能影响同步任务本身。
+      }
+    };
+    const bindDeliveryCard = async (candidate, itemId) => {
+      await control?.checkpoint();
+      reportProgress({
+        total: candidates.length,
+        currentGameId: candidate.id,
+        currentTitle: candidate.title,
+        phase: "binding-card",
+      });
+      try {
+        const result = await this.client.bindCards({
+          cardIds: [deliveryCardId],
+          itemIds: [String(itemId)],
+        });
+        if (Number(result.fail_count ?? 0) > 0) {
+          throw new Error(`卡券关联失败：${result.fail_count} 条未成功`);
+        }
+        const boundAt = nowIso();
+        database.markCardBindingResult({
+          gameId: candidate.id,
+          accountId,
+          cardId: deliveryCardId,
+          status: "success",
+          updatedAt: boundAt,
+        });
+        totals.card_bound += 1;
+        return true;
+      } catch (error) {
+        database.markCardBindingResult({
+          gameId: candidate.id,
+          accountId,
+          cardId: deliveryCardId,
+          status: "failed",
+          errorMessage: error.message,
+          updatedAt: nowIso(),
+        });
+        totals.card_bind_failed += 1;
+        return false;
+      }
+    };
+    let candidates = [];
 
     try {
       await control?.checkpoint();
       await this.validateAccount(accountId);
       await control?.checkpoint();
       database.recordMissingImageSyncErrors(nowIso());
-      const candidates = database.listSyncCandidates(
+      candidates = database.listSyncCandidates(
         accountId,
         100_000,
         mode,
       );
       database.updateSyncRun(runId, {
         selected_count: candidates.length,
+      });
+      reportProgress({
+        total: candidates.length,
+        completed: 0,
+        phase: candidates.length > 0 ? "preparing" : "completed",
       });
 
       if (candidates.length === 0) {
@@ -188,10 +247,27 @@ export class XianyuSyncService {
         };
       }
 
-      const batches = splitIntoBatches(candidates, batchSize);
-      for (const batchCandidates of batches) {
+      for (
+        let candidateIndex = 0;
+        candidateIndex < candidates.length;
+        candidateIndex += 1
+      ) {
+        const batchCandidates = [candidates[candidateIndex]];
+        const currentCandidate = batchCandidates[0];
         await control?.checkpoint();
         totals.batch_count += 1;
+        database.updateSyncRun(runId, {
+          ...totals,
+          processed_count: processedCount,
+          current_game_id: currentCandidate.id,
+          current_title: currentCandidate.title,
+        });
+        reportProgress({
+          total: candidates.length,
+          currentGameId: currentCandidate.id,
+          currentTitle: currentCandidate.title,
+          phase: "material",
+        });
         const upsertPayload = batchCandidates.map((game) => ({
           external_id: String(game.id),
           content_hash: game.sync_content_hash,
@@ -272,11 +348,38 @@ export class XianyuSyncService {
         totals.publish_submitted += publishCandidates.length;
 
         if (publishCandidates.length === 0) {
-          database.updateSyncRun(runId, totals);
+          if (
+            currentCandidate.publication_status === "success" &&
+            currentCandidate.publication_item_id &&
+            currentCandidate.publication_card_bind_status !== "success"
+          ) {
+            await bindDeliveryCard(
+              currentCandidate,
+              currentCandidate.publication_item_id,
+            );
+          }
+          processedCount += 1;
+          database.updateSyncRun(runId, {
+            ...totals,
+            processed_count: processedCount,
+            current_game_id: null,
+            current_title: null,
+          });
+          reportProgress({
+            total: candidates.length,
+            completed: processedCount,
+            phase: "processing",
+          });
           continue;
         }
 
         await control?.checkpoint();
+        reportProgress({
+          total: candidates.length,
+          currentGameId: currentCandidate.id,
+          currentTitle: currentCandidate.title,
+          phase: "publishing",
+        });
         const requestId = randomUUID();
         const materialIds = publishCandidates.map(
           (candidate) => materialByGame.get(candidate.id).materialId,
@@ -403,6 +506,7 @@ export class XianyuSyncService {
         );
         let batchSuccess = 0;
         let batchFailed = 0;
+        const successfulItems = [];
         const completedAt = nowIso();
         for (const item of status.items ?? []) {
           const candidate = gameByMaterial.get(Number(item.material_id));
@@ -420,6 +524,12 @@ export class XianyuSyncService {
             errorMessage: item.error_message,
             updatedAt: completedAt,
           });
+          if (itemStatus === "success" && item.item_id) {
+            successfulItems.push({
+              candidate,
+              itemId: item.item_id,
+            });
+          }
         }
 
         const missingResults =
@@ -447,25 +557,59 @@ export class XianyuSyncService {
 
         totals.publish_success += batchSuccess;
         totals.publish_failed += batchFailed;
+        for (const successfulItem of successfulItems) {
+          await bindDeliveryCard(
+            successfulItem.candidate,
+            successfulItem.itemId,
+          );
+        }
         submittedPublication = null;
+        processedCount += 1;
         database.updateSyncRun(runId, {
           ...totals,
           batch_id: batchId,
+          processed_count: processedCount,
+          current_game_id: null,
+          current_title: null,
+        });
+        reportProgress({
+          total: candidates.length,
+          completed: processedCount,
+          phase: "processing",
         });
       }
 
       const finalStatus =
-        totals.publish_failed > 0 ? "partial" : "success";
+        totals.publish_failed > 0 || totals.card_bind_failed > 0
+          ? "partial"
+          : "success";
       const finishedAt = nowIso();
       database.updateSyncRun(runId, {
         ...totals,
         status: finalStatus,
         batch_id: latestBatchId,
+        processed_count: processedCount,
+        current_game_id: null,
+        current_title: null,
         error_summary:
-          totals.publish_failed > 0
-            ? `${totals.publish_failed} 个商品发布失败`
+          totals.publish_failed > 0 || totals.card_bind_failed > 0
+            ? [
+                totals.publish_failed > 0
+                  ? `${totals.publish_failed} 个商品发布失败`
+                  : null,
+                totals.card_bind_failed > 0
+                  ? `${totals.card_bind_failed} 个商品关联卡券 #${deliveryCardId} 失败`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join("；")
             : null,
         finished_at: finishedAt,
+      });
+      reportProgress({
+        total: candidates.length,
+        completed: processedCount,
+        phase: "completed",
       });
       return {
         runId,
@@ -476,6 +620,8 @@ export class XianyuSyncService {
         publishSubmitted: totals.publish_submitted,
         publishSuccess: totals.publish_success,
         publishFailed: totals.publish_failed,
+        cardBound: totals.card_bound,
+        cardBindFailed: totals.card_bind_failed,
         batchCount: totals.batch_count,
         batchId: latestBatchId,
         status: finalStatus,
@@ -516,6 +662,7 @@ export class XianyuSyncService {
       database.updateSyncRun(runId, {
         ...totals,
         status: "failed",
+        processed_count: processedCount,
         error_summary: JSON.stringify(serializeError(error)).slice(0, 4_000),
         finished_at: nowIso(),
       });

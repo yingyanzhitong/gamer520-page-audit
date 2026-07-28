@@ -38,8 +38,10 @@ const statusLabels = {
   interrupted: "已中断",
   partial: "部分成功",
   pending: "等待中",
+  publishing: "发布中",
   running: "采集中",
   success: "成功",
+  unknown: "待确认",
 };
 
 const changeLabels = {
@@ -51,6 +53,15 @@ const syncModeLabels = {
   all: "全部商品",
   pending: "未发布商品",
   updated: "已更新商品",
+};
+
+const syncPhaseLabels = {
+  preparing: "准备队列",
+  material: "同步素材",
+  publishing: "发布商品",
+  "binding-card": "关联卡券 #6",
+  processing: "处理下一件",
+  completed: "本轮完成",
 };
 
 const elements = {
@@ -107,6 +118,10 @@ const elements = {
   syncCron: document.querySelector("#sync-cron"),
   syncEnabled: document.querySelector("#sync-enabled"),
   syncMode: document.querySelector("#sync-mode"),
+  syncProgressCount: document.querySelector("#sync-progress-count"),
+  syncProgressCurrent: document.querySelector("#sync-progress-current"),
+  syncProgressPhase: document.querySelector("#sync-progress-phase"),
+  syncProgressTrack: document.querySelector("#sync-progress-track"),
   syncRunSummary: document.querySelector("#sync-run-summary"),
   successRatio: document.querySelector("#success-ratio"),
   successfulGames: document.querySelector("#successful-games"),
@@ -169,11 +184,15 @@ function formatDuration(startedAt, finishedAt) {
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
 }
 
-function statusChip(status) {
+function statusChip(status, taskType = "crawl") {
+  const label =
+    status === "running" && taskType === "sync"
+      ? "同步中"
+      : statusLabels[status] ?? status;
   return createElement(
     "span",
     `status-chip status-${status}`,
-    statusLabels[status] ?? status,
+    label,
   );
 }
 
@@ -296,7 +315,7 @@ function renderXianyuDashboard(payload) {
   }
   elements.configuredAccount.textContent = state.accountId || "未配置";
   elements.syncNextRun.textContent = sync.enabled
-    ? `下次自动同步 ${formatDate(sync.nextRun, true)} · ${syncModeLabels[sync.mode] ?? "全部商品"} · 每批 ${sync.batchSize ?? 20} 条`
+    ? `下次自动同步 ${formatDate(sync.nextRun, true)} · ${syncModeLabels[sync.mode] ?? "全部商品"} · 逐个处理`
     : "自动同步未启用";
   const syncDisabled =
     !state.accountId ||
@@ -327,7 +346,53 @@ function renderXianyuDashboard(payload) {
     elements.xianyuSyncState.textContent = "同步已就绪";
     elements.xianyuSyncState.classList.add("is-active");
   }
+  renderSyncProgress(sync, latest);
   renderSyncRun(latest);
+}
+
+function renderSyncProgress(sync, latest) {
+  const live = sync.active ? sync.progress : null;
+  const total = Math.max(
+    0,
+    Number(live?.total ?? latest?.selectedCount ?? 0),
+  );
+  const completed = Math.min(
+    total,
+    Math.max(
+      0,
+      Number(live?.completed ?? latest?.processedCount ?? 0),
+    ),
+  );
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const phase = live?.phase ?? (latest ? "completed" : null);
+  const currentTitle = live?.currentTitle ?? latest?.currentTitle;
+  const currentGameId = live?.currentGameId ?? latest?.currentGameId;
+
+  elements.syncProgressPhase.textContent = phase
+    ? syncPhaseLabels[phase] ?? phase
+    : "等待任务";
+  elements.syncProgressCount.textContent = `${completed} / ${total}`;
+  elements.syncProgressTrack.setAttribute(
+    "aria-valuenow",
+    String(percent),
+  );
+  elements.syncProgressTrack.querySelector("span").style.width =
+    `${percent}%`;
+
+  if (sync.interrupted) {
+    elements.syncProgressCurrent.textContent =
+      currentTitle
+        ? `已中断于：${currentTitle} · ID ${currentGameId}`
+        : "任务已中断，可从当前进度恢复";
+  } else if (currentTitle) {
+    elements.syncProgressCurrent.textContent =
+      `正在处理：${currentTitle} · ID ${currentGameId}`;
+  } else if (latest) {
+    elements.syncProgressCurrent.textContent =
+      `最近任务 #${latest.id} · ${statusLabels[latest.status] ?? latest.status}`;
+  } else {
+    elements.syncProgressCurrent.textContent = "尚未开始同步";
+  }
 }
 
 function renderScheduleDashboard(scheduler) {
@@ -381,10 +446,10 @@ function renderSyncRun(run) {
     return;
   }
   const lines = [
-    ["最近批次", `#${run.id} · ${statusLabels[run.status] ?? run.status}`],
+    ["最近任务", `#${run.id} · ${statusLabels[run.status] ?? run.status}`],
     [
-      "账号 / 入选",
-      `${run.accountId ?? "—"} / ${syncModeLabels[run.syncMode] ?? "全部商品"} / ${run.selectedCount} 条 · ${run.batchCount} 批`,
+      "账号 / 进度",
+      `${run.accountId ?? "—"} / ${syncModeLabels[run.syncMode] ?? "全部商品"} / ${run.processedCount ?? 0} / ${run.selectedCount} 条`,
     ],
     [
       "素材",
@@ -393,6 +458,10 @@ function renderSyncRun(run) {
     [
       "发布",
       `提交 ${run.publishSubmitted} · 成功 ${run.publishSuccess} · 失败 ${run.publishFailed}`,
+    ],
+    [
+      "卡券 #6",
+      `关联 ${run.cardBound ?? 0} · 失败 ${run.cardBindFailed ?? 0}`,
     ],
     ["完成时间", formatDate(run.finishedAt ?? run.startedAt, true)],
   ];
@@ -422,7 +491,15 @@ function renderRuns(runs) {
 
   for (const run of runs) {
     const item = createElement("div", "run-item");
-    item.append(createElement("span", "run-id", `#${run.id}`));
+    const isSync = run.taskType === "sync";
+    if (isSync) item.classList.add("is-sync-run");
+    item.append(
+      createElement(
+        "span",
+        "run-id",
+        `${isSync ? "S" : "C"}#${run.id}`,
+      ),
+    );
 
     const date = createElement("div", "run-date");
     date.append(
@@ -437,13 +514,22 @@ function renderRuns(runs) {
 
     const total = Math.max(
       1,
-      run.detailSucceeded + run.detailFailed + run.detailSkipped,
+      isSync
+        ? run.selectedCount
+        : run.detailSucceeded + run.detailFailed + run.detailSkipped,
     );
+    const completed = isSync
+      ? run.processedCount
+      : run.detailSucceeded;
+    const failedCount = isSync
+      ? (run.publishFailed ?? 0) + (run.cardBindFailed ?? 0)
+      : run.detailFailed;
     const meter = createElement("div", "run-meter");
     const success = createElement("span", "success");
-    success.style.width = `${(run.detailSucceeded / total) * 100}%`;
+    success.style.width =
+      `${(Math.max(0, completed - failedCount) / total) * 100}%`;
     const failed = createElement("span", "failed");
-    failed.style.width = `${(run.detailFailed / total) * 100}%`;
+    failed.style.width = `${(failedCount / total) * 100}%`;
     meter.append(success, failed);
     item.append(meter);
 
@@ -452,10 +538,18 @@ function renderRuns(runs) {
       createElement(
         "strong",
         null,
-        `${run.detailSucceeded}/${run.discoveredCount}`,
+        isSync
+          ? `${run.processedCount}/${run.selectedCount}`
+          : `${run.detailSucceeded}/${run.discoveredCount}`,
       ),
-      createElement("small", null, `${run.listPagesSucceeded} 个列表页`),
-      statusChip(run.status),
+      createElement(
+        "small",
+        null,
+        isSync
+          ? `${run.accountId ?? "未配置账号"} · 卡券 ${run.cardBound ?? 0}`
+          : `${run.listPagesSucceeded} 个列表页`,
+      ),
+      statusChip(run.status, run.taskType),
     );
     item.append(count);
     elements.runList.append(item);
@@ -1218,4 +1312,4 @@ async function initializeDashboard() {
 void initializeDashboard();
 window.setInterval(() => {
   void refreshAll();
-}, 15_000);
+}, 5_000);

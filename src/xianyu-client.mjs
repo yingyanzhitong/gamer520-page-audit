@@ -101,4 +101,15 @@ export class XianyuClient {
     );
     return payload?.data ?? {};
   }
+
+  async bindCards({ cardIds, itemIds }) {
+    const payload = await this.request("/api/v1/cards/batch-bind", {
+      method: "POST",
+      body: {
+        card_ids: cardIds,
+        item_ids: itemIds,
+      },
+    });
+    return payload?.data ?? {};
+  }
 }

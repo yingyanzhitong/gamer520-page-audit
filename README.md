@@ -84,7 +84,6 @@ docker compose exec crawler npm run crawl:once
 | `XIANYU_API_KEY` | 无 | 闲鱼用户 API Key；页面账号配置和手动同步也使用此 Key |
 | `GAMER520_READ_API_KEY` | 无 | 对外下载源查询接口的独立只读 API Key；由部署者设置，不是闲鱼 `xyk_...` Key |
 | `SYNC_CRON_SCHEDULE` | `0 */6 * * *` | 闲鱼自动同步 Cron 表达式 |
-| `SYNC_RUN_LIMIT` | `20` | 全量同步的单批处理数，范围 1 到 20 |
 | `SYNC_POLL_INTERVAL_MS` | `10000` | 发布批次状态轮询间隔 |
 | `SYNC_BATCH_TIMEOUT_MS` | `7200000` | 发布批次最大等待时间 |
 | `SYNC_ENABLED` | `true` | 首次启动时是否启用定时闲鱼同步；手动同步不受此开关限制 |
@@ -107,8 +106,8 @@ Linux 容器中正式支持 `PLAYWRIGHT_CHANNEL=chromium`。
 - `xianyu_sync_settings`：持久化当前唯一发布 `account_id` 和默认售卖价格。
 - `scheduler_settings`：持久化采集、同步的 Cron、时区、启用状态和定时同步范围。
 - `xianyu_material_sync`：保存每个游戏的素材 ID、已同步哈希和错误。
-- `xianyu_publications`：按游戏和账号保存发布状态、闲鱼商品 ID 与链接。
-- `xianyu_sync_runs`：保存每轮同步的素材和发布计数。
+- `xianyu_publications`：按游戏和账号保存发布状态、闲鱼商品 ID、链接及卡券关联结果。
+- `xianyu_sync_runs`：保存每轮同步的逐商品进度、当前商品、素材、发布及卡券关联计数。
 
 网页游戏详情只展示游戏凭证、下载源和资源详情页，不要求输入 Key。独立的 `/api/download-sources` 对外接口使用 `GAMER520_READ_API_KEY` 对应的只读 Key；调用方通过请求头 `X-API-Key` 传入。账号配置、价格、调度和任务控制则使用闲鱼用户管理生成的 `xyk_...` API Key，该 Key 对应服务器环境变量 `XIANYU_API_KEY`，仅保存在当前浏览器会话且不会由 Gamer520 服务返回。两种 Key 相互独立。
 
@@ -116,7 +115,7 @@ Linux 容器中正式支持 `PLAYWRIGHT_CHANNEL=chromium`。
 
 ## 闲鱼同步与接口
 
-页面先输入闲鱼用户管理生成的 API Key，加载闲鱼账号并保存一个真实 `account_id`；账号与默认售价会持久化到 SQLite，刷新页面和服务重启后仍然保留。页面提交的 Key 必须与服务端 `XIANYU_API_KEY` 一致，确保手动和定时任务使用同一用户权限。手动同步可选择 `all`（全部有效商品）、`pending`（未在当前账号成功发布）或 `updated`（已发布但素材发生变化），定时同步也会保存其中一种范围，并按每批最多 20 条执行。新商品会以 `【秒发】原名称`、商品实际售价和数据库 `games.image_url` 唯一封面创建素材并发布；商品介绍在原简介后根据下载源动态追加支持网盘、24 小时自动发货和咨询提示。素材库已有同名商品时跳过；已在当前账号发布过的商品只更新素材，不重新上架。发布成功后，闲鱼商品编号和链接会写回对应 `games` 记录。
+页面先输入闲鱼用户管理生成的 API Key，加载闲鱼账号并保存一个真实 `account_id`；账号与默认售价会持久化到 SQLite，刷新页面和服务重启后仍然保留。页面提交的 Key 必须与服务端 `XIANYU_API_KEY` 一致，确保手动和定时任务使用同一用户权限。手动同步可选择 `all`（全部有效商品）、`pending`（未在当前账号成功发布或卡券关联待重试）或 `updated`（已发布但素材发生变化），定时同步也会保存其中一种范围。同步严格逐商品串行：每次只同步一个素材、发布一个商品并等待结果，然后把发布成功的闲鱼商品关联到卡券 ID `6`，页面实时展示当前商品与完成进度。新商品会以 `【秒发】原名称`、商品实际售价和数据库 `games.image_url` 唯一封面创建素材并发布；商品介绍在原简介后根据下载源动态追加支持网盘、24 小时自动发货和咨询提示。素材库已有同名商品时跳过；已在当前账号发布过的商品只更新素材，不重新上架。发布成功后，闲鱼商品编号和链接会写回对应 `games` 记录；卡券关联失败只重试关联，不会重复发布商品。
 
 ```bash
 # 获取可选账号
@@ -163,17 +162,21 @@ curl -X PUT \
   http://127.0.0.1:13520/api/games/118842/price
 
 # 按名称查询；开头的【秒发】或【秒发 】会自动移除
-curl -H 'X-API-Key: <下载只读Key>' \
-  --get \
-  --data-urlencode 'name=【秒发 】游戏名称' \
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: <下载只读Key>' \
+  -d '{"name":"【秒发 】游戏名称"}' \
   'http://127.0.0.1:13520/api/download-sources'
 
 # 按闲鱼商品编号查询
-curl -H 'X-API-Key: <下载只读Key>' \
-  'http://127.0.0.1:13520/api/download-sources?item_id=1067769058126'
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: <下载只读Key>' \
+  -d '{"item_id":"1067769058126"}' \
+  'http://127.0.0.1:13520/api/download-sources'
 ```
 
-下载源接口的 `id`（Gamer520 游戏编号）、`item_id`（闲鱼商品编号）和 `name` 必须且只能提供一个。`name` 会先移除开头的 `【秒发】` 或 `【秒发 】` 及相邻空格，再做精确名称匹配。名称重名返回 `409` 和候选 ID；无效 Key 返回 `401`；商品或账号不存在返回 `404`；任务冲突或当前没有可控制任务返回 `409`；参数或素材不可发布返回 `422`。
+下载源接口仅接受 `POST` JSON；旧 `GET` 请求返回 `405`。请求体的 `id`（Gamer520 游戏编号）、`item_id`（闲鱼商品编号）和 `name` 必须且只能提供一个。`name` 会先移除开头的 `【秒发】` 或 `【秒发 】` 及相邻空格，再做精确名称匹配。名称重名返回 `409` 和候选 ID；无效 Key 返回 `401`；商品或账号不存在返回 `404`；任务冲突或当前没有可控制任务返回 `409`；参数或素材不可发布返回 `422`。
 
 成功响应同时提供顶层资源凭证和完整下载源：
 

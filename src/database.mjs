@@ -196,6 +196,10 @@ export class CrawlerDatabase {
         attempt_count INTEGER NOT NULL DEFAULT 0,
         last_attempt_at TEXT,
         published_at TEXT,
+        card_id INTEGER,
+        card_bind_status TEXT NOT NULL DEFAULT 'pending',
+        card_bind_error TEXT,
+        card_bound_at TEXT,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (game_id, account_id),
         FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
@@ -219,8 +223,13 @@ export class CrawlerDatabase {
         publish_submitted INTEGER NOT NULL DEFAULT 0,
         publish_success INTEGER NOT NULL DEFAULT 0,
         publish_failed INTEGER NOT NULL DEFAULT 0,
+        card_bound INTEGER NOT NULL DEFAULT 0,
+        card_bind_failed INTEGER NOT NULL DEFAULT 0,
         batch_count INTEGER NOT NULL DEFAULT 0,
         batch_id TEXT,
+        processed_count INTEGER NOT NULL DEFAULT 0,
+        current_game_id INTEGER,
+        current_title TEXT,
         error_summary TEXT,
         started_at TEXT NOT NULL,
         finished_at TEXT
@@ -230,7 +239,8 @@ export class CrawlerDatabase {
     this.#migrateSchema();
     this.#backfillContentHashes();
     this.#backfillXianyuItemIds();
-    this.database.exec("PRAGMA user_version = 5;");
+    this.#backfillSyncRunProgress();
+    this.database.exec("PRAGMA user_version = 6;");
   }
 
   #migrateSchema() {
@@ -267,6 +277,11 @@ export class CrawlerDatabase {
       ["material_skipped", "INTEGER NOT NULL DEFAULT 0"],
       ["batch_count", "INTEGER NOT NULL DEFAULT 0"],
       ["sync_mode", "TEXT NOT NULL DEFAULT 'all'"],
+      ["processed_count", "INTEGER NOT NULL DEFAULT 0"],
+      ["current_game_id", "INTEGER"],
+      ["current_title", "TEXT"],
+      ["card_bound", "INTEGER NOT NULL DEFAULT 0"],
+      ["card_bind_failed", "INTEGER NOT NULL DEFAULT 0"],
     ];
     for (const [name, definition] of syncRunAdditions) {
       if (!syncRunColumns.has(name)) {
@@ -299,6 +314,35 @@ export class CrawlerDatabase {
         "ALTER TABLE scheduler_settings ADD COLUMN sync_mode TEXT NOT NULL DEFAULT 'all'",
       );
     }
+
+    const publicationColumns = new Set(
+      this.database
+        .prepare("PRAGMA table_info(xianyu_publications)")
+        .all()
+        .map((column) => column.name),
+    );
+    const publicationAdditions = [
+      ["card_id", "INTEGER"],
+      ["card_bind_status", "TEXT NOT NULL DEFAULT 'pending'"],
+      ["card_bind_error", "TEXT"],
+      ["card_bound_at", "TEXT"],
+    ];
+    for (const [name, definition] of publicationAdditions) {
+      if (!publicationColumns.has(name)) {
+        this.database.exec(
+          `ALTER TABLE xianyu_publications ADD COLUMN ${name} ${definition}`,
+        );
+      }
+    }
+  }
+
+  #backfillSyncRunProgress() {
+    this.database.exec(`
+      UPDATE xianyu_sync_runs
+      SET processed_count = selected_count
+      WHERE finished_at IS NOT NULL
+        AND processed_count = 0;
+    `);
   }
 
   #backfillContentHashes() {
@@ -938,8 +982,13 @@ export class CrawlerDatabase {
       "publish_submitted",
       "publish_success",
       "publish_failed",
+      "card_bound",
+      "card_bind_failed",
       "batch_count",
       "batch_id",
+      "processed_count",
+      "current_game_id",
+      "current_title",
       "error_summary",
       "finished_at",
     ]);
@@ -967,7 +1016,10 @@ export class CrawlerDatabase {
           publication.status AS publication_status,
           publication.batch_id AS publication_batch_id,
           publication.item_id AS publication_item_id,
-          publication.item_url AS publication_item_url
+          publication.item_url AS publication_item_url,
+          publication.card_id AS publication_card_id,
+          publication.card_bind_status AS publication_card_bind_status,
+          publication.card_bind_error AS publication_card_bind_error
         FROM games
         LEFT JOIN xianyu_sync_settings AS settings
           ON settings.id = 1
@@ -1031,7 +1083,9 @@ export class CrawlerDatabase {
         const publicationNeedsSync =
           (row.publication_status == null &&
             row.material_sync_status !== "skipped") ||
-          row.publication_status === "failed";
+          row.publication_status === "failed" ||
+          (row.publication_status === "success" &&
+            row.publication_card_bind_status !== "success");
         if (normalizedMode === "pending") {
           return publicationNeedsSync;
         }
@@ -1180,6 +1234,10 @@ export class CrawlerDatabase {
           status = 'publishing',
           batch_id = excluded.batch_id,
           last_error = NULL,
+          card_id = NULL,
+          card_bind_status = 'pending',
+          card_bind_error = NULL,
+          card_bound_at = NULL,
           attempt_count = xianyu_publications.attempt_count + 1,
           last_attempt_at = excluded.last_attempt_at,
           updated_at = excluded.updated_at
@@ -1252,6 +1310,39 @@ export class CrawlerDatabase {
           gameId,
         );
     });
+  }
+
+  markCardBindingResult({
+    gameId,
+    accountId,
+    cardId,
+    status,
+    errorMessage = null,
+    updatedAt,
+  }) {
+    this.database
+      .prepare(`
+        UPDATE xianyu_publications
+        SET card_id = ?,
+            card_bind_status = ?,
+            card_bind_error = ?,
+            card_bound_at = CASE
+              WHEN ? = 'success' THEN ?
+              ELSE card_bound_at
+            END,
+            updated_at = ?
+        WHERE game_id = ? AND account_id = ?
+      `)
+      .run(
+        cardId,
+        status,
+        errorMessage ? String(errorMessage).slice(0, 4_000) : null,
+        status,
+        updatedAt,
+        updatedAt,
+        gameId,
+        accountId,
+      );
   }
 
   getRecentSyncRuns(limit = 20) {

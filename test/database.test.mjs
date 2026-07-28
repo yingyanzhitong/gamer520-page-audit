@@ -464,7 +464,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.sync_mode, "updated");
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      5,
+      6,
     );
   } finally {
     database.close();

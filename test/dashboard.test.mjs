@@ -18,6 +18,18 @@ function statistics() {
   };
 }
 
+function postDownloadSources(baseUrl, body, key = null) {
+  const headers = {
+    "content-type": "application/json",
+  };
+  if (key) headers["X-API-Key"] = key;
+  return fetch(`${baseUrl}/api/download-sources`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
 test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操作", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-dashboard-test-"),
@@ -94,6 +106,23 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     itemUrl: "https://www.goofish.com/item?id=1067769058126",
     updatedAt: timestamp,
   });
+  const syncRunId = database.startSyncRun(
+    "test",
+    "account-a",
+    "all",
+    1,
+    timestamp,
+  );
+  database.updateSyncRun(syncRunId, {
+    status: "success",
+    selected_count: 1,
+    processed_count: 1,
+    material_unchanged: 1,
+    publish_submitted: 1,
+    publish_success: 1,
+    batch_count: 1,
+    finished_at: "2026-07-28T00:02:00.000Z",
+  });
   database.close();
 
   let savedSchedule = null;
@@ -108,7 +137,6 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       downloadReadApiKey: "download-secret",
       xianyuApiKey: "xianyu-secret",
       pageCount: 100,
-      syncRunLimit: 20,
     },
     () => ({
       active: false,
@@ -126,8 +154,15 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         cronSchedule: "0 */6 * * *",
         cronTimezone: "Asia/Shanghai",
         nextRun: "2026-07-28T18:00:00.000Z",
-        batchSize: 20,
         mode: "all",
+        progress: {
+          runId: syncRunId,
+          total: 10,
+          completed: 4,
+          currentGameId: 118842,
+          currentTitle: "黄昏远征军",
+          phase: "publishing",
+        },
       },
     }),
     {
@@ -214,6 +249,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(schedule.crawl.cronSchedule, "0 3 * * *");
     assert.equal(schedule.sync.enabled, true);
     assert.equal(schedule.sync.mode, "all");
+    assert.equal(schedule.sync.progress.completed, 4);
 
     const games = await fetch(
       `${baseUrl}/api/games?query=118842&status=success`,
@@ -234,14 +270,22 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(detail.game.archivePassword, "laoquzhang.com");
     assert.equal(detail.downloads[0].extractionCode, "e15a");
 
-    const unauthorizedSources = await fetch(
+    const legacyGet = await fetch(
       `${baseUrl}/api/download-sources?id=118842`,
+      { headers: { "X-API-Key": "download-secret" } },
+    );
+    assert.equal(legacyGet.status, 405);
+
+    const unauthorizedSources = await postDownloadSources(
+      baseUrl,
+      { id: 118842 },
     );
     assert.equal(unauthorizedSources.status, 401);
 
-    const sources = await fetch(
-      `${baseUrl}/api/download-sources?id=118842`,
-      { headers: { "X-API-Key": "download-secret" } },
+    const sources = await postDownloadSources(
+      baseUrl,
+      { id: 118842 },
+      "download-secret",
     ).then((response) => response.json());
     assert.equal(sources.downloads[0].extractionCode, "e15a");
     assert.equal(sources.game.id, 118842);
@@ -252,18 +296,20 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       "解压密码：laoquzhang.com\n百度网盘：https://pan.example/download?pwd=e15a 提取码：e15a",
     );
 
-    const sourcesByItem = await fetch(
-      `${baseUrl}/api/download-sources?item_id=1067769058126`,
-      { headers: { "X-API-Key": "download-secret" } },
+    const sourcesByItem = await postDownloadSources(
+      baseUrl,
+      { item_id: "1067769058126" },
+      "download-secret",
     ).then((response) => response.json());
     assert.equal(sourcesByItem.itemId, "1067769058126");
     assert.equal(sourcesByItem.game.id, 118842);
     assert.equal(sourcesByItem.archivePassword, "laoquzhang.com");
     assert.equal(sourcesByItem.downloads.length, 1);
 
-    const sourcesByPrefixedName = await fetch(
-      `${baseUrl}/api/download-sources?name=${encodeURIComponent("【秒发 】 黄昏远征军")}`,
-      { headers: { "X-API-Key": "download-secret" } },
+    const sourcesByPrefixedName = await postDownloadSources(
+      baseUrl,
+      { name: "【秒发 】 黄昏远征军" },
+      "download-secret",
     ).then((response) => response.json());
     assert.equal(sourcesByPrefixedName.game.id, 118842);
     assert.equal(sourcesByPrefixedName.archivePassword, "laoquzhang.com");
@@ -277,23 +323,38 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       2,
     );
 
-    const compactPrefix = await fetch(
-      `${baseUrl}/api/download-sources?name=${encodeURIComponent("【秒发】黄昏远征军")}`,
-      { headers: { "X-API-Key": "download-secret" } },
+    const compactPrefix = await postDownloadSources(
+      baseUrl,
+      { name: "【秒发】黄昏远征军" },
+      "download-secret",
     );
     assert.equal(compactPrefix.status, 200);
 
-    const emptyPrefixedName = await fetch(
-      `${baseUrl}/api/download-sources?name=${encodeURIComponent("【秒发 】")}`,
-      { headers: { "X-API-Key": "download-secret" } },
+    const emptyPrefixedName = await postDownloadSources(
+      baseUrl,
+      { name: "【秒发 】" },
+      "download-secret",
     );
     assert.equal(emptyPrefixedName.status, 422);
 
-    const invalidQuery = await fetch(
-      `${baseUrl}/api/download-sources?id=118842&name=黄昏远征军`,
-      { headers: { "X-API-Key": "download-secret" } },
+    const invalidQuery = await postDownloadSources(
+      baseUrl,
+      { id: 118842, name: "黄昏远征军" },
+      "download-secret",
     );
     assert.equal(invalidQuery.status, 422);
+
+    const runs = await fetch(`${baseUrl}/api/runs?limit=12`).then(
+      (response) => response.json(),
+    );
+    assert.deepEqual(
+      runs.map((run) => run.taskType).sort(),
+      ["crawl", "sync"],
+    );
+    assert.equal(
+      runs.find((run) => run.taskType === "sync").processedCount,
+      1,
+    );
 
     const unauthorizedAccounts = await fetch(
       `${baseUrl}/api/xianyu/accounts`,

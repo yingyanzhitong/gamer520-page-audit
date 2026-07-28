@@ -1,6 +1,6 @@
 services:
   crawler:
-    image: ${IMAGE_NAME:?请在 .env 中设置 Docker Hub 镜像名}:${IMAGE_TAG:-1.5.0}
+    image: ${IMAGE_NAME:?请在 .env 中设置 Docker Hub 镜像名}:${IMAGE_TAG:-1.6.0}
     pull_policy: always
     init: true
     ipc: host
@@ -31,7 +31,6 @@ services:
       XIANYU_API_KEY: ${XIANYU_API_KEY:?请在 .env 中配置闲鱼用户 API Key}
       GAMER520_READ_API_KEY: ${GAMER520_READ_API_KEY:?请在 .env 中配置下载只读 Key}
       SYNC_CRON_SCHEDULE: ${SYNC_CRON_SCHEDULE:-0 */6 * * *}
-      SYNC_RUN_LIMIT: ${SYNC_RUN_LIMIT:-20}
       SYNC_POLL_INTERVAL_MS: ${SYNC_POLL_INTERVAL_MS:-10000}
       SYNC_BATCH_TIMEOUT_MS: ${SYNC_BATCH_TIMEOUT_MS:-7200000}
       SYNC_ENABLED: ${SYNC_ENABLED:-true}

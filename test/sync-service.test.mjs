@@ -59,6 +59,7 @@ class FakeXianyuClient {
     this.materials = new Map();
     this.upsertCalls = [];
     this.publishCalls = [];
+    this.cardBindCalls = [];
   }
 
   async listAccounts() {
@@ -122,12 +123,35 @@ class FakeXianyuClient {
       })),
     };
   }
+
+  async bindCards(payload) {
+    this.cardBindCalls.push(payload);
+    return {
+      success_count: payload.itemIds.length,
+      fail_count: 0,
+    };
+  }
+}
+
+class FlakyCardClient extends FakeXianyuClient {
+  constructor() {
+    super();
+    this.failNextCardBind = true;
+  }
+
+  async bindCards(payload) {
+    this.cardBindCalls.push(payload);
+    if (this.failNextCardBind) {
+      this.failNextCardBind = false;
+      return { success_count: 0, fail_count: 1 };
+    }
+    return { success_count: 1, fail_count: 0 };
+  }
 }
 
 function config(databasePath) {
   return {
     dbPath: databasePath,
-    syncRunLimit: 20,
     syncPollIntervalMs: 1,
     syncBatchTimeoutMs: 100,
     xianyuApiKey: "unused-by-fake",
@@ -135,7 +159,7 @@ function config(databasePath) {
   };
 }
 
-test("全量同步按每批 20 条并使用封面、售价和动态网盘介绍", async () => {
+test("全量同步严格逐商品处理并报告进度", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-limit-test-"),
   );
@@ -181,14 +205,35 @@ test("全量同步按每批 20 条并使用封面、售价和动态网盘介绍"
 
   const client = new FakeXianyuClient();
   const service = new XianyuSyncService(config(databasePath), client);
+  const progressEvents = [];
   try {
-    const sync = await service.run({ trigger: "test", limit: 20 });
+    const sync = await service.run({
+      trigger: "test",
+      onProgress: (progress) => progressEvents.push(progress),
+    });
     assert.equal(sync.selectedCount, 21);
-    assert.equal(sync.batchCount, 2);
-    assert.equal(client.upsertCalls[0].length, 20);
-    assert.equal(client.upsertCalls[1].length, 1);
-    assert.equal(client.publishCalls[0].materialIds.length, 20);
-    assert.equal(client.publishCalls[1].materialIds.length, 1);
+    assert.equal(sync.batchCount, 21);
+    assert.equal(client.upsertCalls.length, 21);
+    assert.equal(client.publishCalls.length, 21);
+    assert.equal(client.cardBindCalls.length, 21);
+    assert.ok(client.upsertCalls.every((items) => items.length === 1));
+    assert.ok(
+      client.publishCalls.every(
+        (payload) => payload.materialIds.length === 1,
+      ),
+    );
+    assert.ok(
+      client.cardBindCalls.every(
+        (payload) =>
+          payload.itemIds.length === 1 &&
+          payload.cardIds.length === 1 &&
+          payload.cardIds[0] === 6,
+      ),
+    );
+    assert.equal(progressEvents[0].total, 21);
+    assert.equal(progressEvents[0].completed, 0);
+    assert.equal(progressEvents.at(-1).completed, 21);
+    assert.equal(progressEvents.at(-1).phase, "completed");
     for (const item of client.upsertCalls.flat()) {
       assert.deepEqual(item.images, [
         `https://images.example/${item.external_id}.jpg`,
@@ -202,9 +247,29 @@ test("全量同步按每批 20 条并使用封面、售价和动态网盘介绍"
       assert.match(item.description, /喜欢直接拍，有问题随时聊/);
     }
     assert.match(
-      client.upsertCalls[0][0].description,
+      client.upsertCalls.flat()[0].description,
       /支持网盘：百度\/夸克\/迅雷/,
     );
+    const checkedDatabase = new CrawlerDatabase(databasePath);
+    const storedRun = checkedDatabase.queryOne(
+      `SELECT
+         selected_count,
+         processed_count,
+         current_game_id,
+         current_title,
+         card_bound,
+         card_bind_failed
+       FROM xianyu_sync_runs
+       ORDER BY id DESC
+       LIMIT 1`,
+    );
+    checkedDatabase.close();
+    assert.equal(storedRun.selected_count, 21);
+    assert.equal(storedRun.processed_count, 21);
+    assert.equal(storedRun.current_game_id, null);
+    assert.equal(storedRun.current_title, null);
+    assert.equal(storedRun.card_bound, 21);
+    assert.equal(storedRun.card_bind_failed, 0);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -259,6 +324,62 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
       rows.map((row) => row.status),
       ["synced", "skipped"],
     );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("卡券关联失败只重试卡券，不重复发布商品", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-card-retry-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-07-28T00:00:00.000Z";
+  const discovered = game(66);
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    database.upsertDiscoveredGames([discovered], timestamp);
+    database.saveGameSuccess(
+      discovered,
+      result(discovered.id),
+      timestamp,
+    );
+    database.setXianyuAccountId("account-a", timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new FlakyCardClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const first = await service.run({ trigger: "test" });
+    assert.equal(first.status, "partial");
+    assert.equal(first.publishSuccess, 1);
+    assert.equal(first.cardBindFailed, 1);
+    assert.equal(client.publishCalls.length, 1);
+
+    const retried = await service.run({
+      trigger: "test",
+      mode: "pending",
+    });
+    assert.equal(retried.status, "success");
+    assert.equal(retried.publishSubmitted, 0);
+    assert.equal(retried.cardBound, 1);
+    assert.equal(client.publishCalls.length, 1);
+    assert.equal(client.cardBindCalls.length, 2);
+
+    const checkedDatabase = new CrawlerDatabase(databasePath);
+    const publication = checkedDatabase.queryOne(
+      `SELECT status, item_id, card_id, card_bind_status
+       FROM xianyu_publications
+       WHERE game_id = ? AND account_id = ?`,
+      discovered.id,
+      "account-a",
+    );
+    checkedDatabase.close();
+    assert.equal(publication.status, "success");
+    assert.equal(publication.card_id, 6);
+    assert.equal(publication.card_bind_status, "success");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

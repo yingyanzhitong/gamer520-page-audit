@@ -21,6 +21,7 @@ const contentTypes = new Map([
 function mapRun(row) {
   if (!row) return null;
   return {
+    taskType: "crawl",
     id: row.id,
     triggerType: row.trigger_type,
     startedAt: row.started_at,
@@ -80,6 +81,7 @@ function mapGame(row) {
 
 function mapSyncRun(row) {
   return {
+    taskType: "sync",
     id: row.id,
     triggerType: row.trigger_type,
     accountId: row.account_id,
@@ -94,8 +96,13 @@ function mapSyncRun(row) {
     publishSubmitted: row.publish_submitted,
     publishSuccess: row.publish_success,
     publishFailed: row.publish_failed,
+    cardBound: row.card_bound ?? 0,
+    cardBindFailed: row.card_bind_failed ?? 0,
     batchCount: row.batch_count ?? 0,
     batchId: row.batch_id,
+    processedCount: row.processed_count ?? 0,
+    currentGameId: row.current_game_id ?? null,
+    currentTitle: row.current_title ?? null,
     errorSummary: row.error_summary,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
@@ -442,12 +449,10 @@ function gameDetail(database, gameId) {
   };
 }
 
-function downloadSources(database, requestUrl) {
-  const idValue = requestUrl.searchParams.get("id")?.trim() ?? "";
-  const itemIdValue =
-    requestUrl.searchParams.get("item_id")?.trim() ?? "";
-  const requestedName =
-    requestUrl.searchParams.get("name")?.trim() ?? "";
+function downloadSources(database, input) {
+  const idValue = String(input?.id ?? "").trim();
+  const itemIdValue = String(input?.item_id ?? "").trim();
+  const requestedName = String(input?.name ?? "").trim();
   const providedCount = [idValue, itemIdValue, requestedName].filter(
     Boolean,
   ).length;
@@ -549,10 +554,21 @@ function listRuns(database, requestUrl) {
     1,
     100,
   );
-  return database
+  const crawlRuns = database
     .prepare("SELECT * FROM crawl_runs ORDER BY id DESC LIMIT ?")
     .all(limit)
     .map(mapRun);
+  const syncRuns = database
+    .prepare("SELECT * FROM xianyu_sync_runs ORDER BY id DESC LIMIT ?")
+    .all(limit)
+    .map(mapSyncRun);
+  return [...crawlRuns, ...syncRuns]
+    .sort(
+      (left, right) =>
+        new Date(right.startedAt).getTime() -
+        new Date(left.startedAt).getTime(),
+    )
+    .slice(0, limit);
 }
 
 function listSyncRuns(database, requestUrl) {
@@ -704,6 +720,7 @@ export async function startDashboardServer(
             nextRun: state.sync?.nextRun ?? null,
             active: Boolean(state.sync?.active),
             interrupted: Boolean(state.sync?.interrupted),
+            progress: state.sync?.progress ?? null,
           },
         });
         return;
@@ -900,10 +917,11 @@ export async function startDashboardServer(
         });
         return;
       }
-      if (
-        request.method === "GET" &&
-        requestUrl.pathname === "/api/download-sources"
-      ) {
+      if (requestUrl.pathname === "/api/download-sources") {
+        if (request.method !== "POST") {
+          sendError(response, 405, "下载源接口仅支持 POST");
+          return;
+        }
         if (
           !requireKey(
             request,
@@ -914,8 +932,9 @@ export async function startDashboardServer(
         ) {
           return;
         }
+        const body = await readJsonBody(request);
         const result = withDatabase(config.dbPath, (database) =>
-          downloadSources(database, requestUrl),
+          downloadSources(database, body),
         );
         if (result.status !== 200) {
           sendJson(response, result.status, {
