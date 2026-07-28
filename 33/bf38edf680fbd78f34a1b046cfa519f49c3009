@@ -1,0 +1,62 @@
+README.md
+  s_bfd82453425369::t_37f61889efde0f 109-110,118,165-168,172-176,179
+test/sync-service.test.mjs
+  s_bfd82453425369::t_34c111e1b94097 162,208,210-213,215-217,219-222,231-236,250,252-258,262-264,266-270
+  s_bfd82453425369::t_43a4dd99998173 136-149,326-377,379-382
+  s_bfd82453425369::t_ae075ecf7d396b 62,126-133,218,223-230
+  s_bfd82453425369::t_6ce40fe7684b8d 259-261,271-272
+  s_bfd82453425369::t_8275def4d7e899 134-135
+test/database.test.mjs
+  s_bfd82453425369::t_34c111e1b94097 467
+src/sync-service.mjs
+  s_bfd82453425369::t_28aac10e574241 8,117,134,151-152,157-214,221,228-232,250-256,259-270,351-372,377-382,509,527-532,560-565,567,571-573,575-579,583-585,591-593,595-605,608-612,623-624,665
+src/xianyu-client.mjs
+  s_bfd82453425369::t_0ed242b3d881c4 104-114
+docker-compose.yml
+  s_bfd82453425369::t_e0b9fd21d92e98 5
+package.json
+  s_bfd82453425369::t_e0b9fd21d92e98 3
+CHANGELOG.md
+  s_bfd82453425369::t_ab462cb0d92bac 3-10
+public/styles.css
+  s_bfd82453425369::t_488d5d1ec1876c 543-547,596-597,602-603,1651,1665-1688,1690-1713
+deploy/.env.example
+  s_bfd82453425369::t_e0b9fd21d92e98 2
+public/index.html
+  s_bfd82453425369::t_2c3f88db2d938f 134,204-206,209-226,382
+  s_bfd82453425369::t_e0b9fd21d92e98 13-14
+public/app.js
+  s_bfd82453425369::t_02d82fb1ee82d7 1315
+  s_bfd82453425369::t_2d2c0160245fac 41,44,58-66,121-124,187-191,195,318,349,351-395,397,449,451-452,461-464,494-502,517-519,521-526,529-530,532,540-546,548-550,552
+src/dashboard-server.mjs
+  s_bfd82453425369::t_6e8fe3a0b656aa 24,84,99-100,103-105,452-455,557,561-571,723,920-924,935,937
+deploy/docker-compose.yml
+  s_bfd82453425369::t_e0b9fd21d92e98 3
+test/dashboard.test.mjs
+  s_bfd82453425369::t_6a65a4b4e8845c 21-32,108-124,158-165,252,273,275-281,285-288,299-302,309-312,326-329,333-336,340-343,346-357
+src/scheduler.mjs
+  s_bfd82453425369::t_f443eb1a8211e3 16,169-175,177-184,198,328,330
+src/database.mjs
+  s_bfd82453425369::t_85d0a6fee5da33 199-202,226-227,230-232,242-243,280-284,317-345,985-986,989-991,1019-1022,1086-1088,1237-1240,1313-1345
+package-lock.json
+  s_bfd82453425369::t_c1c51b8cb8c3ad 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "33bf38edf680fbd78f34a1b046cfa519f49c3009",
+  "prompts": {},
+  "logical_commit_id": "33bf38edf680fbd78f34a1b046cfa519f49c3009",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 748,
+      "total_deletions": 110
+    }
+  }
+}
