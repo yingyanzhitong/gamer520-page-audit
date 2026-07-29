@@ -1,0 +1,40 @@
+src/crawler.mjs
+  s_bfd82453425369::t_beec5c4660ea72 8-9,63-70,176-245,247-248,259,270
+docker-compose.yml
+  s_bfd82453425369::t_ad07007f663aca 5
+package.json
+  s_bfd82453425369::t_ad07007f663aca 3
+CHANGELOG.md
+  s_bfd82453425369::t_ad07007f663aca 3-8
+README.md
+  s_bfd82453425369::t_8bc9c2f532ab9a 114
+src/playwright-extractor.mjs
+  s_bfd82453425369::t_722f1788dbc6fa 190-249,648-656,662-665
+deploy/.env.example
+  s_bfd82453425369::t_b8ae3892f0889f 2
+deploy/docker-compose.yml
+  s_bfd82453425369::t_b8ae3892f0889f 3
+test/source-update-times.test.mjs
+  s_bfd82453425369::t_8bc9c2f532ab9a 1-55
+package-lock.json
+  s_bfd82453425369::t_9bb2a858c77686 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "b25d2c15bce597f6fb9b729f3428796264d9e2d8",
+  "prompts": {},
+  "logical_commit_id": "b25d2c15bce597f6fb9b729f3428796264d9e2d8",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 222,
+      "total_deletions": 27
+    }
+  }
+}
