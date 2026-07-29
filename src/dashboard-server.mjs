@@ -22,6 +22,20 @@ const contentTypes = new Map([
   [".svg", "image/svg+xml"],
 ]);
 
+const xianyuStatusExpression = `
+  CASE
+    WHEN publication.status IN ('publishing', 'unknown') THEN 'publishing'
+    WHEN material.material_id IS NOT NULL
+      AND material.status IN ('pending', 'failed')
+    THEN 'material_update'
+    WHEN publication.status = 'success' THEN 'published'
+    WHEN material.material_id IS NOT NULL
+      OR material.status IN ('synced', 'skipped')
+    THEN 'material'
+    ELSE 'none'
+  END
+`;
+
 function mapRun(row) {
   if (!row) return null;
   return {
@@ -76,6 +90,7 @@ function mapGame(row) {
     xianyuPublishedAt: row.xianyu_published_at ?? null,
     materialSyncStatus: row.material_sync_status ?? "pending",
     publicationStatus: row.publication_status ?? "pending",
+    xianyuStatus: row.xianyu_status ?? "none",
     publishedItemId: row.publication_item_id ?? null,
     publishedItemUrl: row.publication_item_url ?? null,
     updatedAt: row.updated_at,
@@ -98,6 +113,9 @@ function mapSyncRun(row) {
     materialUnchanged: row.material_unchanged,
     materialSkipped: row.material_skipped ?? 0,
     materialFailed: row.material_failed ?? 0,
+    materialProcessedCount: row.material_processed_count ?? 0,
+    publishSelectedCount: row.publish_selected_count ?? 0,
+    publishProcessedCount: row.publish_processed_count ?? 0,
     publishSubmitted: row.publish_submitted,
     publishSuccess: row.publish_success,
     publishFailed: row.publish_failed,
@@ -370,31 +388,16 @@ function listGames(database, requestUrl) {
   const requestedXianyuStatus =
     requestUrl.searchParams.get("xianyuStatus") ?? "all";
   const xianyuStatus = new Set([
+    "none",
+    "material",
+    "material_update",
     "published",
     "publishing",
-    "publish_failed",
-    "unknown",
-    "synced",
-    "material_failed",
-    "skipped",
-    "pending",
   ]).has(requestedXianyuStatus)
     ? requestedXianyuStatus
     : "all";
   const conditions = [];
   const parameters = [];
-  const xianyuStatusExpression = `
-    CASE
-      WHEN publication.status = 'success' THEN 'published'
-      WHEN publication.status = 'publishing' THEN 'publishing'
-      WHEN publication.status = 'failed' THEN 'publish_failed'
-      WHEN publication.status = 'unknown' THEN 'unknown'
-      WHEN material.status = 'synced' THEN 'synced'
-      WHEN material.status = 'failed' THEN 'material_failed'
-      WHEN material.status = 'skipped' THEN 'skipped'
-      ELSE 'pending'
-    END
-  `;
   const joinedTables = `
     FROM games
     LEFT JOIN xianyu_sync_settings AS settings
@@ -447,6 +450,7 @@ function listGames(database, requestUrl) {
           1
         ) AS effective_price,
         (SELECT COUNT(*) FROM downloads WHERE game_id = games.id) AS download_count,
+        (${xianyuStatusExpression}) AS xianyu_status,
         material.status AS material_sync_status,
         publication.status AS publication_status,
         publication.item_id AS publication_item_id,
@@ -481,6 +485,7 @@ function gameDetail(database, gameId) {
           1
         ) AS effective_price,
         (SELECT COUNT(*) FROM downloads WHERE game_id = games.id) AS download_count,
+        (${xianyuStatusExpression}) AS xianyu_status,
         material.status AS material_sync_status,
         publication.status AS publication_status,
         publication.item_id AS publication_item_id,

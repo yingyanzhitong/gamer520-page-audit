@@ -60,6 +60,7 @@ class FakeXianyuClient {
     this.upsertCalls = [];
     this.publishCalls = [];
     this.cardBindCalls = [];
+    this.events = [];
   }
 
   async listAccounts() {
@@ -71,6 +72,7 @@ class FakeXianyuClient {
 
   async upsertMaterials(items) {
     this.upsertCalls.push(items);
+    this.events.push({ type: "material", count: items.length });
     return items.map((item) => {
       const previous = this.materials.get(item.external_id);
       const duplicate = [...this.materials.values()].find(
@@ -105,6 +107,10 @@ class FakeXianyuClient {
 
   async publishBatch(payload) {
     this.publishCalls.push(payload);
+    this.events.push({
+      type: "publish",
+      count: payload.materialIds.length,
+    });
     return { batch_id: payload.requestId };
   }
 
@@ -257,6 +263,12 @@ test("素材最多 4 个并行并按 20 件批量发布", async () => {
       [20, 1],
     );
     assert.ok(
+      client.events
+        .slice(0, 21)
+        .every((event) => event.type === "material"),
+    );
+    assert.equal(client.events[21].type, "publish");
+    assert.ok(
       client.cardBindCalls.every(
         (payload) =>
           payload.itemIds.length === 1 &&
@@ -269,6 +281,10 @@ test("素材最多 4 个并行并按 20 件批量发布", async () => {
     assert.equal(progressEvents[0].completed, 0);
     assert.equal(progressEvents.at(-1).completed, 21);
     assert.equal(progressEvents.at(-1).phase, "completed");
+    assert.equal(progressEvents.at(-1).materialTotal, 21);
+    assert.equal(progressEvents.at(-1).materialCompleted, 21);
+    assert.equal(progressEvents.at(-1).publishTotal, 21);
+    assert.equal(progressEvents.at(-1).publishCompleted, 21);
     for (const item of client.upsertCalls.flat()) {
       assert.deepEqual(item.images, [
         `https://images.example/${item.external_id}.jpg`,
@@ -295,6 +311,9 @@ test("素材最多 4 个并行并按 20 件批量发布", async () => {
          card_bound,
          card_bind_failed,
          material_failed,
+         material_processed_count,
+         publish_selected_count,
+         publish_processed_count,
          batch_count,
          requested_limit
        FROM xianyu_sync_runs
@@ -309,6 +328,9 @@ test("素材最多 4 个并行并按 20 件批量发布", async () => {
     assert.equal(storedRun.card_bound, 21);
     assert.equal(storedRun.card_bind_failed, 0);
     assert.equal(storedRun.material_failed, 0);
+    assert.equal(storedRun.material_processed_count, 21);
+    assert.equal(storedRun.publish_selected_count, 21);
+    assert.equal(storedRun.publish_processed_count, 21);
     assert.equal(storedRun.batch_count, 2);
     assert.equal(storedRun.requested_limit, 20);
   } finally {

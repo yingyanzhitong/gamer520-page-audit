@@ -147,6 +147,9 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     processed_count: 3,
     material_unchanged: 1,
     material_skipped: 2,
+    material_processed_count: 3,
+    publish_selected_count: 1,
+    publish_processed_count: 1,
     publish_submitted: 1,
     publish_success: 1,
     batch_count: 1,
@@ -188,7 +191,11 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           runId: syncRunId,
           total: 10,
           completed: 4,
+          materialTotal: 10,
+          materialCompleted: 4,
           materialSkipped: 2,
+          publishTotal: 5,
+          publishCompleted: 2,
           currentGameId: 118842,
           currentTitle: "黄昏远征军",
           phase: "publishing",
@@ -282,12 +289,30 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(schedule.sync.mode, "all");
     assert.equal(schedule.sync.progress.completed, 4);
     assert.equal(schedule.sync.progress.materialSkipped, 2);
+    assert.equal(schedule.sync.progress.materialCompleted, 4);
+    assert.equal(schedule.sync.progress.publishCompleted, 2);
 
     const appSource = await fetch(`${baseUrl}/app.js`).then(
       (response) => response.text(),
     );
+    const pageSource = await fetch(baseUrl).then((response) =>
+      response.text(),
+    );
     assert.match(appSource, /个列表页 · 跳过/);
     assert.match(appSource, /materialSkipped/);
+    assert.match(appSource, /syncMaterialProgressCount/);
+    assert.match(appSource, /syncPublishProgressCount/);
+    assert.match(pageSource, /id="sync-material-progress-track"/);
+    assert.match(pageSource, /id="sync-publish-progress-track"/);
+    for (const status of [
+      "none",
+      "material",
+      "publishing",
+      "published",
+      "material_update",
+    ]) {
+      assert.match(pageSource, new RegExp(`value="${status}"`));
+    }
 
     const games = await fetch(
       `${baseUrl}/api/games?query=118842&status=success`,
@@ -297,19 +322,19 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(games.items[0].xianyuItemId, "1067769058126");
 
     const updatedPublishedGames = await fetch(
-      `${baseUrl}/api/games?status=updated&xianyuStatus=published`,
+      `${baseUrl}/api/games?status=updated&xianyuStatus=material_update`,
     ).then((response) => response.json());
     assert.equal(updatedPublishedGames.total, 1);
     assert.equal(updatedPublishedGames.items[0].lastChangeType, "updated");
     assert.equal(
-      updatedPublishedGames.items[0].publicationStatus,
-      "success",
+      updatedPublishedGames.items[0].xianyuStatus,
+      "material_update",
     );
 
-    const pendingGames = await fetch(
-      `${baseUrl}/api/games?xianyuStatus=pending`,
+    const noXianyuStateGames = await fetch(
+      `${baseUrl}/api/games?xianyuStatus=none`,
     ).then((response) => response.json());
-    assert.equal(pendingGames.total, 0);
+    assert.equal(noXianyuStateGames.total, 0);
 
     const gamesByItem = await fetch(
       `${baseUrl}/api/games?query=1067769058126`,
@@ -429,6 +454,64 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     );
     assert.equal(missingQuery.status, 422);
 
+    const statusDatabase = new CrawlerDatabase(databasePath);
+    statusDatabase.markMaterialSynced(
+      game.id,
+      842,
+      "current-material-hash",
+      timestamp,
+    );
+    statusDatabase.close();
+    const publishedGames = await fetch(
+      `${baseUrl}/api/games?xianyuStatus=published`,
+    ).then((response) => response.json());
+    assert.equal(publishedGames.total, 1);
+    assert.equal(publishedGames.items[0].xianyuStatus, "published");
+
+    const publishingDatabase = new CrawlerDatabase(databasePath);
+    publishingDatabase.markPublicationSubmitted(
+      game.id,
+      "account-a",
+      842,
+      "batch-status-test",
+      timestamp,
+    );
+    publishingDatabase.close();
+    const publishingGames = await fetch(
+      `${baseUrl}/api/games?xianyuStatus=publishing`,
+    ).then((response) => response.json());
+    assert.equal(publishingGames.total, 1);
+    assert.equal(publishingGames.items[0].xianyuStatus, "publishing");
+
+    const materialDatabase = new CrawlerDatabase(databasePath);
+    materialDatabase.markPublicationResult({
+      gameId: game.id,
+      accountId: "account-a",
+      status: "failed",
+      errorMessage: "测试发布失败",
+      updatedAt: timestamp,
+    });
+    materialDatabase.close();
+    const materialGames = await fetch(
+      `${baseUrl}/api/games?xianyuStatus=material`,
+    ).then((response) => response.json());
+    assert.equal(materialGames.total, 1);
+    assert.equal(materialGames.items[0].xianyuStatus, "material");
+
+    const noneDatabase = new CrawlerDatabase(databasePath);
+    noneDatabase.database
+      .prepare("DELETE FROM xianyu_publications WHERE game_id = ?")
+      .run(game.id);
+    noneDatabase.database
+      .prepare("DELETE FROM xianyu_material_sync WHERE game_id = ?")
+      .run(game.id);
+    noneDatabase.close();
+    const noneGames = await fetch(
+      `${baseUrl}/api/games?xianyuStatus=none`,
+    ).then((response) => response.json());
+    assert.equal(noneGames.total, 1);
+    assert.equal(noneGames.items[0].xianyuStatus, "none");
+
     const runs = await fetch(`${baseUrl}/api/runs?limit=12`).then(
       (response) => response.json(),
     );
@@ -447,6 +530,14 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(
       runs.find((run) => run.taskType === "sync").materialSkipped,
       2,
+    );
+    assert.equal(
+      runs.find((run) => run.taskType === "sync").materialProcessedCount,
+      3,
+    );
+    assert.equal(
+      runs.find((run) => run.taskType === "sync").publishProcessedCount,
+      1,
     );
 
     const unauthorizedAccounts = await fetch(

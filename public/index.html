@@ -10,8 +10,8 @@
     >
     <title>G520 采集观测台</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css?v=1.8.1">
-    <script type="module" src="/app.js?v=1.8.1"></script>
+    <link rel="stylesheet" href="/styles.css?v=1.9.0">
+    <script type="module" src="/app.js?v=1.9.0"></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -207,20 +207,39 @@
             </div>
             <small class="sync-schedule" id="sync-next-run">同步计划尚未读取</small>
             <div class="sync-live-progress" id="sync-live-progress">
-              <div class="sync-progress-heading">
-                <span id="sync-progress-phase">等待任务</span>
-                <strong id="sync-progress-count">0 / 0</strong>
+              <div class="sync-stage-progress">
+                <div class="sync-progress-heading">
+                  <span>加入素材库</span>
+                  <strong id="sync-material-progress-count">0 / 0 · 跳过 0</strong>
+                </div>
+                <div
+                  class="sync-progress-track"
+                  id="sync-material-progress-track"
+                  role="progressbar"
+                  aria-label="加入素材库进度"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="0"
+                >
+                  <span></span>
+                </div>
               </div>
-              <div
-                class="sync-progress-track"
-                id="sync-progress-track"
-                role="progressbar"
-                aria-label="闲鱼商品同步进度"
-                aria-valuemin="0"
-                aria-valuemax="100"
-                aria-valuenow="0"
-              >
-                <span></span>
+              <div class="sync-stage-progress">
+                <div class="sync-progress-heading">
+                  <span>批量发布</span>
+                  <strong id="sync-publish-progress-count">0 / 0</strong>
+                </div>
+                <div
+                  class="sync-progress-track is-publish"
+                  id="sync-publish-progress-track"
+                  role="progressbar"
+                  aria-label="批量发布进度"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="0"
+                >
+                  <span></span>
+                </div>
               </div>
               <small id="sync-progress-current">尚未开始同步</small>
             </div>
@@ -533,14 +552,11 @@
             <span>闲鱼状态</span>
             <select id="xianyu-status-filter">
               <option value="all">全部状态</option>
-              <option value="published">已发布</option>
-              <option value="pending">待同步</option>
-              <option value="synced">素材已同步</option>
+              <option value="none">无</option>
+              <option value="material">加入素材库</option>
               <option value="publishing">发布中</option>
-              <option value="publish_failed">发布失败</option>
-              <option value="material_failed">素材失败</option>
-              <option value="unknown">结果待确认</option>
-              <option value="skipped">同名已跳过</option>
+              <option value="published">发布成功</option>
+              <option value="material_update">更新素材库</option>
             </select>
           </label>
           <label class="filter-field">

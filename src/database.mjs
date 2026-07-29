@@ -229,6 +229,9 @@ export class CrawlerDatabase {
         material_unchanged INTEGER NOT NULL DEFAULT 0,
         material_skipped INTEGER NOT NULL DEFAULT 0,
         material_failed INTEGER NOT NULL DEFAULT 0,
+        material_processed_count INTEGER NOT NULL DEFAULT 0,
+        publish_selected_count INTEGER NOT NULL DEFAULT 0,
+        publish_processed_count INTEGER NOT NULL DEFAULT 0,
         publish_submitted INTEGER NOT NULL DEFAULT 0,
         publish_success INTEGER NOT NULL DEFAULT 0,
         publish_failed INTEGER NOT NULL DEFAULT 0,
@@ -249,7 +252,7 @@ export class CrawlerDatabase {
     this.#backfillContentHashes();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 8;");
+    this.database.exec("PRAGMA user_version = 9;");
   }
 
   #migrateSchema() {
@@ -285,6 +288,9 @@ export class CrawlerDatabase {
     const syncRunAdditions = [
       ["material_skipped", "INTEGER NOT NULL DEFAULT 0"],
       ["material_failed", "INTEGER NOT NULL DEFAULT 0"],
+      ["material_processed_count", "INTEGER NOT NULL DEFAULT 0"],
+      ["publish_selected_count", "INTEGER NOT NULL DEFAULT 0"],
+      ["publish_processed_count", "INTEGER NOT NULL DEFAULT 0"],
       ["batch_count", "INTEGER NOT NULL DEFAULT 0"],
       ["sync_mode", "TEXT NOT NULL DEFAULT 'all'"],
       ["processed_count", "INTEGER NOT NULL DEFAULT 0"],
@@ -365,6 +371,23 @@ export class CrawlerDatabase {
       WHERE finished_at IS NOT NULL
         AND processed_count = 0
         AND status IN ('success', 'partial');
+
+      UPDATE xianyu_sync_runs
+      SET material_processed_count =
+        material_created +
+        material_updated +
+        material_unchanged +
+        material_skipped +
+        material_failed
+      WHERE material_processed_count = 0;
+
+      UPDATE xianyu_sync_runs
+      SET publish_selected_count = publish_submitted
+      WHERE publish_selected_count = 0;
+
+      UPDATE xianyu_sync_runs
+      SET publish_processed_count = publish_success + publish_failed
+      WHERE publish_processed_count = 0;
     `);
   }
 
@@ -1055,6 +1078,9 @@ export class CrawlerDatabase {
       "material_unchanged",
       "material_skipped",
       "material_failed",
+      "material_processed_count",
+      "publish_selected_count",
+      "publish_processed_count",
       "publish_submitted",
       "publish_success",
       "publish_failed",

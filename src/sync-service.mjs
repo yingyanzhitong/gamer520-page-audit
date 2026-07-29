@@ -98,6 +98,9 @@ export class XianyuSyncService {
       material_unchanged: 0,
       material_skipped: 0,
       material_failed: 0,
+      material_processed_count: 0,
+      publish_selected_count: 0,
+      publish_processed_count: 0,
       publish_submitted: 0,
       publish_success: 0,
       publish_failed: 0,
@@ -108,6 +111,7 @@ export class XianyuSyncService {
     let submittedPublication = null;
     let latestBatchId = null;
     let processedCount = 0;
+    let candidates = [];
     const listingCache = new Map();
     const listingFor = (candidate) => {
       if (!listingCache.has(candidate.id)) {
@@ -130,7 +134,11 @@ export class XianyuSyncService {
           mode,
           total: 0,
           completed: processedCount,
+          materialTotal: candidates.length,
+          materialCompleted: totals.material_processed_count,
           materialSkipped: totals.material_skipped,
+          publishTotal: totals.publish_selected_count,
+          publishCompleted: totals.publish_processed_count,
           currentGameId: null,
           currentTitle: null,
           phase: "preparing",
@@ -180,8 +188,6 @@ export class XianyuSyncService {
         return false;
       }
     };
-    let candidates = [];
-
     try {
       await control?.checkpoint();
       await this.validateAccount(accountId);
@@ -458,7 +464,13 @@ export class XianyuSyncService {
 
         totals.publish_success += batchSuccess;
         totals.publish_failed += batchFailed;
+        totals.publish_processed_count += entries.length;
         submittedPublication = null;
+        database.updateSyncRun(runId, {
+          ...totals,
+          batch_id: batchId,
+          processed_count: processedCount,
+        });
         for (const successfulItem of successfulItems) {
           await bindDeliveryCard(
             successfulItem.candidate,
@@ -498,6 +510,7 @@ export class XianyuSyncService {
 
         for (const outcome of materialOutcomes) {
           const { candidate, result, error } = outcome;
+          totals.material_processed_count += 1;
           if (error) {
             database.markMaterialFailed(
               candidate.id,
@@ -576,18 +589,32 @@ export class XianyuSyncService {
           completed: processedCount,
           phase: "processing",
         });
-
-        while (publishQueue.length >= publishBatchSize) {
-          const publicationResult = await publishEntries(
-            publishQueue.splice(0, publishBatchSize),
-          );
-          if (publicationResult) return publicationResult;
-        }
       }
 
-      if (publishQueue.length > 0) {
+      totals.publish_selected_count = publishQueue.length;
+      database.updateSyncRun(runId, {
+        ...totals,
+        processed_count: processedCount,
+        current_game_id: null,
+        current_title: null,
+      });
+      reportProgress({
+        total: candidates.length,
+        completed: processedCount,
+        phase:
+          publishQueue.length > 0 ? "publishing" : "material-completed",
+      });
+
+      for (
+        let publishIndex = 0;
+        publishIndex < publishQueue.length;
+        publishIndex += publishBatchSize
+      ) {
         const publicationResult = await publishEntries(
-          publishQueue.splice(0, publishQueue.length),
+          publishQueue.slice(
+            publishIndex,
+            publishIndex + publishBatchSize,
+          ),
         );
         if (publicationResult) return publicationResult;
       }
@@ -638,6 +665,9 @@ export class XianyuSyncService {
         selectedCount: candidates.length,
         materialSkipped: totals.material_skipped,
         materialFailed: totals.material_failed,
+        materialProcessedCount: totals.material_processed_count,
+        publishSelectedCount: totals.publish_selected_count,
+        publishProcessedCount: totals.publish_processed_count,
         publishSubmitted: totals.publish_submitted,
         publishSuccess: totals.publish_success,
         publishFailed: totals.publish_failed,

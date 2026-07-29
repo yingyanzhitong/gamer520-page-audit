@@ -85,6 +85,7 @@ const syncModeLabels = {
 const syncPhaseLabels = {
   preparing: "准备队列",
   material: "同步素材",
+  "material-completed": "素材阶段完成",
   publishing: "发布商品",
   "binding-card": "关联卡券 #6",
   processing: "处理下一件",
@@ -147,10 +148,19 @@ const elements = {
   syncCron: document.querySelector("#sync-cron"),
   syncEnabled: document.querySelector("#sync-enabled"),
   syncMode: document.querySelector("#sync-mode"),
-  syncProgressCount: document.querySelector("#sync-progress-count"),
+  syncMaterialProgressCount: document.querySelector(
+    "#sync-material-progress-count",
+  ),
+  syncMaterialProgressTrack: document.querySelector(
+    "#sync-material-progress-track",
+  ),
+  syncPublishProgressCount: document.querySelector(
+    "#sync-publish-progress-count",
+  ),
+  syncPublishProgressTrack: document.querySelector(
+    "#sync-publish-progress-track",
+  ),
   syncProgressCurrent: document.querySelector("#sync-progress-current"),
-  syncProgressPhase: document.querySelector("#sync-progress-phase"),
-  syncProgressTrack: document.querySelector("#sync-progress-track"),
   syncRunSummary: document.querySelector("#sync-run-summary"),
   successRatio: document.querySelector("#success-ratio"),
   successfulGames: document.querySelector("#successful-games"),
@@ -508,18 +518,44 @@ function renderTemplatePreview() {
 
 function renderSyncProgress(sync, latest) {
   const live = sync.active ? sync.progress : null;
-  const total = Math.max(
+  const materialTotal = Math.max(
     0,
-    Number(live?.total ?? latest?.selectedCount ?? 0),
+    Number(live?.materialTotal ?? latest?.selectedCount ?? 0),
   );
-  const completed = Math.min(
-    total,
+  const materialCompleted = Math.min(
+    materialTotal,
     Math.max(
       0,
-      Number(live?.completed ?? latest?.processedCount ?? 0),
+      Number(
+        live?.materialCompleted ??
+          latest?.materialProcessedCount ??
+          0,
+      ),
     ),
   );
-  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const publishTotal = Math.max(
+    0,
+    Number(live?.publishTotal ?? latest?.publishSelectedCount ?? 0),
+  );
+  const publishCompleted = Math.min(
+    publishTotal,
+    Math.max(
+      0,
+      Number(
+        live?.publishCompleted ??
+          latest?.publishProcessedCount ??
+          0,
+      ),
+    ),
+  );
+  const materialPercent =
+    materialTotal > 0
+      ? Math.round((materialCompleted / materialTotal) * 100)
+      : 0;
+  const publishPercent =
+    publishTotal > 0
+      ? Math.round((publishCompleted / publishTotal) * 100)
+      : 0;
   const phase = live?.phase ?? (latest ? "completed" : null);
   const currentTitle = live?.currentTitle ?? latest?.currentTitle;
   const currentGameId = live?.currentGameId ?? latest?.currentGameId;
@@ -528,17 +564,22 @@ function renderSyncProgress(sync, latest) {
     Number(live?.materialSkipped ?? latest?.materialSkipped ?? 0),
   );
 
-  elements.syncProgressPhase.textContent = phase
-    ? syncPhaseLabels[phase] ?? phase
-    : "等待任务";
-  elements.syncProgressCount.textContent =
-    `${completed} / ${total} · 跳过 ${skipped}`;
-  elements.syncProgressTrack.setAttribute(
+  elements.syncMaterialProgressCount.textContent =
+    `${materialCompleted} / ${materialTotal} · 跳过 ${skipped}`;
+  elements.syncMaterialProgressTrack.setAttribute(
     "aria-valuenow",
-    String(percent),
+    String(materialPercent),
   );
-  elements.syncProgressTrack.querySelector("span").style.width =
-    `${percent}%`;
+  elements.syncMaterialProgressTrack.querySelector("span").style.width =
+    `${materialPercent}%`;
+  elements.syncPublishProgressCount.textContent =
+    `${publishCompleted} / ${publishTotal}`;
+  elements.syncPublishProgressTrack.setAttribute(
+    "aria-valuenow",
+    String(publishPercent),
+  );
+  elements.syncPublishProgressTrack.querySelector("span").style.width =
+    `${publishPercent}%`;
 
   if (sync.interrupted) {
     elements.syncProgressCurrent.textContent =
@@ -547,7 +588,7 @@ function renderSyncProgress(sync, latest) {
         : "任务已中断，可从当前进度恢复";
   } else if (currentTitle) {
     elements.syncProgressCurrent.textContent =
-      `正在处理：${currentTitle} · ID ${currentGameId}`;
+      `${syncPhaseLabels[phase] ?? "正在处理"}：${currentTitle} · ID ${currentGameId}`;
   } else if (latest) {
     elements.syncProgressCurrent.textContent =
       `最近任务 #${latest.id} · ${statusLabels[latest.status] ?? latest.status}`;
@@ -614,11 +655,11 @@ function renderSyncRun(run) {
     ],
     [
       "素材",
-      `新增 ${run.materialCreated} · 更新 ${run.materialUpdated} · 跳过 ${run.materialSkipped} · 失败 ${run.materialFailed ?? 0}`,
+      `进度 ${run.materialProcessedCount ?? 0}/${run.selectedCount} · 新增 ${run.materialCreated} · 更新 ${run.materialUpdated} · 跳过 ${run.materialSkipped} · 失败 ${run.materialFailed ?? 0}`,
     ],
     [
       "发布",
-      `提交 ${run.publishSubmitted} · 成功 ${run.publishSuccess} · 失败 ${run.publishFailed}`,
+      `进度 ${run.publishProcessedCount ?? 0}/${run.publishSelectedCount ?? 0} · 提交 ${run.publishSubmitted} · 成功 ${run.publishSuccess} · 失败 ${run.publishFailed}`,
     ],
     [
       "卡券 #6",
@@ -921,30 +962,19 @@ async function saveGamePrice(gameId, price, button) {
 }
 
 function publishStatusChip(game) {
-  let status = game.publicationStatus;
-  let label;
-  if (status === "success") {
-    label = "已发布";
-  } else if (status === "publishing") {
-    label = "发布中";
-  } else if (status === "failed") {
-    label = "发布失败";
-  } else if (status === "unknown") {
-    label = "结果待确认";
-  } else if (game.materialSyncStatus === "synced") {
-    status = "synced";
-    label = "素材已同步";
-  } else if (game.materialSyncStatus === "failed") {
-    status = "failed";
-    label = "素材失败";
-  } else if (game.materialSyncStatus === "skipped") {
-    status = "skipped";
-    label = "同名已跳过";
-  } else {
-    status = "pending";
-    label = "待同步";
-  }
-  return createElement("span", `publish-chip publish-${status}`, label);
+  const status = game.xianyuStatus ?? "none";
+  const labels = {
+    none: "无",
+    material: "加入素材库",
+    publishing: "发布中",
+    published: "发布成功",
+    material_update: "更新素材库",
+  };
+  return createElement(
+    "span",
+    `publish-chip publish-${status.replaceAll("_", "-")}`,
+    labels[status] ?? labels.none,
+  );
 }
 
 function labeledPassword(label, value) {
