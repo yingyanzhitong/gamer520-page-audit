@@ -161,11 +161,11 @@ curl -X PUT \
   -d '{"price":6.8}' \
   http://127.0.0.1:13520/api/games/118842/price
 
-# 按名称查询；开头的【秒发】或【秒发 】会自动移除
+# 按闲鱼商品标题查询；【秒发】会在匹配前自动移除
 curl -X POST \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: <下载只读Key>' \
-  -d '{"name":"【秒发 】游戏名称"}' \
+  -d '{"item_title":"【秒发】游戏名称"}' \
   'http://127.0.0.1:13520/api/download-sources'
 
 # 按闲鱼商品编号查询
@@ -175,24 +175,24 @@ curl -X POST \
   -d '{"item_id":"1067769058126"}' \
   'http://127.0.0.1:13520/api/download-sources'
 
-# 可以同时提供三个条件；未匹配时按 item_id → name → id 逐级回退
+# 可以同时提供三个条件；未匹配时按 item_id → item_title → id 逐级回退
 curl -X POST \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: <下载只读Key>' \
-  -d '{"item_id":"1067769058126","name":"【秒发】游戏名称","id":118842}' \
+  -d '{"item_id":"1067769058126","item_title":"【秒发】游戏名称","id":118842}' \
   'http://127.0.0.1:13520/api/download-sources'
 ```
 
-下载源接口仅接受 `POST` JSON；旧 `GET` 请求返回 `405`。请求体的 `id`（Gamer520 游戏编号）、`item_id`（闲鱼商品编号）和 `name` 至少提供一个，也可以同时提供。查询按 `item_id → name → id` 的优先级执行：当前条件没有匹配结果时才尝试下一个条件。`name` 会先移除开头的 `【秒发】` 或 `【秒发 】` 及相邻空格，再做精确名称匹配。名称重名返回 `409` 和候选 ID；无效 Key 返回 `401`；商品或账号不存在返回 `404`；任务冲突或当前没有可控制任务返回 `409`；参数或素材不可发布返回 `422`。
+下载源接口仅接受 `POST` JSON；旧 `GET` 请求返回 `405`。请求体的 `id`（Gamer520 游戏编号）、`item_id`（闲鱼商品编号）和 `item_title`（闲鱼商品标题）至少提供一个，也可以同时提供。查询按 `item_id → item_title → id` 的优先级执行：当前条件没有匹配结果时才尝试下一个条件。`item_title` 会先移除 `【秒发】`（兼容括号内空格），再做精确名称匹配；旧字段 `name` 已废弃，不再作为查询条件。名称重名返回 `409` 和候选 ID；无效 Key 返回 `401`；商品或账号不存在返回 `404`；任务冲突或当前没有可控制任务返回 `409`；参数或素材不可发布返回 `422`。
 
 成功响应同时提供顶层资源凭证和完整下载源：
 
 ```json
 {
   "lookup": {
-    "strategy": "name",
-    "requestedName": "【秒发 】游戏名称",
-    "normalizedName": "游戏名称"
+    "strategy": "item_title",
+    "requestedItemTitle": "【秒发】游戏名称",
+    "normalizedItemTitle": "游戏名称"
   },
   "resourceCode": "资源编号",
   "archivePassword": "解压密码",

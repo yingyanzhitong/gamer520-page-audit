@@ -120,10 +120,10 @@ function mapDownload(row) {
   };
 }
 
-function normalizeDownloadLookupName(value) {
+function normalizeDownloadLookupTitle(value) {
   return String(value ?? "")
     .trim()
-    .replace(/^【\s*秒发\s*】\s*/u, "")
+    .replace(/【\s*秒发\s*】/gu, "")
     .trim();
 }
 
@@ -452,19 +452,21 @@ function gameDetail(database, gameId) {
 function downloadSources(database, input) {
   const idValue = String(input?.id ?? "").trim();
   const itemIdValue = String(input?.item_id ?? "").trim();
-  const requestedName = String(input?.name ?? "").trim();
-  if (![idValue, itemIdValue, requestedName].some(Boolean)) {
+  const requestedItemTitle = String(input?.item_title ?? "").trim();
+  if (![idValue, itemIdValue, requestedItemTitle].some(Boolean)) {
     return {
       status: 422,
-      error: "id、item_id 和 name 至少提供一个",
+      error: "id、item_id 和 item_title 至少提供一个",
     };
   }
 
-  const nameValue = normalizeDownloadLookupName(requestedName);
-  if (requestedName && !nameValue) {
+  const itemTitleValue = normalizeDownloadLookupTitle(
+    requestedItemTitle,
+  );
+  if (requestedItemTitle && !itemTitleValue) {
     return {
       status: 422,
-      error: "name 去除秒发前缀后不能为空",
+      error: "item_title 去除【秒发】后不能为空",
     };
   }
   if (itemIdValue.length > 100) {
@@ -493,13 +495,13 @@ function downloadSources(database, input) {
       .all(itemIdValue, itemIdValue);
     if (rows.length > 0) strategy = "item_id";
   }
-  if (rows.length === 0 && requestedName) {
+  if (rows.length === 0 && requestedItemTitle) {
     rows = database
       .prepare(
         "SELECT * FROM games WHERE trim(title) = ? COLLATE NOCASE ORDER BY id",
       )
-      .all(nameValue);
-    if (rows.length > 0) strategy = "name";
+      .all(itemTitleValue);
+    if (rows.length > 0) strategy = "item_title";
   }
   if (rows.length === 0 && idValue) {
     rows = database
@@ -532,10 +534,10 @@ function downloadSources(database, input) {
       lookup: {
         strategy,
         ...(itemIdValue ? { itemId: itemIdValue } : {}),
-        ...(requestedName
+        ...(requestedItemTitle
           ? {
-              requestedName,
-              normalizedName: nameValue,
+              requestedItemTitle,
+              normalizedItemTitle: itemTitleValue,
             }
           : {}),
         ...(idValue ? { id: Number(idValue) } : {}),

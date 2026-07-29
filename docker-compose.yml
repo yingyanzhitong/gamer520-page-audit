@@ -2,7 +2,7 @@ services:
   crawler:
     build:
       context: .
-    image: ${IMAGE_NAME:-gamer520-crawler}:${IMAGE_TAG:-1.6.2}
+    image: ${IMAGE_NAME:-gamer520-crawler}:${IMAGE_TAG:-1.6.3}
     init: true
     ipc: host
     restart: unless-stopped

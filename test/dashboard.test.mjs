@@ -300,7 +300,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       baseUrl,
       {
         item_id: "1067769058126",
-        name: "不存在的名称",
+        item_title: "不存在的名称",
         id: 999999,
       },
       "download-secret",
@@ -311,25 +311,28 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(sourcesByItem.downloads.length, 1);
     assert.equal(sourcesByItem.lookup.strategy, "item_id");
 
-    const sourcesByPrefixedName = await postDownloadSources(
+    const sourcesByPrefixedTitle = await postDownloadSources(
       baseUrl,
       {
         item_id: "不存在的商品编号",
-        name: "【秒发 】 黄昏远征军",
+        item_title: "【 秒发 】 黄昏远征军",
         id: 999999,
       },
       "download-secret",
     ).then((response) => response.json());
-    assert.equal(sourcesByPrefixedName.game.id, 118842);
-    assert.equal(sourcesByPrefixedName.archivePassword, "laoquzhang.com");
+    assert.equal(sourcesByPrefixedTitle.game.id, 118842);
+    assert.equal(sourcesByPrefixedTitle.archivePassword, "laoquzhang.com");
     assert.equal(
-      sourcesByPrefixedName.lookup.normalizedName,
+      sourcesByPrefixedTitle.lookup.normalizedItemTitle,
       "黄昏远征军",
     );
-    assert.equal(sourcesByPrefixedName.lookup.strategy, "name");
-    assert.equal(sourcesByPrefixedName.downloads.length, 1);
     assert.equal(
-      sourcesByPrefixedName.data.split("\n").length,
+      sourcesByPrefixedTitle.lookup.strategy,
+      "item_title",
+    );
+    assert.equal(sourcesByPrefixedTitle.downloads.length, 1);
+    assert.equal(
+      sourcesByPrefixedTitle.data.split("\n").length,
       2,
     );
 
@@ -337,7 +340,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       baseUrl,
       {
         item_id: "不存在的商品编号",
-        name: "不存在的名称",
+        item_title: "不存在的名称",
         id: 118842,
       },
       "download-secret",
@@ -345,19 +348,26 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(sourcesByFallbackId.game.id, 118842);
     assert.equal(sourcesByFallbackId.lookup.strategy, "id");
 
-    const compactPrefix = await postDownloadSources(
+    const embeddedPrefix = await postDownloadSources(
       baseUrl,
-      { name: "【秒发】黄昏远征军" },
+      { item_title: "黄昏【秒发】远征军" },
       "download-secret",
     );
-    assert.equal(compactPrefix.status, 200);
+    assert.equal(embeddedPrefix.status, 200);
 
-    const emptyPrefixedName = await postDownloadSources(
+    const emptyPrefixedTitle = await postDownloadSources(
       baseUrl,
-      { name: "【秒发 】" },
+      { item_title: "【秒发 】" },
       "download-secret",
     );
-    assert.equal(emptyPrefixedName.status, 422);
+    assert.equal(emptyPrefixedTitle.status, 422);
+
+    const deprecatedName = await postDownloadSources(
+      baseUrl,
+      { name: "黄昏远征军" },
+      "download-secret",
+    );
+    assert.equal(deprecatedName.status, 422);
 
     const missingQuery = await postDownloadSources(
       baseUrl,
