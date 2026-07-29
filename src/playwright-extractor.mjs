@@ -187,6 +187,66 @@ function responseError(response, label) {
   return new Error(`${label}请求失败：HTTP ${status ?? "unknown"}`);
 }
 
+function normalizeSourceUpdatedAt(value, { utc = false } = {}) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const normalized =
+    utc && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? `${raw}Z` : raw;
+  const timestamp = new Date(normalized);
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString();
+}
+
+export function isSourceTimestampCurrent(sourceUpdatedAt, lastScrapedAt) {
+  const sourceTimestamp = normalizeSourceUpdatedAt(sourceUpdatedAt);
+  const scrapedTimestamp = normalizeSourceUpdatedAt(lastScrapedAt);
+  if (!sourceTimestamp || !scrapedTimestamp) return false;
+  return new Date(sourceTimestamp).getTime() <= new Date(scrapedTimestamp).getTime();
+}
+
+export async function fetchSourceUpdateTimes(
+  context,
+  sourceUrl,
+  gameIds,
+  config,
+) {
+  assertAllowedArticleUrl(sourceUrl);
+  const ids = [...new Set(gameIds)]
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  if (ids.length === 0) return new Map();
+  if (ids.length > 100) {
+    throw new Error("来源更新时间接口单次最多查询 100 个文章 ID");
+  }
+
+  const endpoint = new URL("/wp-json/wp/v2/posts", sourceUrl);
+  endpoint.searchParams.set("include", ids.join(","));
+  endpoint.searchParams.set("per_page", String(ids.length));
+  endpoint.searchParams.set("_fields", "id,modified_gmt,modified");
+
+  const response = await context.request.get(endpoint.href, {
+    timeout: config.navigationTimeoutMs,
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok()) {
+    throw responseError(response, "来源更新时间接口");
+  }
+
+  const records = await response.json();
+  if (!Array.isArray(records)) {
+    throw new Error("来源更新时间接口返回格式异常");
+  }
+
+  const timestamps = new Map();
+  for (const record of records) {
+    const id = Number(record?.id);
+    const timestamp =
+      normalizeSourceUpdatedAt(record?.modified_gmt, { utc: true }) ??
+      normalizeSourceUpdatedAt(record?.modified);
+    if (ids.includes(id) && timestamp) timestamps.set(id, timestamp);
+  }
+  return timestamps;
+}
+
 export async function launchBrowser(config) {
   const options = { headless: config.headless };
   if (config.playwrightChannel) {
@@ -584,33 +644,25 @@ export async function extractGame(
     if (!articleResponse?.ok()) {
       throw responseError(articleResponse, "文章页");
     }
-    await articlePage.waitForLoadState("load", {
-      timeout: config.navigationTimeoutMs,
-    });
-
-    const sourceUpdatedValue = await articlePage
-      .locator(".meta-date time[datetime]")
-      .first()
-      .getAttribute("datetime")
-      .catch(() => null);
-    const parsedSourceUpdatedAt = sourceUpdatedValue
-      ? new Date(sourceUpdatedValue)
-      : null;
     const sourceUpdatedAt =
-      parsedSourceUpdatedAt &&
-      !Number.isNaN(parsedSourceUpdatedAt.getTime())
-        ? parsedSourceUpdatedAt.toISOString()
-        : null;
-    if (
-      sourceUpdatedAt &&
-      refreshState.lastScrapedAt &&
-      refreshState.sourceUpdatedAt === sourceUpdatedAt
-    ) {
+      normalizeSourceUpdatedAt(refreshState.knownSourceUpdatedAt) ??
+      normalizeSourceUpdatedAt(
+        await articlePage
+          .locator(".meta-date time[datetime]")
+          .first()
+          .getAttribute("datetime")
+          .catch(() => null),
+      );
+    if (isSourceTimestampCurrent(sourceUpdatedAt, refreshState.lastScrapedAt)) {
       return {
         unchanged: true,
         sourceUpdatedAt,
       };
     }
+
+    await articlePage.waitForLoadState("load", {
+      timeout: config.navigationTimeoutMs,
+    });
 
     const title = (await articlePage.locator("h1").textContent())?.trim();
     const imageCandidates = await articlePage.evaluate(() => {

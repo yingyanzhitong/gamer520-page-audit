@@ -5,6 +5,8 @@ import {
   createCrawlerContext,
   discoverListPage,
   extractGame,
+  fetchSourceUpdateTimes,
+  isSourceTimestampCurrent,
   launchBrowser,
 } from "./playwright-extractor.mjs";
 import {
@@ -56,6 +58,14 @@ function log(event, fields = {}) {
       ...fields,
     }),
   );
+}
+
+function chunks(items, size) {
+  const batches = [];
+  for (let index = 0; index < items.length; index += size) {
+    batches.push(items.slice(index, index + size));
+  }
+  return batches;
 }
 
 export async function runCrawl({
@@ -165,6 +175,77 @@ export async function runCrawl({
       throw new Error("热度列表没有发现任何有效游戏");
     }
 
+    const metadataContext = await createCrawlerContext(browser);
+    try {
+      for (const batch of chunks(queue, 100)) {
+        await control?.checkpoint();
+        try {
+          const { value: timestamps } = await runWithRetry(
+            () =>
+              fetchSourceUpdateTimes(
+                metadataContext,
+                batch[0].sourceUrl,
+                batch.map((game) => game.id),
+                config,
+              ),
+            config,
+            control,
+          );
+          for (const game of batch) {
+            game.sourceUpdatedAt = timestamps.get(game.id) ?? null;
+          }
+          log("source_update_times_succeeded", {
+            runId,
+            gameCount: batch.length,
+            timestampCount: timestamps.size,
+          });
+        } catch (error) {
+          const serialized = serializeError(error);
+          database.recordError({
+            runId,
+            targetUrl: batch[0].sourceUrl,
+            stage: "source_update_time",
+            attemptCount: error.attemptCount ?? config.maxRetries + 1,
+            errorName: serialized.name,
+            errorMessage: serialized.message,
+            createdAt: nowIso(),
+          });
+          log("source_update_times_failed", {
+            runId,
+            gameCount: batch.length,
+            error: serialized,
+          });
+        }
+      }
+    } finally {
+      await metadataContext.close().catch(() => {});
+    }
+
+    const detailQueue = [];
+    for (const game of queue) {
+      const refreshState = database.getGameRefreshState(game.id) ?? {};
+      if (
+        isSourceTimestampCurrent(
+          game.sourceUpdatedAt,
+          refreshState.last_scraped_at,
+        )
+      ) {
+        const checkedAt = nowIso();
+        database.markGameAttempt(game.id, checkedAt);
+        database.saveGameUnchanged(game.id, game.sourceUpdatedAt, checkedAt);
+        statistics.detailSkipped += 1;
+        log("detail_skipped_source_unchanged", {
+          runId,
+          gameId: game.id,
+          hotRank: game.hotRank,
+          sourceUpdatedAt: game.sourceUpdatedAt,
+        });
+      } else {
+        detailQueue.push(game);
+      }
+    }
+    database.updateRunProgress(runId, statistics);
+
     let cursor = 0;
     let accessBlockStreak = 0;
 
@@ -175,7 +256,7 @@ export async function runCrawl({
           await control?.checkpoint();
           const currentIndex = cursor;
           cursor += 1;
-          const game = queue[currentIndex];
+          const game = detailQueue[currentIndex];
           if (!game) break;
 
           const refreshState = database.getGameRefreshState(game.id) ?? {};
@@ -186,6 +267,7 @@ export async function runCrawl({
                 extractGame(context, game.sourceUrl, config, {
                   sourceUpdatedAt: refreshState.source_updated_at,
                   lastScrapedAt: refreshState.last_scraped_at,
+                  knownSourceUpdatedAt: game.sourceUpdatedAt,
                 }),
               config,
               control,
