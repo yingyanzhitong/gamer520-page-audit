@@ -334,9 +334,9 @@ function renderDashboard(payload) {
   const detailPercent =
     detailTotal > 0 ? Math.round((completedDetails / detailTotal) * 100) : 0;
   elements.currentProgressLabel.textContent = currentRun
-    ? `${completedDetails} / ${detailTotal}`
+    ? `${completedDetails} / ${detailTotal} · 跳过 ${currentRun.detailSkipped ?? 0}`
     : latestRun
-      ? `上轮${statusLabels[latestRun.status] ?? latestRun.status}`
+      ? `上轮${statusLabels[latestRun.status] ?? latestRun.status} · 跳过 ${latestRun.detailSkipped ?? 0}`
       : "等待首次任务";
   elements.detailProgress.setAttribute("aria-valuenow", String(detailPercent));
   elements.detailProgress.querySelector("span").style.width =
@@ -523,11 +523,16 @@ function renderSyncProgress(sync, latest) {
   const phase = live?.phase ?? (latest ? "completed" : null);
   const currentTitle = live?.currentTitle ?? latest?.currentTitle;
   const currentGameId = live?.currentGameId ?? latest?.currentGameId;
+  const skipped = Math.max(
+    0,
+    Number(live?.materialSkipped ?? latest?.materialSkipped ?? 0),
+  );
 
   elements.syncProgressPhase.textContent = phase
     ? syncPhaseLabels[phase] ?? phase
     : "等待任务";
-  elements.syncProgressCount.textContent = `${completed} / ${total}`;
+  elements.syncProgressCount.textContent =
+    `${completed} / ${total} · 跳过 ${skipped}`;
   elements.syncProgressTrack.setAttribute(
     "aria-valuenow",
     String(percent),
@@ -702,8 +707,8 @@ function renderRuns(runs) {
         "small",
         null,
         isSync
-          ? `${run.accountId ?? "未配置账号"} · 卡券 ${run.cardBound ?? 0}`
-          : `${run.listPagesSucceeded} 个列表页`,
+          ? `${run.accountId ?? "未配置账号"} · 跳过 ${run.materialSkipped ?? 0} · 卡券 ${run.cardBound ?? 0}`
+          : `${run.listPagesSucceeded} 个列表页 · 跳过 ${run.detailSkipped ?? 0}`,
       ),
       statusChip(run.status, run.taskType),
     );

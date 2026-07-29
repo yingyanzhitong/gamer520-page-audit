@@ -11,10 +11,10 @@ function statistics() {
   return {
     listPagesSucceeded: 1,
     listPagesFailed: 0,
-    discoveredCount: 1,
+    discoveredCount: 3,
     detailSucceeded: 1,
     detailFailed: 0,
-    detailSkipped: 0,
+    detailSkipped: 2,
   };
 }
 
@@ -143,9 +143,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
   );
   database.updateSyncRun(syncRunId, {
     status: "success",
-    selected_count: 1,
-    processed_count: 1,
+    selected_count: 3,
+    processed_count: 3,
     material_unchanged: 1,
+    material_skipped: 2,
     publish_submitted: 1,
     publish_success: 1,
     batch_count: 1,
@@ -187,6 +188,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           runId: syncRunId,
           total: 10,
           completed: 4,
+          materialSkipped: 2,
           currentGameId: 118842,
           currentTitle: "黄昏远征军",
           phase: "publishing",
@@ -269,6 +271,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(summary.totals.games, 1);
     assert.equal(summary.totals.downloads, 1);
     assert.equal(summary.latestRun.status, "success");
+    assert.equal(summary.latestRun.detailSkipped, 2);
     assert.equal(summary.scheduler.cronTimezone, "Asia/Shanghai");
 
     const schedule = await fetch(
@@ -278,6 +281,13 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(schedule.sync.enabled, true);
     assert.equal(schedule.sync.mode, "all");
     assert.equal(schedule.sync.progress.completed, 4);
+    assert.equal(schedule.sync.progress.materialSkipped, 2);
+
+    const appSource = await fetch(`${baseUrl}/app.js`).then(
+      (response) => response.text(),
+    );
+    assert.match(appSource, /个列表页 · 跳过/);
+    assert.match(appSource, /materialSkipped/);
 
     const games = await fetch(
       `${baseUrl}/api/games?query=118842&status=success`,
@@ -428,7 +438,15 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     );
     assert.equal(
       runs.find((run) => run.taskType === "sync").processedCount,
-      1,
+      3,
+    );
+    assert.equal(
+      runs.find((run) => run.taskType === "crawl").detailSkipped,
+      2,
+    );
+    assert.equal(
+      runs.find((run) => run.taskType === "sync").materialSkipped,
+      2,
     );
 
     const unauthorizedAccounts = await fetch(

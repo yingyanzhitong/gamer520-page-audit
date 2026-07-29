@@ -498,12 +498,17 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
 
   const client = new FakeXianyuClient();
   const service = new XianyuSyncService(config(databasePath), client);
+  const progressEvents = [];
   try {
-    const sync = await service.run({ trigger: "test" });
+    const sync = await service.run({
+      trigger: "test",
+      onProgress: (progress) => progressEvents.push(progress),
+    });
     assert.equal(sync.selectedCount, 2);
     assert.equal(sync.materialSkipped, 1);
     assert.equal(sync.publishSubmitted, 1);
     assert.equal(client.publishCalls[0].materialIds.length, 1);
+    assert.equal(progressEvents.at(-1).materialSkipped, 1);
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const rows = checkedDatabase.queryAll(

@@ -130,6 +130,7 @@ export class XianyuSyncService {
           mode,
           total: 0,
           completed: processedCount,
+          materialSkipped: totals.material_skipped,
           currentGameId: null,
           currentTitle: null,
           phase: "preparing",
