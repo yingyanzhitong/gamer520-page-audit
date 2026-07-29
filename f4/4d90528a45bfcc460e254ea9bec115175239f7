@@ -1,0 +1,72 @@
+src/dashboard-server.mjs
+  s_bfd82453425369::t_14285856050cd3 9-12,295-301,335-343,716-722,731-739,855,857-866,871,880
+src/sync-service.mjs
+  s_bfd82453425369::t_6e499875851e1a 6-12,109-122,152,237,240-255
+public/app.js
+  s_bfd82453425369::t_fa6465db495df3 131,1160,1182
+  s_bfd82453425369::t_0c44170aed1ba0 1381,1384-1401,1408-1424,1429-1432,1434
+  s_bfd82453425369::t_5518c2a463b699 1383,1402-1404,1425-1428
+  s_bfd82453425369::t_4f52307317f287 1141,1168-1170,1175-1178
+  s_bfd82453425369::t_052d8b6548900a 21-43,54-56,159-177,359-377,416-504
+  s_bfd82453425369::t_65a0d1367ab2e5 1405-1407
+  s_bfd82453425369::t_956b7bc28b18c1 1382
+package.json
+  s_bfd82453425369::t_6f380071e90232 3
+test/dashboard.test.mjs
+  s_bfd82453425369::t_2ce24491cfba79 426-428,436,443-468,489-492
+src/xianyu-templates.mjs
+  s_bfd82453425369::t_8cd778fcf6d31c 1-205
+public/styles.css
+  s_bfd82453425369::t_fa6465db495df3 1836-1847,2488-2495
+  s_bfd82453425369::t_ffefb60454eb46 2375-2378,2475-2485,2487,2496-2499
+  s_bfd82453425369::t_34f881b408aa9d 1790-1835,1848-2063
+docker-compose.yml
+  s_bfd82453425369::t_6f380071e90232 5
+test/sync-service.test.mjs
+  s_bfd82453425369::t_e1040ea939ce9f 659-681
+  s_bfd82453425369::t_b890875a2d96d5 279-352
+test/database.test.mjs
+  s_bfd82453425369::t_6e4918d706b3b8 491
+deploy/docker-compose.yml
+  s_bfd82453425369::t_6f380071e90232 3
+CHANGELOG.md
+  s_bfd82453425369::t_6f380071e90232 3-10
+deploy/.env.example
+  s_bfd82453425369::t_27dc431480a3a2 2
+README.md
+  s_bfd82453425369::t_6f380071e90232 106,118-121,131
+public/index.html
+  s_bfd82453425369::t_fa6465db495df3 251-267
+  s_bfd82453425369::t_9b5bfbda5fbdb7 183,243-250,268-348
+  s_bfd82453425369::t_6f380071e90232 13-14
+src/database.mjs
+  s_bfd82453425369::t_5970ed7df3ca79 6-10,167-169,251
+  s_bfd82453425369::t_ae30cfff32187f 838,841-847,851-863,866-871,874-880,887-889,891,895-897,900-907,920-930
+  s_bfd82453425369::t_300e938c963f88 313-323,933
+  s_bfd82453425369::t_f4208663066d05 1077,1148-1151
+  s_bfd82453425369::t_cc6e3a2b7a285d 312,1078-1079,1112-1118,1129,1185-1191
+  s_bfd82453425369::t_1f8fd5948723cd 931-932
+test/xianyu-templates.test.mjs
+  s_bfd82453425369::t_6e4918d706b3b8 1-70
+package-lock.json
+  s_bfd82453425369::t_8588df6edbfc09 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f44d90528a45bfcc460e254ea9bec115175239f7",
+  "prompts": {},
+  "logical_commit_id": "f44d90528a45bfcc460e254ea9bec115175239f7",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 1254,
+      "total_deletions": 110
+    }
+  }
+}
