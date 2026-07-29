@@ -12,6 +12,8 @@ export { buildListingDescription };
 
 const syncModes = new Set(["all", "pending", "updated"]);
 const deliveryCardId = 6;
+export const materialSyncConcurrency = 4;
+export const publishBatchSize = 20;
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -82,13 +84,12 @@ export class XianyuSyncService {
       throw error;
     }
 
-    const batchSize = 1;
     const startedAt = nowIso();
     const runId = database.startSyncRun(
       trigger,
       accountId,
       mode,
-      batchSize,
+      publishBatchSize,
       startedAt,
     );
     const totals = {
@@ -96,6 +97,7 @@ export class XianyuSyncService {
       material_updated: 0,
       material_unchanged: 0,
       material_skipped: 0,
+      material_failed: 0,
       publish_submitted: 0,
       publish_success: 0,
       publish_failed: 0,
@@ -213,146 +215,78 @@ export class XianyuSyncService {
         };
       }
 
-      for (
-        let candidateIndex = 0;
-        candidateIndex < candidates.length;
-        candidateIndex += 1
-      ) {
-        const batchCandidates = [candidates[candidateIndex]];
-        const currentCandidate = batchCandidates[0];
+      const titleLocks = new Map();
+      const syncMaterial = async (candidate) => {
+        const listing = listingFor(candidate);
+        const payload = {
+          external_id: String(candidate.id),
+          content_hash: candidate.sync_content_hash,
+          title: listing.title,
+          description: listing.description,
+          price: Number(candidate.effective_price),
+          images: [listing.imageUrl],
+          category: "虚拟商品",
+          delivery_method: "express",
+          postage: 0,
+          condition: "全新",
+          remark: `来源 gamer520，商品ID ${candidate.id}`,
+        };
+        reportProgress({
+          total: candidates.length,
+          currentGameId: candidate.id,
+          currentTitle: candidate.title,
+          phase: "material",
+        });
+
+        const titleKey = listing.title.trim();
+        const previous = titleLocks.get(titleKey) ?? Promise.resolve();
+        const operation = previous
+          .catch(() => {})
+          .then(async () => {
+            await control?.checkpoint();
+            const results = await this.client.upsertMaterials([payload]);
+            const result = results.find(
+              (item) =>
+                String(item.external_id) === String(candidate.id),
+            );
+            if (!result) {
+              throw new Error("闲鱼素材接口未返回该商品结果");
+            }
+            return result;
+          });
+        titleLocks.set(titleKey, operation);
+
+        try {
+          return { candidate, result: await operation };
+        } catch (error) {
+          return { candidate, error };
+        } finally {
+          if (titleLocks.get(titleKey) === operation) {
+            titleLocks.delete(titleKey);
+          }
+        }
+      };
+
+      const publishEntries = async (entries) => {
+        const firstCandidate = entries[0].candidate;
         await control?.checkpoint();
         totals.batch_count += 1;
+        totals.publish_submitted += entries.length;
         database.updateSyncRun(runId, {
           ...totals,
           processed_count: processedCount,
-          current_game_id: currentCandidate.id,
-          current_title: currentCandidate.title,
+          current_game_id: firstCandidate.id,
+          current_title: firstCandidate.title,
         });
         reportProgress({
           total: candidates.length,
-          currentGameId: currentCandidate.id,
-          currentTitle: currentCandidate.title,
-          phase: "material",
-        });
-        let upsertPayload;
-        let materialResults;
-        try {
-          upsertPayload = batchCandidates.map((game) => {
-            const listing = listingFor(game);
-            return {
-              external_id: String(game.id),
-              content_hash: game.sync_content_hash,
-              title: listing.title,
-              description: listing.description,
-              price: Number(game.effective_price),
-              images: [listing.imageUrl],
-              category: "虚拟商品",
-              delivery_method: "express",
-              postage: 0,
-              condition: "全新",
-              remark: `来源 gamer520，商品ID ${game.id}`,
-            };
-          });
-          await control?.checkpoint();
-          materialResults = await this.client.upsertMaterials(upsertPayload);
-        } catch (error) {
-          const failedAt = nowIso();
-          for (const game of batchCandidates) {
-            database.markMaterialFailed(game.id, error.message, failedAt);
-          }
-          throw error;
-        }
-
-        const candidateMap = new Map(
-          batchCandidates.map((candidate) => [
-            String(candidate.id),
-            candidate,
-          ]),
-        );
-        const materialByGame = new Map();
-        const syncedAt = nowIso();
-        for (const result of materialResults) {
-          const candidate = candidateMap.get(String(result.external_id));
-          if (!candidate) continue;
-          const materialId = Number(result.material_id);
-          if (result.action === "skipped") {
-            database.markMaterialSkipped(
-              candidate.id,
-              materialId,
-              candidate.sync_content_hash,
-              result.reason ?? "闲鱼素材库已存在同名商品",
-              syncedAt,
-            );
-          } else {
-            database.markMaterialSynced(
-              candidate.id,
-              materialId,
-              candidate.sync_content_hash,
-              syncedAt,
-            );
-          }
-          materialByGame.set(candidate.id, {
-            materialId,
-            action: result.action,
-          });
-        }
-
-        if (materialByGame.size !== batchCandidates.length) {
-          throw new Error("闲鱼素材接口未返回全部商品结果");
-        }
-
-        const actionCounts = countActions(materialResults);
-        totals.material_created += actionCounts.created;
-        totals.material_updated += actionCounts.updated;
-        totals.material_unchanged += actionCounts.unchanged;
-        totals.material_skipped += actionCounts.skipped;
-
-        const publishCandidates = batchCandidates.filter((candidate) => {
-          const material = materialByGame.get(candidate.id);
-          return (
-            candidate.publication_status !== "success" &&
-            material.action !== "skipped"
-          );
-        });
-        totals.publish_submitted += publishCandidates.length;
-
-        if (publishCandidates.length === 0) {
-          if (
-            currentCandidate.publication_status === "success" &&
-            currentCandidate.publication_item_id &&
-            currentCandidate.publication_card_bind_status !== "success"
-          ) {
-            await bindDeliveryCard(
-              currentCandidate,
-              currentCandidate.publication_item_id,
-            );
-          }
-          processedCount += 1;
-          database.updateSyncRun(runId, {
-            ...totals,
-            processed_count: processedCount,
-            current_game_id: null,
-            current_title: null,
-          });
-          reportProgress({
-            total: candidates.length,
-            completed: processedCount,
-            phase: "processing",
-          });
-          continue;
-        }
-
-        await control?.checkpoint();
-        reportProgress({
-          total: candidates.length,
-          currentGameId: currentCandidate.id,
-          currentTitle: currentCandidate.title,
+          currentGameId: firstCandidate.id,
+          currentTitle: firstCandidate.title,
           phase: "publishing",
         });
+
         const requestId = randomUUID();
-        const materialIds = publishCandidates.map(
-          (candidate) => materialByGame.get(candidate.id).materialId,
-        );
+        const materialIds = entries.map((entry) => entry.materialId);
         let batch;
         let recoveredStatus = null;
         let submissionUncertain = false;
@@ -378,11 +312,11 @@ export class XianyuSyncService {
         const batchId = batch.batch_id ?? requestId;
         latestBatchId = batchId;
         const submittedAt = nowIso();
-        for (const candidate of publishCandidates) {
+        for (const entry of entries) {
           database.markPublicationSubmitted(
-            candidate.id,
+            entry.candidate.id,
             accountId,
-            materialByGame.get(candidate.id).materialId,
+            entry.materialId,
             batchId,
             submittedAt,
           );
@@ -395,14 +329,14 @@ export class XianyuSyncService {
         submittedPublication = {
           accountId,
           batchId,
-          candidates: publishCandidates,
+          candidates: entries.map((entry) => entry.candidate),
         };
 
         if (submissionUncertain) {
           const unknownAt = nowIso();
-          for (const candidate of publishCandidates) {
+          for (const entry of entries) {
             database.markPublicationResult({
-              gameId: candidate.id,
+              gameId: entry.candidate.id,
               accountId,
               status: "unknown",
               errorMessage: "发布请求结果未知，需人工确认后再处理",
@@ -430,6 +364,7 @@ export class XianyuSyncService {
         const deadline = Date.now() + this.config.syncBatchTimeoutMs;
         let status = recoveredStatus;
         while (Date.now() < deadline) {
+          await control?.checkpoint();
           if (!status) {
             status = await this.client.getBatchStatus(batchId);
           }
@@ -440,9 +375,9 @@ export class XianyuSyncService {
 
         if (!status?.done && !status?.finished) {
           const unknownAt = nowIso();
-          for (const candidate of publishCandidates) {
+          for (const entry of entries) {
             database.markPublicationResult({
-              gameId: candidate.id,
+              gameId: entry.candidate.id,
               accountId,
               status: "unknown",
               errorMessage: "批量发布超过等待时限，需人工确认后再处理",
@@ -467,25 +402,22 @@ export class XianyuSyncService {
           };
         }
 
-        const gameByMaterial = new Map(
-          publishCandidates.map((candidate) => [
-            materialByGame.get(candidate.id).materialId,
-            candidate,
-          ]),
+        const entryByMaterial = new Map(
+          entries.map((entry) => [entry.materialId, entry]),
         );
         let batchSuccess = 0;
         let batchFailed = 0;
         const successfulItems = [];
         const completedAt = nowIso();
         for (const item of status.items ?? []) {
-          const candidate = gameByMaterial.get(Number(item.material_id));
-          if (!candidate || item.account_id !== accountId) continue;
+          const entry = entryByMaterial.get(Number(item.material_id));
+          if (!entry || item.account_id !== accountId) continue;
           const itemStatus =
             item.status === "success" ? "success" : "failed";
           if (itemStatus === "success") batchSuccess += 1;
           else batchFailed += 1;
           database.markPublicationResult({
-            gameId: candidate.id,
+            gameId: entry.candidate.id,
             accountId,
             status: itemStatus,
             itemId: item.item_id,
@@ -495,26 +427,25 @@ export class XianyuSyncService {
           });
           if (itemStatus === "success" && item.item_id) {
             successfulItems.push({
-              candidate,
+              candidate: entry.candidate,
               itemId: item.item_id,
             });
           }
         }
 
         const missingResults =
-          publishCandidates.length - batchSuccess - batchFailed;
+          entries.length - batchSuccess - batchFailed;
         if (missingResults > 0) {
           batchFailed += missingResults;
-          for (const candidate of publishCandidates) {
+          for (const entry of entries) {
             const hasResult = (status.items ?? []).some(
               (item) =>
-                Number(item.material_id) ===
-                  materialByGame.get(candidate.id).materialId &&
+                Number(item.material_id) === entry.materialId &&
                 item.account_id === accountId,
             );
             if (!hasResult) {
               database.markPublicationResult({
-                gameId: candidate.id,
+                gameId: entry.candidate.id,
                 accountId,
                 status: "failed",
                 errorMessage: "批次已结束但未返回该商品结果",
@@ -526,14 +457,14 @@ export class XianyuSyncService {
 
         totals.publish_success += batchSuccess;
         totals.publish_failed += batchFailed;
+        submittedPublication = null;
         for (const successfulItem of successfulItems) {
           await bindDeliveryCard(
             successfulItem.candidate,
             successfulItem.itemId,
           );
         }
-        submittedPublication = null;
-        processedCount += 1;
+        processedCount += entries.length;
         database.updateSyncRun(runId, {
           ...totals,
           batch_id: batchId,
@@ -546,10 +477,124 @@ export class XianyuSyncService {
           completed: processedCount,
           phase: "processing",
         });
+        return null;
+      };
+
+      const publishQueue = [];
+      for (
+        let candidateIndex = 0;
+        candidateIndex < candidates.length;
+        candidateIndex += materialSyncConcurrency
+      ) {
+        await control?.checkpoint();
+        const materialCandidates = candidates.slice(
+          candidateIndex,
+          candidateIndex + materialSyncConcurrency,
+        );
+        const materialOutcomes = await Promise.all(
+          materialCandidates.map(syncMaterial),
+        );
+
+        for (const outcome of materialOutcomes) {
+          const { candidate, result, error } = outcome;
+          if (error) {
+            database.markMaterialFailed(
+              candidate.id,
+              error.message,
+              nowIso(),
+            );
+            totals.material_failed += 1;
+            processedCount += 1;
+            continue;
+          }
+
+          const materialId = Number(result.material_id);
+          if (!Number.isInteger(materialId) || materialId <= 0) {
+            database.markMaterialFailed(
+              candidate.id,
+              "闲鱼素材接口未返回有效 material_id",
+              nowIso(),
+            );
+            totals.material_failed += 1;
+            processedCount += 1;
+            continue;
+          }
+
+          const syncedAt = nowIso();
+          if (result.action === "skipped") {
+            database.markMaterialSkipped(
+              candidate.id,
+              materialId,
+              candidate.sync_content_hash,
+              result.reason ?? "闲鱼素材库已存在同名商品",
+              syncedAt,
+            );
+          } else {
+            database.markMaterialSynced(
+              candidate.id,
+              materialId,
+              candidate.sync_content_hash,
+              syncedAt,
+            );
+          }
+          const actionCounts = countActions([result]);
+          totals.material_created += actionCounts.created;
+          totals.material_updated += actionCounts.updated;
+          totals.material_unchanged += actionCounts.unchanged;
+          totals.material_skipped += actionCounts.skipped;
+
+          if (
+            candidate.publication_status === "success" ||
+            result.action === "skipped"
+          ) {
+            if (
+              candidate.publication_status === "success" &&
+              candidate.publication_item_id &&
+              candidate.publication_card_bind_status !== "success"
+            ) {
+              await bindDeliveryCard(
+                candidate,
+                candidate.publication_item_id,
+              );
+            }
+            processedCount += 1;
+            continue;
+          }
+
+          publishQueue.push({ candidate, materialId });
+        }
+
+        database.updateSyncRun(runId, {
+          ...totals,
+          processed_count: processedCount,
+          current_game_id: null,
+          current_title: null,
+        });
+        reportProgress({
+          total: candidates.length,
+          completed: processedCount,
+          phase: "processing",
+        });
+
+        while (publishQueue.length >= publishBatchSize) {
+          const publicationResult = await publishEntries(
+            publishQueue.splice(0, publishBatchSize),
+          );
+          if (publicationResult) return publicationResult;
+        }
+      }
+
+      if (publishQueue.length > 0) {
+        const publicationResult = await publishEntries(
+          publishQueue.splice(0, publishQueue.length),
+        );
+        if (publicationResult) return publicationResult;
       }
 
       const finalStatus =
-        totals.publish_failed > 0 || totals.card_bind_failed > 0
+        totals.material_failed > 0 ||
+        totals.publish_failed > 0 ||
+        totals.card_bind_failed > 0
           ? "partial"
           : "success";
       const finishedAt = nowIso();
@@ -561,8 +606,13 @@ export class XianyuSyncService {
         current_game_id: null,
         current_title: null,
         error_summary:
-          totals.publish_failed > 0 || totals.card_bind_failed > 0
+          totals.material_failed > 0 ||
+          totals.publish_failed > 0 ||
+          totals.card_bind_failed > 0
             ? [
+                totals.material_failed > 0
+                  ? `${totals.material_failed} 个素材同步失败`
+                  : null,
                 totals.publish_failed > 0
                   ? `${totals.publish_failed} 个商品发布失败`
                   : null,
@@ -586,6 +636,7 @@ export class XianyuSyncService {
         mode,
         selectedCount: candidates.length,
         materialSkipped: totals.material_skipped,
+        materialFailed: totals.material_failed,
         publishSubmitted: totals.publish_submitted,
         publishSuccess: totals.publish_success,
         publishFailed: totals.publish_failed,

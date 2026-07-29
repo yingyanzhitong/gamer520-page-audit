@@ -382,7 +382,7 @@ function renderXianyuDashboard(payload) {
   }
   elements.configuredAccount.textContent = state.accountId || "未配置";
   elements.syncNextRun.textContent = sync.enabled
-    ? `下次自动同步 ${formatDate(sync.nextRun, true)} · ${syncModeLabels[sync.mode] ?? "全部商品"} · 逐个处理`
+    ? `下次自动同步 ${formatDate(sync.nextRun, true)} · ${syncModeLabels[sync.mode] ?? "全部商品"} · ${sync.materialConcurrency ?? 4} 路素材 · ${sync.batchSize ?? 20} 件/批`
     : "自动同步未启用";
   const syncDisabled =
     !state.accountId ||
@@ -609,7 +609,7 @@ function renderSyncRun(run) {
     ],
     [
       "素材",
-      `新增 ${run.materialCreated} · 更新 ${run.materialUpdated} · 跳过 ${run.materialSkipped}`,
+      `新增 ${run.materialCreated} · 更新 ${run.materialUpdated} · 跳过 ${run.materialSkipped} · 失败 ${run.materialFailed ?? 0}`,
     ],
     [
       "发布",

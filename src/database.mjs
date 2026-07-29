@@ -228,6 +228,7 @@ export class CrawlerDatabase {
         material_updated INTEGER NOT NULL DEFAULT 0,
         material_unchanged INTEGER NOT NULL DEFAULT 0,
         material_skipped INTEGER NOT NULL DEFAULT 0,
+        material_failed INTEGER NOT NULL DEFAULT 0,
         publish_submitted INTEGER NOT NULL DEFAULT 0,
         publish_success INTEGER NOT NULL DEFAULT 0,
         publish_failed INTEGER NOT NULL DEFAULT 0,
@@ -248,7 +249,7 @@ export class CrawlerDatabase {
     this.#backfillContentHashes();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 7;");
+    this.database.exec("PRAGMA user_version = 8;");
   }
 
   #migrateSchema() {
@@ -283,6 +284,7 @@ export class CrawlerDatabase {
     );
     const syncRunAdditions = [
       ["material_skipped", "INTEGER NOT NULL DEFAULT 0"],
+      ["material_failed", "INTEGER NOT NULL DEFAULT 0"],
       ["batch_count", "INTEGER NOT NULL DEFAULT 0"],
       ["sync_mode", "TEXT NOT NULL DEFAULT 'all'"],
       ["processed_count", "INTEGER NOT NULL DEFAULT 0"],
@@ -1052,6 +1054,7 @@ export class CrawlerDatabase {
       "material_updated",
       "material_unchanged",
       "material_skipped",
+      "material_failed",
       "publish_submitted",
       "publish_success",
       "publish_failed",

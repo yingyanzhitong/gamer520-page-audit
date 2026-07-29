@@ -97,6 +97,7 @@ function mapSyncRun(row) {
     materialUpdated: row.material_updated,
     materialUnchanged: row.material_unchanged,
     materialSkipped: row.material_skipped ?? 0,
+    materialFailed: row.material_failed ?? 0,
     publishSubmitted: row.publish_submitted,
     publishSuccess: row.publish_success,
     publishFailed: row.publish_failed,

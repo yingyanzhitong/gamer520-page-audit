@@ -133,6 +133,38 @@ class FakeXianyuClient {
   }
 }
 
+class TrackingXianyuClient extends FakeXianyuClient {
+  constructor() {
+    super();
+    this.activeUpserts = 0;
+    this.maxActiveUpserts = 0;
+  }
+
+  async upsertMaterials(items) {
+    this.activeUpserts += 1;
+    this.maxActiveUpserts = Math.max(
+      this.maxActiveUpserts,
+      this.activeUpserts,
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return await super.upsertMaterials(items);
+    } finally {
+      this.activeUpserts -= 1;
+    }
+  }
+}
+
+class MaterialFailureClient extends TrackingXianyuClient {
+  async upsertMaterials(items) {
+    if (items[0]?.external_id === "3") {
+      this.upsertCalls.push(items);
+      throw new Error("测试素材同步失败");
+    }
+    return super.upsertMaterials(items);
+  }
+}
+
 class FlakyCardClient extends FakeXianyuClient {
   constructor() {
     super();
@@ -159,7 +191,7 @@ function config(databasePath) {
   };
 }
 
-test("全量同步严格逐商品处理并报告进度", async () => {
+test("素材最多 4 个并行并按 20 件批量发布", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-limit-test-"),
   );
@@ -203,7 +235,7 @@ test("全量同步严格逐商品处理并报告进度", async () => {
     database.close();
   }
 
-  const client = new FakeXianyuClient();
+  const client = new TrackingXianyuClient();
   const service = new XianyuSyncService(config(databasePath), client);
   const progressEvents = [];
   try {
@@ -212,15 +244,17 @@ test("全量同步严格逐商品处理并报告进度", async () => {
       onProgress: (progress) => progressEvents.push(progress),
     });
     assert.equal(sync.selectedCount, 21);
-    assert.equal(sync.batchCount, 21);
+    assert.equal(sync.batchCount, 2);
     assert.equal(client.upsertCalls.length, 21);
-    assert.equal(client.publishCalls.length, 21);
+    assert.equal(client.publishCalls.length, 2);
     assert.equal(client.cardBindCalls.length, 21);
+    assert.equal(client.maxActiveUpserts, 4);
     assert.ok(client.upsertCalls.every((items) => items.length === 1));
-    assert.ok(
-      client.publishCalls.every(
-        (payload) => payload.materialIds.length === 1,
+    assert.deepEqual(
+      client.publishCalls.map(
+        (payload) => payload.materialIds.length,
       ),
+      [20, 1],
     );
     assert.ok(
       client.cardBindCalls.every(
@@ -259,7 +293,10 @@ test("全量同步严格逐商品处理并报告进度", async () => {
          current_game_id,
          current_title,
          card_bound,
-         card_bind_failed
+         card_bind_failed,
+         material_failed,
+         batch_count,
+         requested_limit
        FROM xianyu_sync_runs
        ORDER BY id DESC
        LIMIT 1`,
@@ -271,6 +308,63 @@ test("全量同步严格逐商品处理并报告进度", async () => {
     assert.equal(storedRun.current_title, null);
     assert.equal(storedRun.card_bound, 21);
     assert.equal(storedRun.card_bind_failed, 0);
+    assert.equal(storedRun.material_failed, 0);
+    assert.equal(storedRun.batch_count, 2);
+    assert.equal(storedRun.requested_limit, 20);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("单个素材失败不会阻止其他商品进入尾批发布", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-material-failure-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-07-28T00:00:00.000Z";
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    for (let id = 1; id <= 5; id += 1) {
+      const discovered = game(id);
+      database.upsertDiscoveredGames([discovered], timestamp);
+      database.saveGameSuccess(
+        discovered,
+        result(id),
+        timestamp,
+      );
+    }
+    database.setXianyuAccountId("account-a", timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new MaterialFailureClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const sync = await service.run({ trigger: "test" });
+    assert.equal(sync.status, "partial");
+    assert.equal(sync.materialFailed, 1);
+    assert.equal(sync.publishSuccess, 4);
+    assert.equal(sync.batchCount, 1);
+    assert.equal(client.publishCalls.length, 1);
+    assert.equal(client.publishCalls[0].materialIds.length, 4);
+
+    const checkedDatabase = new CrawlerDatabase(databasePath);
+    const storedRun = checkedDatabase.queryOne(
+      `SELECT processed_count, material_failed, publish_success
+       FROM xianyu_sync_runs
+       ORDER BY id DESC
+       LIMIT 1`,
+    );
+    const material = checkedDatabase.queryOne(
+      "SELECT status, last_error FROM xianyu_material_sync WHERE game_id = 3",
+    );
+    checkedDatabase.close();
+    assert.equal(storedRun.processed_count, 5);
+    assert.equal(storedRun.material_failed, 1);
+    assert.equal(storedRun.publish_success, 4);
+    assert.equal(material.status, "failed");
+    assert.match(material.last_error, /测试素材同步失败/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

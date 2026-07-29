@@ -4,7 +4,11 @@ import { loadConfig } from "./config.mjs";
 import { runCrawl } from "./crawler.mjs";
 import { CrawlerDatabase } from "./database.mjs";
 import { startDashboardServer } from "./dashboard-server.mjs";
-import { XianyuSyncService } from "./sync-service.mjs";
+import {
+  materialSyncConcurrency,
+  publishBatchSize,
+  XianyuSyncService,
+} from "./sync-service.mjs";
 import { TaskControl } from "./task-control.mjs";
 import { nowIso, serializeError } from "./utils.mjs";
 
@@ -325,7 +329,8 @@ function scheduleRuntime() {
       cronSchedule: schedulerSettings.syncCronSchedule,
       cronTimezone: schedulerSettings.cronTimezone,
       nextRun: syncJob?.nextRun()?.toISOString() ?? null,
-      batchSize: 1,
+      materialConcurrency: materialSyncConcurrency,
+      batchSize: publishBatchSize,
       mode: schedulerSettings.syncMode,
       progress: syncProgress,
     },
