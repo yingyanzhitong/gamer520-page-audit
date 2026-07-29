@@ -345,6 +345,27 @@ test("自定义模板用于素材、封面和卡券标题，修改后不重复�
     assert.equal(updated.publishSubmitted, 0);
     assert.equal(client.publishCalls.length, 1);
     assert.equal(client.upsertCalls.at(-1)[0].title, "秒发 游戏 88");
+    const verifiedDatabase = new CrawlerDatabase(databasePath);
+    try {
+      assert.equal(
+        verifiedDatabase.queryOne(
+          "SELECT status FROM xianyu_publications WHERE game_id = ? AND account_id = ?",
+          88,
+          "account-a",
+        ).status,
+        "success",
+      );
+      assert.equal(
+        verifiedDatabase.listSyncCandidates(
+          "account-a",
+          20,
+          "updated",
+        ).length,
+        0,
+      );
+    } finally {
+      verifiedDatabase.close();
+    }
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

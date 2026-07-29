@@ -10,8 +10,8 @@
     >
     <title>G520 采集观测台</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css?v=1.7.0">
-    <script type="module" src="/app.js?v=1.7.0"></script>
+    <link rel="stylesheet" href="/styles.css?v=1.7.3">
+    <script type="module" src="/app.js?v=1.7.3"></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -530,9 +530,24 @@
             >
           </label>
           <label class="filter-field">
+            <span>闲鱼状态</span>
+            <select id="xianyu-status-filter">
+              <option value="all">全部状态</option>
+              <option value="published">已发布</option>
+              <option value="pending">待同步</option>
+              <option value="synced">素材已同步</option>
+              <option value="publishing">发布中</option>
+              <option value="publish_failed">发布失败</option>
+              <option value="material_failed">素材失败</option>
+              <option value="unknown">结果待确认</option>
+              <option value="skipped">同名已跳过</option>
+            </select>
+          </label>
+          <label class="filter-field">
             <span>采集状态</span>
             <select id="status-filter">
               <option value="all">全部状态</option>
+              <option value="updated">已更新</option>
               <option value="success">成功</option>
               <option value="failed">失败</option>
               <option value="running">采集中</option>

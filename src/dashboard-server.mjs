@@ -362,11 +362,50 @@ function listGames(database, requestUrl) {
     "running",
     "success",
     "failed",
+    "updated",
   ]).has(requestedStatus)
     ? requestedStatus
     : "all";
+  const requestedXianyuStatus =
+    requestUrl.searchParams.get("xianyuStatus") ?? "all";
+  const xianyuStatus = new Set([
+    "published",
+    "publishing",
+    "publish_failed",
+    "unknown",
+    "synced",
+    "material_failed",
+    "skipped",
+    "pending",
+  ]).has(requestedXianyuStatus)
+    ? requestedXianyuStatus
+    : "all";
   const conditions = [];
   const parameters = [];
+  const xianyuStatusExpression = `
+    CASE
+      WHEN publication.status = 'success' THEN 'published'
+      WHEN publication.status = 'publishing' THEN 'publishing'
+      WHEN publication.status = 'failed' THEN 'publish_failed'
+      WHEN publication.status = 'unknown' THEN 'unknown'
+      WHEN material.status = 'synced' THEN 'synced'
+      WHEN material.status = 'failed' THEN 'material_failed'
+      WHEN material.status = 'skipped' THEN 'skipped'
+      ELSE 'pending'
+    END
+  `;
+  const joinedTables = `
+    FROM games
+    LEFT JOIN xianyu_sync_settings AS settings
+      ON settings.id = 1
+    LEFT JOIN xianyu_material_sync AS material
+      ON material.game_id = games.id
+    LEFT JOIN xianyu_publications AS publication
+      ON publication.game_id = games.id
+     AND publication.account_id = (
+       SELECT account_id FROM xianyu_sync_settings WHERE id = 1
+     )
+  `;
 
   if (query) {
     conditions.push(
@@ -376,14 +415,26 @@ function listGames(database, requestUrl) {
     parameters.push(pattern, pattern, pattern);
   }
   if (status !== "all") {
-    conditions.push("games.scrape_status = ?");
+    conditions.push(
+      status === "updated"
+        ? "games.last_change_type = ?"
+        : "games.scrape_status = ?",
+    );
     parameters.push(status);
+  }
+  if (xianyuStatus !== "all") {
+    conditions.push(`(${xianyuStatusExpression}) = ?`);
+    parameters.push(xianyuStatus);
   }
 
   const whereClause =
     conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const total = database
-    .prepare(`SELECT COUNT(*) AS count FROM games ${whereClause}`)
+    .prepare(`
+      SELECT COUNT(DISTINCT games.id) AS count
+      ${joinedTables}
+      ${whereClause}
+    `)
     .get(...parameters).count;
   const rows = database
     .prepare(`
@@ -399,16 +450,7 @@ function listGames(database, requestUrl) {
         publication.status AS publication_status,
         publication.item_id AS publication_item_id,
         publication.item_url AS publication_item_url
-      FROM games
-      LEFT JOIN xianyu_sync_settings AS settings
-        ON settings.id = 1
-      LEFT JOIN xianyu_material_sync AS material
-        ON material.game_id = games.id
-      LEFT JOIN xianyu_publications AS publication
-        ON publication.game_id = games.id
-       AND publication.account_id = (
-         SELECT account_id FROM xianyu_sync_settings WHERE id = 1
-       )
+      ${joinedTables}
       ${whereClause}
       ORDER BY
         CASE WHEN hot_rank IS NULL THEN 1 ELSE 0 END,

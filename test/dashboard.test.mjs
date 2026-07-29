@@ -106,6 +106,34 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     itemUrl: "https://www.goofish.com/item?id=1067769058126",
     updatedAt: timestamp,
   });
+  database.setXianyuAccountId("account-a", timestamp);
+  database.saveGameSuccess(
+    game,
+    {
+      page: {
+        url: game.sourceUrl,
+        title: game.title,
+        image: game.imageUrl,
+        gameDescription: "更新后的测试游戏简介",
+      },
+      resource: {
+        resourceCode: "A310235",
+        detailPageUrl: "https://gamers520.com/40265.html",
+        archivePassword: "laoquzhang.com",
+        downloads: [
+          {
+            provider: "百度网盘",
+            url: "https://pan.example/download?pwd=e15a",
+            password: "e15a",
+            extractionCode: "e15a",
+            qrImageUrl: null,
+            qrDecodeMethod: "test",
+          },
+        ],
+      },
+    },
+    "2026-07-28T00:01:30.000Z",
+  );
   const syncRunId = database.startSyncRun(
     "test",
     "account-a",
@@ -257,6 +285,21 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(games.total, 1);
     assert.equal(games.items[0].title, "黄昏远征军");
     assert.equal(games.items[0].xianyuItemId, "1067769058126");
+
+    const updatedPublishedGames = await fetch(
+      `${baseUrl}/api/games?status=updated&xianyuStatus=published`,
+    ).then((response) => response.json());
+    assert.equal(updatedPublishedGames.total, 1);
+    assert.equal(updatedPublishedGames.items[0].lastChangeType, "updated");
+    assert.equal(
+      updatedPublishedGames.items[0].publicationStatus,
+      "success",
+    );
+
+    const pendingGames = await fetch(
+      `${baseUrl}/api/games?xianyuStatus=pending`,
+    ).then((response) => response.json());
+    assert.equal(pendingGames.total, 0);
 
     const gamesByItem = await fetch(
       `${baseUrl}/api/games?query=1067769058126`,
@@ -585,6 +628,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
 
     const page = await fetch(baseUrl).then((response) => response.text());
     assert.match(page, /G520 采集观测台/);
+    assert.match(page, /id="xianyu-status-filter"/);
+    assert.match(page, /<option value="updated">已更新<\/option>/);
 
     const writeResponse = await fetch(`${baseUrl}/api/games`, {
       method: "POST",

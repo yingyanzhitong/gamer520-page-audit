@@ -46,6 +46,7 @@ const state = {
   gamePageCount: 1,
   gameQuery: "",
   gameStatus: "all",
+  gameXianyuStatus: "all",
   loading: false,
   accountId: null,
   accounts: [],
@@ -140,6 +141,7 @@ const elements = {
   resumeSync: document.querySelector("#resume-sync"),
   serviceStatus: document.querySelector("#service-status"),
   statusFilter: document.querySelector("#status-filter"),
+  xianyuStatusFilter: document.querySelector("#xianyu-status-filter"),
   statusPulse: document.querySelector("#status-pulse"),
   syncNextRun: document.querySelector("#sync-next-run"),
   syncCron: document.querySelector("#sync-cron"),
@@ -1304,6 +1306,7 @@ async function loadGames() {
     pageSize: "20",
     query: state.gameQuery,
     status: state.gameStatus,
+    xianyuStatus: state.gameXianyuStatus,
   });
   const payload = await fetchJson(`/api/games?${parameters}`);
   renderGames(payload);
@@ -1345,6 +1348,12 @@ elements.gameSearch.addEventListener("input", () => {
 
 elements.statusFilter.addEventListener("change", () => {
   state.gameStatus = elements.statusFilter.value;
+  state.gamePage = 1;
+  void loadGames().catch((error) => showToast(error.message));
+});
+
+elements.xianyuStatusFilter.addEventListener("change", () => {
+  state.gameXianyuStatus = elements.xianyuStatusFilter.value;
   state.gamePage = 1;
   void loadGames().catch((error) => showToast(error.message));
 });
