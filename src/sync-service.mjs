@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 import { CrawlerDatabase } from "./database.mjs";
 import { nowIso, serializeError } from "./utils.mjs";
 import { XianyuClient } from "./xianyu-client.mjs";
+import {
+  buildListingDescription,
+  renderXianyuListing,
+} from "./xianyu-templates.mjs";
+
+export { buildListingDescription };
 
 const syncModes = new Set(["all", "pending", "updated"]);
 const deliveryCardId = 6;
@@ -22,61 +28,6 @@ function countActions(items) {
     if (item.action in counts) counts[item.action] += 1;
   }
   return counts;
-}
-
-function driveLabel(provider) {
-  const normalized = String(provider ?? "").trim();
-  if (!normalized) return null;
-  const knownProviders = [
-    ["百度", "百度"],
-    ["夸克", "夸克"],
-    ["迅雷", "迅雷"],
-    ["阿里", "阿里"],
-    ["天翼", "天翼"],
-    ["123", "123"],
-    ["OneDrive", "OneDrive"],
-    ["Google", "Google Drive"],
-  ];
-  const known = knownProviders.find(([keyword]) =>
-    normalized.toLowerCase().includes(keyword.toLowerCase()),
-  );
-  if (known) return known[1];
-  return normalized.replace(/(?:云盘|网盘)$/u, "") || normalized;
-}
-
-export function buildListingDescription(game) {
-  const providerOrder = new Map(
-    [
-      "百度",
-      "夸克",
-      "迅雷",
-      "阿里",
-      "天翼",
-      "123",
-      "OneDrive",
-      "Google Drive",
-    ].map((provider, index) => [provider, index]),
-  );
-  const providers = [
-    ...new Set(
-      (game.downloads ?? [])
-        .map((download) => driveLabel(download.provider))
-        .filter(Boolean),
-    ),
-  ].sort(
-    (left, right) =>
-      (providerOrder.get(left) ?? 999) -
-        (providerOrder.get(right) ?? 999) ||
-      left.localeCompare(right, "zh-CN"),
-  );
-  return [
-    String(game.description ?? "").trim(),
-    `支持网盘：${providers.join("/") || "以商品详情为准"}`,
-    "虚拟商品24小时自动发货",
-    "喜欢直接拍，有问题随时聊",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
 }
 
 export class XianyuSyncService {
@@ -155,6 +106,20 @@ export class XianyuSyncService {
     let submittedPublication = null;
     let latestBatchId = null;
     let processedCount = 0;
+    const listingCache = new Map();
+    const listingFor = (candidate) => {
+      if (!listingCache.has(candidate.id)) {
+        listingCache.set(
+          candidate.id,
+          renderXianyuListing(candidate, {
+            titleTemplate: settings.title_template,
+            descriptionTemplate: settings.description_template,
+            imageTemplate: settings.image_template,
+          }),
+        );
+      }
+      return listingCache.get(candidate.id);
+    };
     const reportProgress = (progress) => {
       try {
         onProgress({
@@ -184,7 +149,7 @@ export class XianyuSyncService {
         const result = await this.client.bindCards({
           cardIds: [deliveryCardId],
           itemIds: [String(itemId)],
-          itemTitle: `【秒发】${candidate.title}`.slice(0, 200),
+          itemTitle: listingFor(candidate).title,
         });
         if (Number(result.fail_count ?? 0) > 0) {
           throw new Error(`卡券关联失败：${result.fail_count} 条未成功`);
@@ -269,22 +234,25 @@ export class XianyuSyncService {
           currentTitle: currentCandidate.title,
           phase: "material",
         });
-        const upsertPayload = batchCandidates.map((game) => ({
-          external_id: String(game.id),
-          content_hash: game.sync_content_hash,
-          title: `【秒发】${game.title}`.slice(0, 200),
-          description: buildListingDescription(game),
-          price: Number(game.effective_price),
-          images: [game.image_url],
-          category: "虚拟商品",
-          delivery_method: "express",
-          postage: 0,
-          condition: "全新",
-          remark: `来源 gamer520，商品ID ${game.id}`,
-        }));
-
+        let upsertPayload;
         let materialResults;
         try {
+          upsertPayload = batchCandidates.map((game) => {
+            const listing = listingFor(game);
+            return {
+              external_id: String(game.id),
+              content_hash: game.sync_content_hash,
+              title: listing.title,
+              description: listing.description,
+              price: Number(game.effective_price),
+              images: [listing.imageUrl],
+              category: "虚拟商品",
+              delivery_method: "express",
+              postage: 0,
+              condition: "全新",
+              remark: `来源 gamer520，商品ID ${game.id}`,
+            };
+          });
           await control?.checkpoint();
           materialResults = await this.client.upsertMaterials(upsertPayload);
         } catch (error) {

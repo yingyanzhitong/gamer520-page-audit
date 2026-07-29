@@ -6,6 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 import { CrawlerDatabase } from "./database.mjs";
+import {
+  DEFAULT_XIANYU_TEMPLATES,
+  validateXianyuTemplates,
+} from "./xianyu-templates.mjs";
 const publicDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../public",
@@ -288,7 +292,13 @@ function dashboardPayload(database, config, runtimeState) {
   const syncSettings =
     database
       .prepare(
-        `SELECT account_id, default_price, updated_at
+        `SELECT
+           account_id,
+           default_price,
+           title_template,
+           description_template,
+           image_template,
+           updated_at
          FROM xianyu_sync_settings
          WHERE id = 1`,
       )
@@ -322,6 +332,15 @@ function dashboardPayload(database, config, runtimeState) {
     xianyu: {
       accountId: syncSettings.account_id,
       defaultPrice: Number(syncSettings.default_price ?? 1),
+      titleTemplate:
+        syncSettings.title_template ??
+        DEFAULT_XIANYU_TEMPLATES.titleTemplate,
+      descriptionTemplate:
+        syncSettings.description_template ??
+        DEFAULT_XIANYU_TEMPLATES.descriptionTemplate,
+      imageTemplate:
+        syncSettings.image_template ??
+        DEFAULT_XIANYU_TEMPLATES.imageTemplate,
       settingsUpdatedAt: syncSettings.updated_at,
       latestSyncRun: latestSyncRun ? mapSyncRun(latestSyncRun) : null,
     },
@@ -694,7 +713,13 @@ export async function startDashboardServer(
         const settings = withDatabase(config.dbPath, (database) =>
           database
             .prepare(
-              `SELECT account_id, default_price, updated_at
+              `SELECT
+                 account_id,
+                 default_price,
+                 title_template,
+                 description_template,
+                 image_template,
+                 updated_at
                FROM xianyu_sync_settings
                WHERE id = 1`,
             )
@@ -703,6 +728,15 @@ export async function startDashboardServer(
         sendJson(response, 200, {
           accountId: settings?.account_id ?? null,
           defaultPrice: Number(settings?.default_price ?? 1),
+          titleTemplate:
+            settings?.title_template ??
+            DEFAULT_XIANYU_TEMPLATES.titleTemplate,
+          descriptionTemplate:
+            settings?.description_template ??
+            DEFAULT_XIANYU_TEMPLATES.descriptionTemplate,
+          imageTemplate:
+            settings?.image_template ??
+            DEFAULT_XIANYU_TEMPLATES.imageTemplate,
           updatedAt: settings?.updated_at ?? null,
           configured: Boolean(settings?.account_id),
           runtime: runtimeState().sync ?? {},
@@ -818,11 +852,23 @@ export async function startDashboardServer(
         }
         const account = await handlers.validateXianyuAccount(accountId);
         const database = new CrawlerDatabase(config.dbPath);
+        let templates;
         try {
+          const current = database.getXianyuSyncSettings();
+          templates = validateXianyuTemplates({
+            titleTemplate:
+              body.title_template ?? current.title_template,
+            descriptionTemplate:
+              body.description_template ??
+              current.description_template,
+            imageTemplate:
+              body.image_template ?? current.image_template,
+          });
           database.setXianyuSettings(
             accountId,
             defaultPrice,
             new Date().toISOString(),
+            templates,
           );
         } finally {
           database.close();
@@ -831,6 +877,7 @@ export async function startDashboardServer(
           success: true,
           accountId,
           defaultPrice,
+          ...templates,
           account,
         });
         return;

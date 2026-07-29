@@ -3,6 +3,11 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
+import {
+  DEFAULT_XIANYU_TEMPLATES,
+  normalizeXianyuTemplates,
+} from "./xianyu-templates.mjs";
+
 function transaction(database, callback) {
   database.exec("BEGIN IMMEDIATE");
   try {
@@ -159,6 +164,9 @@ export class CrawlerDatabase {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         account_id TEXT,
         default_price REAL NOT NULL DEFAULT 1,
+        title_template TEXT,
+        description_template TEXT,
+        image_template TEXT,
         updated_at TEXT NOT NULL
       );
 
@@ -240,7 +248,7 @@ export class CrawlerDatabase {
     this.#backfillContentHashes();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 6;");
+    this.database.exec("PRAGMA user_version = 7;");
   }
 
   #migrateSchema() {
@@ -301,6 +309,18 @@ export class CrawlerDatabase {
       this.database.exec(
         "ALTER TABLE xianyu_sync_settings ADD COLUMN default_price REAL NOT NULL DEFAULT 1",
       );
+    }
+    const xianyuTemplateAdditions = [
+      ["title_template", "TEXT"],
+      ["description_template", "TEXT"],
+      ["image_template", "TEXT"],
+    ];
+    for (const [name, definition] of xianyuTemplateAdditions) {
+      if (!xianyuSettingsColumns.has(name)) {
+        this.database.exec(
+          `ALTER TABLE xianyu_sync_settings ADD COLUMN ${name} ${definition}`,
+        );
+      }
     }
 
     const schedulerColumns = new Set(
@@ -815,38 +835,76 @@ export class CrawlerDatabase {
   }
 
   getXianyuSyncSettings() {
-    return (
+    const row =
       this.database
         .prepare(
-          `SELECT account_id, default_price, updated_at
+          `SELECT
+             account_id,
+             default_price,
+             title_template,
+             description_template,
+             image_template,
+             updated_at
            FROM xianyu_sync_settings
            WHERE id = 1`,
         )
-        .get() ?? {
-          account_id: null,
-          default_price: 1,
-          updated_at: null,
-        }
-    );
+        .get();
+    return {
+      account_id: row?.account_id ?? null,
+      default_price: Number(row?.default_price ?? 1),
+      title_template:
+        row?.title_template ?? DEFAULT_XIANYU_TEMPLATES.titleTemplate,
+      description_template:
+        row?.description_template ??
+        DEFAULT_XIANYU_TEMPLATES.descriptionTemplate,
+      image_template:
+        row?.image_template ?? DEFAULT_XIANYU_TEMPLATES.imageTemplate,
+      updated_at: row?.updated_at ?? null,
+    };
   }
 
-  setXianyuSettings(accountId, defaultPrice, updatedAt) {
+  setXianyuSettings(
+    accountId,
+    defaultPrice,
+    updatedAt,
+    templates = null,
+  ) {
     transaction(this.database, () => {
       const previous = this.getXianyuSyncSettings();
+      const normalizedTemplates = normalizeXianyuTemplates(
+        templates ?? {
+          titleTemplate: previous.title_template,
+          descriptionTemplate: previous.description_template,
+          imageTemplate: previous.image_template,
+        },
+      );
       this.database
         .prepare(`
           INSERT INTO xianyu_sync_settings (
             id,
             account_id,
             default_price,
+            title_template,
+            description_template,
+            image_template,
             updated_at
-          ) VALUES (1, ?, ?, ?)
+          ) VALUES (1, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             account_id = excluded.account_id,
             default_price = excluded.default_price,
+            title_template = excluded.title_template,
+            description_template = excluded.description_template,
+            image_template = excluded.image_template,
             updated_at = excluded.updated_at
         `)
-        .run(accountId, defaultPrice, updatedAt);
+        .run(
+          accountId,
+          defaultPrice,
+          normalizedTemplates.titleTemplate,
+          normalizedTemplates.descriptionTemplate,
+          normalizedTemplates.imageTemplate,
+          updatedAt,
+        );
       if (Number(previous.default_price) !== Number(defaultPrice)) {
         this.database
           .prepare(`
@@ -856,6 +914,20 @@ export class CrawlerDatabase {
             WHERE game_id IN (
               SELECT id FROM games WHERE sale_price IS NULL
             )
+          `)
+          .run(updatedAt);
+      }
+      if (
+        previous.title_template !== normalizedTemplates.titleTemplate ||
+        previous.description_template !==
+          normalizedTemplates.descriptionTemplate ||
+        previous.image_template !== normalizedTemplates.imageTemplate
+      ) {
+        this.database
+          .prepare(`
+            UPDATE xianyu_material_sync
+            SET status = 'pending',
+                updated_at = ?
           `)
           .run(updatedAt);
       }
@@ -1002,6 +1074,9 @@ export class CrawlerDatabase {
   }
 
   listSyncCandidates(accountId, limit, mode = "all") {
+    const settings = this.getXianyuSyncSettings();
+    const requiresSourceImage =
+      settings.image_template.includes("{image_url}");
     const rows = this.database
       .prepare(`
         SELECT
@@ -1034,8 +1109,13 @@ export class CrawlerDatabase {
           AND length(trim(games.title)) > 0
           AND games.description IS NOT NULL
           AND length(trim(games.description)) > 0
-          AND games.image_url IS NOT NULL
-          AND length(trim(games.image_url)) > 0
+          AND (
+            ? = 0
+            OR (
+              games.image_url IS NOT NULL
+              AND length(trim(games.image_url)) > 0
+            )
+          )
           AND EXISTS (
             SELECT 1 FROM downloads WHERE downloads.game_id = games.id
           )
@@ -1046,7 +1126,7 @@ export class CrawlerDatabase {
           CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
           games.hot_rank ASC
       `)
-      .all(accountId);
+      .all(accountId, requiresSourceImage ? 1 : 0);
     const downloadStatement = this.database.prepare(
       "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
     );
@@ -1065,7 +1145,10 @@ export class CrawlerDatabase {
             JSON.stringify({
               contentHash: row.content_hash,
               effectivePrice: Number(row.effective_price).toFixed(2),
-              copyVersion: 2,
+              titleTemplate: settings.title_template,
+              descriptionTemplate: settings.description_template,
+              imageTemplate: settings.image_template,
+              copyVersion: 3,
             }),
           )
           .digest("hex");
@@ -1099,6 +1182,13 @@ export class CrawlerDatabase {
   }
 
   recordMissingImageSyncErrors(updatedAt) {
+    if (
+      !this.getXianyuSyncSettings().image_template.includes(
+        "{image_url}",
+      )
+    ) {
+      return 0;
+    }
     const rows = this.database
       .prepare(`
         SELECT games.id

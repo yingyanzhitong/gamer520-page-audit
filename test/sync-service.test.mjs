@@ -276,6 +276,80 @@ test("全量同步严格逐商品处理并报告进度", async () => {
   }
 });
 
+test("自定义模板用于素材、封面和卡券标题，修改后不重复发布", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-template-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-07-28T00:00:00.000Z";
+  const discovered = game(88);
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    database.upsertDiscoveredGames([discovered], timestamp);
+    database.saveGameSuccess(
+      discovered,
+      result(discovered.id, "自定义简介"),
+      timestamp,
+    );
+    database.setXianyuSettings(
+      "account-a",
+      3.5,
+      timestamp,
+      {
+        titleTemplate: "现货 {title} #{id}",
+        descriptionTemplate:
+          "{description}\n网盘 {cloud_drives}\n售价 {price}",
+        imageTemplate: "https://cdn.example/games/{id}.jpg",
+      },
+    );
+  } finally {
+    database.close();
+  }
+
+  const client = new FakeXianyuClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const first = await service.run({ trigger: "test" });
+    assert.equal(first.publishSuccess, 1);
+    assert.equal(client.upsertCalls[0][0].title, "现货 游戏 88 #88");
+    assert.equal(
+      client.upsertCalls[0][0].description,
+      "自定义简介\n网盘 百度\n售价 3.5",
+    );
+    assert.deepEqual(client.upsertCalls[0][0].images, [
+      "https://cdn.example/games/88.jpg",
+    ]);
+    assert.equal(
+      client.cardBindCalls[0].itemTitle,
+      "现货 游戏 88 #88",
+    );
+
+    const changedDatabase = new CrawlerDatabase(databasePath);
+    changedDatabase.setXianyuSettings(
+      "account-a",
+      3.5,
+      "2026-07-29T00:00:00.000Z",
+      {
+        titleTemplate: "秒发 {title}",
+        descriptionTemplate: "{description}\n{cloud_drives}",
+        imageTemplate: "{image_url}",
+      },
+    );
+    changedDatabase.close();
+
+    const updated = await service.run({
+      trigger: "test",
+      mode: "updated",
+    });
+    assert.equal(updated.selectedCount, 1);
+    assert.equal(updated.publishSubmitted, 0);
+    assert.equal(client.publishCalls.length, 1);
+    assert.equal(client.upsertCalls.at(-1)[0].title, "秒发 游戏 88");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("同名商品只创建和发布一次，其余记录标记跳过", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-name-test-"),
@@ -582,6 +656,29 @@ test("缺少 games.image_url 的商品不会进入同步队列", async () => {
     checkedDatabase.close();
     assert.equal(material.status, "failed");
     assert.match(material.last_error, /image_url 缺失/);
+
+    const configuredDatabase = new CrawlerDatabase(databasePath);
+    configuredDatabase.setXianyuSettings(
+      "account-a",
+      1,
+      "2026-07-29T00:00:00.000Z",
+      {
+        titleTemplate: "【秒发】{title}",
+        descriptionTemplate: "{description}",
+        imageTemplate: "https://cdn.example/static-cover.jpg",
+      },
+    );
+    configuredDatabase.close();
+
+    const configuredSync = await service.run({
+      trigger: "test",
+      mode: "all",
+    });
+    assert.equal(configuredSync.selectedCount, 1);
+    assert.equal(configuredSync.publishSuccess, 1);
+    assert.deepEqual(client.upsertCalls[0][0].images, [
+      "https://cdn.example/static-cover.jpg",
+    ]);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

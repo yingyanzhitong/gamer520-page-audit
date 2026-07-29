@@ -10,8 +10,8 @@
     >
     <title>G520 采集观测台</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css?v=1.6.3">
-    <script type="module" src="/app.js?v=1.6.3"></script>
+    <link rel="stylesheet" href="/styles.css?v=1.7.0">
+    <script type="module" src="/app.js?v=1.7.0"></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -180,7 +180,7 @@
                 刷新账号列表
               </button>
               <button type="submit" class="primary-action" id="save-account">
-                保存发布账号
+                保存同步配置
               </button>
             </div>
           </form>
@@ -240,6 +240,112 @@
             <div class="empty-state">还没有同步任务</div>
           </div>
         </div>
+        <section class="template-workbench" aria-labelledby="template-title">
+          <div class="template-editor">
+            <div class="template-workbench-heading">
+              <div>
+                <span class="section-kicker">LISTING TEMPLATE</span>
+                <h3 id="template-title">商品模板</h3>
+                <p>插入变量后，每件游戏会在同步时替换成自己的数据。</p>
+              </div>
+              <div class="template-heading-actions">
+                <button
+                  type="button"
+                  class="template-reset"
+                  id="reset-templates"
+                >
+                  恢复默认
+                </button>
+                <button
+                  type="submit"
+                  form="xianyu-settings-form"
+                  class="primary-action"
+                  id="save-templates"
+                >
+                  保存模板
+                </button>
+              </div>
+            </div>
+            <div class="template-variable-rail" aria-label="可用模板变量">
+              <span>可用变量</span>
+              <div>
+                <button type="button" data-placeholder="{title}">{title}</button>
+                <button type="button" data-placeholder="{description}">{description}</button>
+                <button type="button" data-placeholder="{image_url}">{image_url}</button>
+                <button type="button" data-placeholder="{cloud_drives}">{cloud_drives}</button>
+                <button type="button" data-placeholder="{price}">{price}</button>
+                <button type="button" data-placeholder="{id}">{id}</button>
+                <button type="button" data-placeholder="{resource_code}">{resource_code}</button>
+                <button type="button" data-placeholder="{archive_password}">{archive_password}</button>
+                <button type="button" data-placeholder="{detail_page_url}">{detail_page_url}</button>
+              </div>
+            </div>
+            <div class="template-fields">
+              <label>
+                <span>
+                  <b>标题模板</b>
+                  <small>最多发布 200 字符</small>
+                </span>
+                <input
+                  type="text"
+                  id="title-template"
+                  value="【秒发】{title}"
+                  maxlength="500"
+                  autocomplete="off"
+                >
+              </label>
+              <label>
+                <span>
+                  <b>简介模板</b>
+                  <small>支持换行</small>
+                </span>
+                <textarea
+                  id="description-template"
+                  rows="8"
+                  maxlength="8000"
+                >{description}
+
+支持网盘：{cloud_drives}
+
+虚拟商品24小时自动发货
+
+喜欢直接拍，有问题随时聊</textarea>
+              </label>
+              <label>
+                <span>
+                  <b>图片模板</b>
+                  <small>渲染后必须是 http/https 地址</small>
+                </span>
+                <input
+                  type="text"
+                  id="image-template"
+                  value="{image_url}"
+                  maxlength="2000"
+                  autocomplete="off"
+                >
+              </label>
+            </div>
+          </div>
+          <aside class="template-preview" aria-label="闲鱼商品实时预览">
+            <div class="template-preview-topline">
+              <span>LIVE PREVIEW</span>
+              <i id="template-preview-status">模板就绪</i>
+            </div>
+            <div class="listing-preview-cover">
+              <img id="template-preview-image" src="/favicon.svg" alt="">
+              <span>¥<b id="template-preview-price">1</b></span>
+            </div>
+            <div class="listing-preview-copy">
+              <small>闲鱼商品预览</small>
+              <h4 id="template-preview-title">【秒发】游戏名称</h4>
+              <p id="template-preview-description"></p>
+            </div>
+            <div class="listing-preview-source">
+              <span>封面结果</span>
+              <code id="template-preview-image-url">/favicon.svg</code>
+            </div>
+          </aside>
+        </section>
         <div class="xianyu-warning">
           <strong>账号切换说明</strong>
           <span>切换后，未在新账号发布过的有效商品会进入新账号队列；旧账号商品不会自动删除。</span>

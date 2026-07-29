@@ -103,7 +103,7 @@ Linux 容器中正式支持 `PLAYWRIGHT_CHANNEL=chromium`。
 - `downloads`：保存一个游戏的全部下载源、链接、提取码、二维码地址及解析方式。
 - `crawl_runs`：保存每轮采集的计数和最终状态。
 - `crawl_errors`：保存列表或详情阶段的错误摘要。
-- `xianyu_sync_settings`：持久化当前唯一发布 `account_id` 和默认售卖价格。
+- `xianyu_sync_settings`：持久化当前唯一发布 `account_id`、默认售卖价格以及标题、简介、图片模板。
 - `scheduler_settings`：持久化采集、同步的 Cron、时区、启用状态和定时同步范围。
 - `xianyu_material_sync`：保存每个游戏的素材 ID、已同步哈希和错误。
 - `xianyu_publications`：按游戏和账号保存发布状态、闲鱼商品 ID、链接及卡券关联结果。
@@ -115,7 +115,9 @@ Linux 容器中正式支持 `PLAYWRIGHT_CHANNEL=chromium`。
 
 ## 闲鱼同步与接口
 
-页面先输入闲鱼用户管理生成的 API Key，加载闲鱼账号并保存一个真实 `account_id`；账号与默认售价会持久化到 SQLite，刷新页面和服务重启后仍然保留。页面提交的 Key 必须与服务端 `XIANYU_API_KEY` 一致，确保手动和定时任务使用同一用户权限。手动同步可选择 `all`（全部有效商品）、`pending`（未在当前账号成功发布或卡券关联待重试）或 `updated`（已发布但素材发生变化），定时同步也会保存其中一种范围。同步严格逐商品串行：每次只同步一个素材、发布一个商品并等待结果，然后把发布成功的闲鱼商品关联到卡券 ID `6`，页面实时展示当前商品与完成进度。新商品会以 `【秒发】原名称`、商品实际售价和数据库 `games.image_url` 唯一封面创建素材并发布；商品介绍在原简介后根据下载源动态追加支持网盘、24 小时自动发货和咨询提示。素材库已有同名商品时跳过；已在当前账号发布过的商品只更新素材，不重新上架。发布成功后，闲鱼商品编号和链接会写回对应 `games` 记录；卡券关联失败只重试关联，不会重复发布商品。
+页面先输入闲鱼用户管理生成的 API Key，加载闲鱼账号并保存一个真实 `account_id`；账号、默认售价和商品模板会持久化到 SQLite，刷新页面和服务重启后仍然保留。页面提交的 Key 必须与服务端 `XIANYU_API_KEY` 一致，确保手动和定时任务使用同一用户权限。模板支持 `{id}`、`{title}`、`{description}`、`{image_url}`、`{cloud_drives}`、`{price}`、`{resource_code}`、`{archive_password}` 和 `{detail_page_url}`；默认标题为 `【秒发】{title}`，默认图片为 `{image_url}`。页面可点击变量插入当前光标并实时预览渲染结果。
+
+手动同步可选择 `all`（全部有效商品）、`pending`（未在当前账号成功发布或卡券关联待重试）或 `updated`（已发布但素材发生变化），定时同步也会保存其中一种范围。同步严格逐商品串行：每次只同步一个素材、发布一个商品并等待结果，然后把发布成功的闲鱼商品关联到卡券 ID `6`，页面实时展示当前商品与完成进度。标题、简介、封面与卡券标题都使用当前模板的渲染结果；图片结果必须是 `http/https` URL。素材库已有同名商品时跳过；模板或游戏内容变化后，已在当前账号发布过的商品只更新素材，不重新上架。发布成功后，闲鱼商品编号和链接会写回对应 `games` 记录；卡券关联失败只重试关联，不会重复发布商品。
 
 ```bash
 # 获取可选账号
@@ -126,7 +128,7 @@ curl -H 'X-API-Key: <闲鱼用户API Key>' \
 curl -X PUT \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: <闲鱼用户API Key>' \
-  -d '{"account_id":"账号ID","default_price":1}' \
+  -d '{"account_id":"账号ID","default_price":1,"title_template":"【秒发】{title}","description_template":"{description}\n\n支持网盘：{cloud_drives}","image_template":"{image_url}"}' \
   http://127.0.0.1:13520/api/settings/xianyu
 
 # 保存采集和同步调度

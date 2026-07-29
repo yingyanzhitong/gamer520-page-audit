@@ -423,6 +423,9 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         body: JSON.stringify({
           account_id: "account-a",
           default_price: 3.5,
+          title_template: "现货 {title}",
+          description_template: "{description}\n{cloud_drives}",
+          image_template: "https://cdn.example/{id}.jpg",
         }),
       },
     );
@@ -430,12 +433,39 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     const savedAccountPayload = await savedAccount.json();
     assert.equal(savedAccountPayload.accountId, "account-a");
     assert.equal(savedAccountPayload.defaultPrice, 3.5);
+    assert.equal(savedAccountPayload.titleTemplate, "现货 {title}");
 
     const settings = await fetch(
       `${baseUrl}/api/settings/xianyu`,
     ).then((response) => response.json());
     assert.equal(settings.accountId, "account-a");
     assert.equal(settings.defaultPrice, 3.5);
+    assert.equal(settings.titleTemplate, "现货 {title}");
+    assert.equal(
+      settings.descriptionTemplate,
+      "{description}\n{cloud_drives}",
+    );
+    assert.equal(
+      settings.imageTemplate,
+      "https://cdn.example/{id}.jpg",
+    );
+
+    const invalidTemplate = await fetch(
+      `${baseUrl}/api/settings/xianyu`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({
+          account_id: "account-a",
+          default_price: 3.5,
+          title_template: "{missing_variable}",
+        }),
+      },
+    );
+    assert.equal(invalidTemplate.status, 422);
 
     const savedGamePrice = await fetch(
       `${baseUrl}/api/games/118842/price`,
@@ -456,6 +486,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       assert.equal(
         persisted.getXianyuSyncSettings().account_id,
         "account-a",
+      );
+      assert.equal(
+        persisted.getXianyuSyncSettings().title_template,
+        "现货 {title}",
       );
       assert.equal(
         persisted.queryOne(

@@ -18,6 +18,29 @@ const longDateFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour12: false,
 });
 
+const defaultXianyuTemplates = {
+  titleTemplate: "【秒发】{title}",
+  descriptionTemplate: [
+    "{description}",
+    "支持网盘：{cloud_drives}",
+    "虚拟商品24小时自动发货",
+    "喜欢直接拍，有问题随时聊",
+  ].join("\n\n"),
+  imageTemplate: "{image_url}",
+};
+
+const xianyuTemplateVariables = new Set([
+  "id",
+  "title",
+  "description",
+  "image_url",
+  "cloud_drives",
+  "price",
+  "resource_code",
+  "archive_password",
+  "detail_page_url",
+]);
+
 const state = {
   gamePage: 1,
   gamePageCount: 1,
@@ -28,6 +51,9 @@ const state = {
   accounts: [],
   defaultPrice: 1,
   eligibleGames: 0,
+  templates: { ...defaultXianyuTemplates },
+  templateDirty: false,
+  templateLoaded: false,
   scheduleDirty: false,
   scheduleLoaded: false,
   schedulerTimezone: "Asia/Shanghai",
@@ -102,6 +128,7 @@ const elements = {
   runSyncUpdated: document.querySelector("#run-sync-updated"),
   runList: document.querySelector("#run-list"),
   saveAccount: document.querySelector("#save-account"),
+  saveTemplates: document.querySelector("#save-templates"),
   saveSchedule: document.querySelector("#save-schedule"),
   scheduleForm: document.querySelector("#schedule-settings-form"),
   scheduleSaveState: document.querySelector("#schedule-save-state"),
@@ -129,6 +156,25 @@ const elements = {
   toast: document.querySelector("#toast"),
   totalDownloads: document.querySelector("#total-downloads"),
   totalGames: document.querySelector("#total-games"),
+  titleTemplate: document.querySelector("#title-template"),
+  descriptionTemplate: document.querySelector("#description-template"),
+  imageTemplate: document.querySelector("#image-template"),
+  resetTemplates: document.querySelector("#reset-templates"),
+  templatePreviewDescription: document.querySelector(
+    "#template-preview-description",
+  ),
+  templatePreviewImage: document.querySelector("#template-preview-image"),
+  templatePreviewImageUrl: document.querySelector(
+    "#template-preview-image-url",
+  ),
+  templatePreviewPrice: document.querySelector("#template-preview-price"),
+  templatePreviewStatus: document.querySelector(
+    "#template-preview-status",
+  ),
+  templatePreviewTitle: document.querySelector("#template-preview-title"),
+  templateVariableButtons: document.querySelectorAll(
+    "[data-placeholder]",
+  ),
   xianyuAccount: document.querySelector("#xianyu-account"),
   xianyuSettingsForm: document.querySelector("#xianyu-settings-form"),
   xianyuSyncState: document.querySelector("#xianyu-sync-state"),
@@ -310,6 +356,25 @@ function renderXianyuDashboard(payload) {
   const latest = payload.xianyu.latestSyncRun;
   state.accountId = payload.xianyu.accountId;
   state.defaultPrice = Number(payload.xianyu.defaultPrice ?? 1);
+  state.templates = {
+    titleTemplate:
+      payload.xianyu.titleTemplate ??
+      defaultXianyuTemplates.titleTemplate,
+    descriptionTemplate:
+      payload.xianyu.descriptionTemplate ??
+      defaultXianyuTemplates.descriptionTemplate,
+    imageTemplate:
+      payload.xianyu.imageTemplate ??
+      defaultXianyuTemplates.imageTemplate,
+  };
+  if (!state.templateDirty) {
+    elements.titleTemplate.value = state.templates.titleTemplate;
+    elements.descriptionTemplate.value =
+      state.templates.descriptionTemplate;
+    elements.imageTemplate.value = state.templates.imageTemplate;
+    state.templateLoaded = true;
+    renderTemplatePreview();
+  }
   if (document.activeElement !== elements.defaultPrice) {
     elements.defaultPrice.value = String(state.defaultPrice);
   }
@@ -348,6 +413,95 @@ function renderXianyuDashboard(payload) {
   }
   renderSyncProgress(sync, latest);
   renderSyncRun(latest);
+}
+
+function currentTemplateValues() {
+  return {
+    titleTemplate: elements.titleTemplate.value,
+    descriptionTemplate: elements.descriptionTemplate.value,
+    imageTemplate: elements.imageTemplate.value,
+  };
+}
+
+function renderPreviewTemplate(template, values) {
+  return template.replace(/\{([^{}]+)\}/gu, (match, variable) =>
+    Object.hasOwn(values, variable) ? values[variable] : match,
+  );
+}
+
+function renderTemplatePreview() {
+  const templates = currentTemplateValues();
+  const previewValues = {
+    id: "118842",
+    title: "赛博朋克 2077 终极版",
+    description: "开放世界动作角色扮演游戏，包含完整本体与扩展内容。",
+    image_url: `${window.location.origin}/favicon.svg`,
+    cloud_drives: "百度/夸克/迅雷",
+    price: String(Number(elements.defaultPrice.value || 1)),
+    resource_code: "G520-118842",
+    archive_password: "gamer520.com",
+    detail_page_url: "https://www.gamer520.com/118842.html",
+  };
+  const unknown = Object.values(templates)
+    .flatMap((template) =>
+      [...template.matchAll(/\{([^{}]+)\}/gu)].map(
+        (match) => match[1],
+      ),
+    )
+    .find((variable) => !xianyuTemplateVariables.has(variable));
+  const title = renderPreviewTemplate(
+    templates.titleTemplate,
+    previewValues,
+  )
+    .trim()
+    .slice(0, 200);
+  const description = renderPreviewTemplate(
+    templates.descriptionTemplate,
+    previewValues,
+  ).trim();
+  const imageUrl = renderPreviewTemplate(
+    templates.imageTemplate,
+    previewValues,
+  ).trim();
+
+  elements.templatePreviewTitle.textContent =
+    title || "标题模板渲染结果为空";
+  elements.templatePreviewDescription.textContent =
+    description || "简介模板渲染结果为空";
+  elements.templatePreviewPrice.textContent = previewValues.price;
+  elements.templatePreviewImageUrl.textContent = imageUrl || "—";
+  elements.templatePreviewStatus.className = "";
+
+  let validImage = false;
+  try {
+    const parsed = new URL(imageUrl);
+    validImage = ["http:", "https:"].includes(parsed.protocol);
+  } catch {
+    validImage = false;
+  }
+  if (validImage) {
+    elements.templatePreviewImage.src = imageUrl;
+  } else {
+    elements.templatePreviewImage.src = "/favicon.svg";
+  }
+
+  if (unknown) {
+    elements.templatePreviewStatus.textContent =
+      `未知变量 {${unknown}}`;
+    elements.templatePreviewStatus.classList.add("is-error");
+  } else if (!title || !description || !validImage) {
+    elements.templatePreviewStatus.textContent = !validImage
+      ? "图片地址无效"
+      : "模板内容不能为空";
+    elements.templatePreviewStatus.classList.add("is-error");
+  } else {
+    elements.templatePreviewStatus.textContent = state.templateDirty
+      ? "有未保存修改"
+      : "模板已保存";
+    if (state.templateDirty) {
+      elements.templatePreviewStatus.classList.add("is-dirty");
+    }
+  }
 }
 
 function renderSyncProgress(sync, latest) {
@@ -984,6 +1138,7 @@ async function saveXianyuAccount(event) {
   const key = requireXianyuApiKey();
   const accountId = elements.xianyuAccount.value;
   const defaultPrice = Number(elements.defaultPrice.value);
+  const templates = currentTemplateValues();
   if (!accountId) throw new Error("请选择一个可用发布账号");
   if (
     !Number.isFinite(defaultPrice) ||
@@ -1002,6 +1157,7 @@ async function saveXianyuAccount(event) {
     return;
   }
   elements.saveAccount.disabled = true;
+  elements.saveTemplates.disabled = true;
   try {
     await fetchJson("/api/settings/xianyu", {
       method: "PUT",
@@ -1009,14 +1165,21 @@ async function saveXianyuAccount(event) {
       body: {
         account_id: accountId,
         default_price: defaultPrice,
+        title_template: templates.titleTemplate,
+        description_template: templates.descriptionTemplate,
+        image_template: templates.imageTemplate,
       },
     });
     state.accountId = accountId;
     state.defaultPrice = defaultPrice;
-    showToast(`发布账号与默认售价已保存：${accountId}`);
+    state.templates = templates;
+    state.templateDirty = false;
+    renderTemplatePreview();
+    showToast(`账号、价格与商品模板已保存：${accountId}`);
     await refreshAll();
   } finally {
     elements.saveAccount.disabled = false;
+    elements.saveTemplates.disabled = false;
   }
 }
 
@@ -1215,6 +1378,58 @@ elements.adminKey.addEventListener("input", () => {
 
 elements.loadAccounts.addEventListener("click", () => {
   void loadXianyuAccounts().catch((error) => showToast(error.message));
+});
+
+let activeTemplateElement = null;
+for (const field of [
+  elements.titleTemplate,
+  elements.descriptionTemplate,
+  elements.imageTemplate,
+]) {
+  field.addEventListener("focus", () => {
+    activeTemplateElement = field;
+  });
+  field.addEventListener("input", () => {
+    state.templateDirty = true;
+    renderTemplatePreview();
+  });
+}
+
+for (const button of elements.templateVariableButtons) {
+  button.addEventListener("click", () => {
+    const placeholder = button.dataset.placeholder;
+    const field = activeTemplateElement ?? elements.titleTemplate;
+    const start = activeTemplateElement
+      ? (field.selectionStart ?? field.value.length)
+      : field.value.length;
+    const end = activeTemplateElement
+      ? (field.selectionEnd ?? start)
+      : start;
+    field.setRangeText(placeholder, start, end, "end");
+    state.templateDirty = true;
+    field.focus();
+    renderTemplatePreview();
+  });
+}
+
+elements.resetTemplates.addEventListener("click", () => {
+  elements.titleTemplate.value =
+    defaultXianyuTemplates.titleTemplate;
+  elements.descriptionTemplate.value =
+    defaultXianyuTemplates.descriptionTemplate;
+  elements.imageTemplate.value =
+    defaultXianyuTemplates.imageTemplate;
+  state.templateDirty = true;
+  renderTemplatePreview();
+  elements.titleTemplate.focus();
+  elements.titleTemplate.setSelectionRange(
+    elements.titleTemplate.value.length,
+    elements.titleTemplate.value.length,
+  );
+});
+
+elements.defaultPrice.addEventListener("input", () => {
+  renderTemplatePreview();
 });
 
 elements.xianyuSettingsForm.addEventListener("submit", (event) => {
