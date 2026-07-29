@@ -1,6 +1,6 @@
 # Gamer520 热度榜采集器
 
-使用 Playwright + Chromium 每天采集 Gamer520 PC PLAY 热度榜前 100 页，并将标题、游戏简介、封面、来源更新时间、下载链接、提取码及解压密码保存到 SQLite。管理界面可查看采集状态、选择闲鱼发布账号、按全部/未发布/已更新范围同步商品、控制任务中断与恢复并查看发布结果。
+使用 Playwright + Chromium 每天采集 Gamer520 PC PLAY 热度榜前 50 页，并将标题、游戏简介、封面、来源更新时间、下载链接、提取码及解压密码保存到 SQLite。管理界面可查看采集状态、选择闲鱼发布账号、按全部/未发布/已更新范围同步商品、控制任务中断与恢复并查看发布结果。
 
 ## Docker Compose 部署
 
@@ -38,7 +38,7 @@ docker compose down
 ## 命令
 
 ```bash
-# 立即完整采集热度前 100 页
+# 立即完整采集热度前 50 页
 npm run crawl:once
 
 # 启动调度器：默认启动即跑，之后每天 03:00 跑
@@ -64,7 +64,7 @@ docker compose exec crawler npm run crawl:once
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `LIST_URL` | `https://www.gamer520.com/pcplay?order=hot` | 固定热度榜入口 |
-| `PAGE_COUNT` | `100` | 列表页数量 |
+| `PAGE_COUNT` | `50` | 列表页数量，最大为 50 |
 | `DETAIL_CONCURRENCY` | `3` | 独立浏览器 context 并发数 |
 | `MAX_RETRIES` | `2` | 单项失败后的最大重试次数 |
 | `NAVIGATION_TIMEOUT_MS` | `30000` | 页面导航超时 |
@@ -111,7 +111,7 @@ Linux 容器中正式支持 `PLAYWRIGHT_CHANNEL=chromium`。
 
 网页游戏详情只展示游戏凭证、下载源和资源详情页，不要求输入 Key。独立的 `/api/download-sources` 对外接口使用 `GAMER520_READ_API_KEY` 对应的只读 Key；调用方通过请求头 `X-API-Key` 传入。账号配置、价格、调度和任务控制则使用闲鱼用户管理生成的 `xyk_...` API Key，该 Key 对应服务器环境变量 `XIANYU_API_KEY`，仅保存在当前浏览器会话且不会由 Gamer520 服务返回。两种 Key 相互独立。
 
-同一 ID 再次采集时，先批量调用 Gamer520 WordPress 接口的 `modified_gmt` 来源更新时间（每次最多 100 个文章 ID）；修改时间不晚于本地最后成功采集时间时直接跳过，不创建文章页。接口临时不可用时才回退读取文章页 `time[datetime]`，并在 `DOMContentLoaded` 后先判定，不再为跳过项等待整页 `load`。来源时间变化后才原子覆盖 `games` 的完整详情并整体替换 `downloads`。失败时不会用空值覆盖旧成功数据，只更新失败状态和错误。移出热度前 100 页的历史记录不会删除。
+同一 ID 再次采集时，先批量调用 Gamer520 WordPress 接口的 `modified_gmt` 来源更新时间（每次最多 100 个文章 ID）；修改时间不晚于本地最后成功采集时间时直接跳过，不创建文章页。接口临时不可用时才回退读取文章页 `time[datetime]`，并在 `DOMContentLoaded` 后先判定，不再为跳过项等待整页 `load`。来源时间变化后才原子覆盖 `games` 的完整详情并整体替换 `downloads`。失败时不会用空值覆盖旧成功数据，只更新失败状态和错误。移出热度前 50 页的历史记录不会删除。
 
 ## 闲鱼同步与接口
 

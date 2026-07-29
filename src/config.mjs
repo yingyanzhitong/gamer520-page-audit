@@ -30,8 +30,8 @@ export function loadConfig(overrides = {}) {
       "https://www.gamer520.com/pcplay?order=hot",
     pageCount: integerValue(
       overrides.pageCount ?? env.PAGE_COUNT,
-      100,
-      { min: 1, max: 564 },
+      50,
+      { min: 1, max: 50 },
     ),
     detailConcurrency: integerValue(
       overrides.detailConcurrency ?? env.DETAIL_CONCURRENCY,

@@ -1,6 +1,6 @@
 services:
   crawler:
-    image: ${IMAGE_NAME:?请在 .env 中设置 Docker Hub 镜像名}:${IMAGE_TAG:-1.7.1}
+    image: ${IMAGE_NAME:?请在 .env 中设置 Docker Hub 镜像名}:${IMAGE_TAG:-1.7.2}
     pull_policy: always
     init: true
     ipc: host
@@ -9,7 +9,7 @@ services:
       - "127.0.0.1:${DASHBOARD_HOST_PORT:-13520}:3000"
     environment:
       LIST_URL: ${LIST_URL:-https://www.gamer520.com/pcplay?order=hot}
-      PAGE_COUNT: ${PAGE_COUNT:-100}
+      PAGE_COUNT: ${PAGE_COUNT:-50}
       DETAIL_CONCURRENCY: ${DETAIL_CONCURRENCY:-3}
       MAX_RETRIES: ${MAX_RETRIES:-2}
       NAVIGATION_TIMEOUT_MS: ${NAVIGATION_TIMEOUT_MS:-30000}

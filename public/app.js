@@ -1240,7 +1240,7 @@ async function runManualCrawl() {
   const key = requireXianyuApiKey();
   if (
     !window.confirm(
-      "确认立即采集热度前 100 页吗？任务会更新有变化的游戏，未变化的详情会跳过。",
+      "确认立即采集热度前 50 页吗？任务会更新有变化的游戏，未变化的详情会跳过。",
     )
   ) {
     return;
