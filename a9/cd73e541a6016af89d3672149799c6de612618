@@ -1,0 +1,51 @@
+deploy/.env.example
+  s_bfd82453425369::t_040900b3eb909c 2
+docker-compose.yml
+  s_bfd82453425369::t_040900b3eb909c 5
+test/sync-service.test.mjs
+  s_bfd82453425369::t_0532bbcf826a82 754-761
+  s_bfd82453425369::t_383769b3b86544 771-772,774,777-819,821-827
+  s_fed1d35ab875e6::t_6a1c41983d6812 773,775-776
+README.md
+  s_bfd82453425369::t_521038384dd251 129
+src/sync-service.mjs
+  s_bfd82453425369::t_383769b3b86544 181-182,208-216,286-294
+src/database.mjs
+  s_bfd82453425369::t_383769b3b86544 1126-1167
+CHANGELOG.md
+  s_bfd82453425369::t_040900b3eb909c 3-4,7-8
+  s_bfd82453425369::t_521038384dd251 5-6
+deploy/docker-compose.yml
+  s_bfd82453425369::t_040900b3eb909c 3
+package.json
+  s_bfd82453425369::t_040900b3eb909c 3
+package-lock.json
+  s_bfd82453425369::t_ad00fc5ae6fa50 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a9cd73e541a6016af89d3672149799c6de612618",
+  "prompts": {},
+  "logical_commit_id": "a9cd73e541a6016af89d3672149799c6de612618",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 142,
+      "total_deletions": 17
+    },
+    "s_fed1d35ab875e6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fa171-919f-7cf2-b2a0-a49c003a5274",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>"
+    }
+  }
+}
