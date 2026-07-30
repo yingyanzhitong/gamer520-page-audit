@@ -1329,7 +1329,17 @@ export class CrawlerDatabase {
               THEN 1
               ELSE 0
             END
-          ) AS publish_completed
+          ) AS publish_completed,
+          SUM(
+            CASE
+              WHEN material.status = 'skipped'
+               AND games.xianyu_item_id IS NULL
+               AND publication.item_id IS NULL
+               AND COALESCE(publication.status, 'pending') != 'success'
+              THEN 1
+              ELSE 0
+            END
+          ) AS publish_skipped
         FROM games
         LEFT JOIN xianyu_material_sync AS material
           ON material.game_id = games.id
@@ -1343,6 +1353,7 @@ export class CrawlerDatabase {
       total: Number(row.total ?? 0),
       materialCompleted: Number(row.material_completed ?? 0),
       publishCompleted: Number(row.publish_completed ?? 0),
+      publishSkipped: Number(row.publish_skipped ?? 0),
     };
   }
 

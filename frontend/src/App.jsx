@@ -1027,6 +1027,7 @@ function TasksPage({ notify }) {
   const [logs, setLogs] = useState([]);
   const [saving, setSaving] = useState(false);
   const [logTask, setLogTask] = useState(null);
+  const [controlAction, setControlAction] = useState(null);
 
   const load = useCallback(async () => {
     const [nextSchedule, nextRuns, nextLogs] = await Promise.all([
@@ -1090,15 +1091,23 @@ function TasksPage({ notify }) {
   }
 
   async function control(kind, action) {
+    if (controlAction) return;
+    setControlAction(action);
     try {
       await api(`/api/tasks/${kind}/${action}`, {
         method: "POST",
         body: jsonBody({}),
       });
-      notify(action === "interrupt" ? "任务将在安全点中断" : "任务已恢复");
+      notify(
+        action === "interrupt"
+          ? "中断请求已提交，任务将在安全点暂停"
+          : "任务已恢复执行",
+      );
       await load();
     } catch (caught) {
       notify(errorMessage(caught), "error");
+    } finally {
+      setControlAction(null);
     }
   }
 
@@ -1231,10 +1240,20 @@ function TasksPage({ notify }) {
                     "interrupt",
                   )
                 }
-                disabled={!schedule?.crawl?.active && !schedule?.sync?.active}
+                disabled={
+                  Boolean(controlAction) ||
+                  (!schedule?.crawl?.active &&
+                    !schedule?.sync?.active)
+                }
               >
-                <Pause className="h-4 w-4" />
-                中断当前任务
+                {controlAction === "interrupt" ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Pause className="h-4 w-4" />
+                )}
+                {controlAction === "interrupt"
+                  ? "正在中断"
+                  : "中断当前任务"}
               </Button>
               <Button
                 variant="secondary"
@@ -1245,12 +1264,19 @@ function TasksPage({ notify }) {
                   )
                 }
                 disabled={
-                  !schedule?.crawl?.interrupted &&
-                  !schedule?.sync?.interrupted
+                  Boolean(controlAction) ||
+                  (!schedule?.crawl?.interrupted &&
+                    !schedule?.sync?.interrupted)
                 }
               >
-                <RotateCcw className="h-4 w-4" />
-                恢复任务
+                {controlAction === "resume" ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-4 w-4" />
+                )}
+                {controlAction === "resume"
+                  ? "正在恢复"
+                  : "恢复任务"}
               </Button>
             </div>
           </CardContent>

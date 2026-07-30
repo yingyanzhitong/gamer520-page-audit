@@ -13,11 +13,31 @@ export { buildListingDescription };
 
 const syncModes = new Set(["all", "pending", "updated"]);
 const deliveryCardId = 6;
+export const publishHeartbeatMs = 60_000;
 export const materialSyncConcurrency = 4;
-export const publishBatchSize = 20;
+export const publishConcurrency = 4;
 
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+function createConcurrencyLimiter(limit) {
+  let activeCount = 0;
+  const queue = [];
+  const runNext = () => {
+    while (activeCount < limit && queue.length > 0) {
+      const { task, resolve, reject } = queue.shift();
+      activeCount += 1;
+      Promise.resolve()
+        .then(task)
+        .then(resolve, reject)
+        .finally(() => {
+          activeCount -= 1;
+          runNext();
+        });
+    }
+  };
+  return (task) =>
+    new Promise((resolve, reject) => {
+      queue.push({ task, resolve, reject });
+      runNext();
+    });
 }
 
 function countActions(items) {
@@ -33,66 +53,16 @@ function countActions(items) {
   return counts;
 }
 
-function normalizedTitle(value) {
-  return String(value ?? "")
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/\s+/gu, "");
-}
-
-function titleMatchScore(listingTitle, itemTitle) {
-  const listing = normalizedTitle(listingTitle);
-  const item = normalizedTitle(itemTitle);
-  const shorterLength = Math.min(listing.length, item.length);
-  if (shorterLength < 6) return 0;
-  if (listing.startsWith(item) || item.startsWith(listing)) {
-    return shorterLength;
+function itemIdFromResult(result) {
+  const direct = String(result?.item_id ?? "").trim();
+  if (direct) return direct;
+  const itemUrl = String(result?.item_url ?? "").trim();
+  if (!itemUrl) return "";
+  try {
+    return new URL(itemUrl).searchParams.get("id") ?? "";
+  } catch {
+    return "";
   }
-  let commonPrefix = 0;
-  while (
-    commonPrefix < shorterLength &&
-    listing[commonPrefix] === item[commonPrefix]
-  ) {
-    commonPrefix += 1;
-  }
-  return commonPrefix >= 12 ? commonPrefix : 0;
-}
-
-function matchNewPublishedItems(
-  entries,
-  beforeItems,
-  afterItems,
-  listingFor,
-) {
-  const previousIds = new Set(
-    beforeItems
-      .map((item) => String(item.item_id ?? ""))
-      .filter(Boolean),
-  );
-  const available = afterItems.filter((item) => {
-    const itemId = String(item.item_id ?? "");
-    return itemId && !previousIds.has(itemId);
-  });
-  const matches = new Map();
-
-  for (const entry of entries) {
-    let bestIndex = -1;
-    let bestScore = 0;
-    for (let index = 0; index < available.length; index += 1) {
-      const score = titleMatchScore(
-        listingFor(entry.candidate).title,
-        available[index].item_title ?? available[index].title,
-      );
-      if (score > bestScore) {
-        bestIndex = index;
-        bestScore = score;
-      }
-    }
-    if (bestIndex < 0) continue;
-    const [matched] = available.splice(bestIndex, 1);
-    matches.set(entry.materialId, matched);
-  }
-  return matches;
 }
 
 export class XianyuSyncService {
@@ -155,7 +125,7 @@ export class XianyuSyncService {
       trigger,
       accountId,
       mode,
-      publishBatchSize,
+      1,
       startedAt,
     );
     const recordTaskLog = ({
@@ -194,16 +164,15 @@ export class XianyuSyncService {
       card_bind_failed: 0,
       batch_count: 0,
     };
-    let submittedPublication = null;
-    let latestBatchId = null;
+    let latestRequestId = null;
     let processedCount = 0;
     let candidates = [];
     let scopeProgress = {
       total: 0,
       materialCompleted: 0,
       publishCompleted: 0,
+      publishSkipped: 0,
     };
-    let knownAccountItems = null;
     const listingCache = new Map();
     const listingFor = (candidate) => {
       if (!listingCache.has(candidate.id)) {
@@ -245,31 +214,19 @@ export class XianyuSyncService {
           publishTotal: scopeProgress.total,
           publishCompleted:
             scopeProgress.publishCompleted +
+            scopeProgress.publishSkipped +
+            totals.material_skipped +
             totals.publish_processed_count,
           publishSuccess: totals.publish_success,
-          publishSkipped: scopeProgress.publishCompleted,
+          publishSkipped:
+            scopeProgress.publishCompleted +
+            scopeProgress.publishSkipped +
+            totals.material_skipped,
           publishFailed: totals.publish_failed,
         });
       } catch {
         // 页面进度回调不能影响同步任务本身。
       }
-    };
-    const refreshAccountItems = async () => {
-      recordTaskLog({
-        stage: "account",
-        action: "refresh-items",
-        message: `正在刷新账号 ${accountId} 的商品列表`,
-      });
-      await this.client.refreshAccountItems(accountId);
-      knownAccountItems = await this.client.listAccountItems(accountId);
-      recordTaskLog({
-        level: "success",
-        stage: "account",
-        action: "items-refreshed",
-        message: `账号商品列表刷新成功，共读取 ${knownAccountItems.length} 个商品`,
-        details: { itemCount: knownAccountItems.length },
-      });
-      return knownAccountItems;
     };
     const bindDeliveryCard = async (candidate, itemId) => {
       await control?.checkpoint();
@@ -347,7 +304,9 @@ export class XianyuSyncService {
         mode,
         accountId,
         materialConcurrency: materialSyncConcurrency,
-        publishBatchSize,
+        publishConcurrency,
+        publishMode: "single",
+        publishHeartbeatSeconds: publishHeartbeatMs / 1_000,
         requestedGameIds: Array.isArray(gameIds) ? gameIds : null,
       },
     });
@@ -404,6 +363,7 @@ export class XianyuSyncService {
           scopeTotal: scopeProgress.total,
           existingMaterialCount: scopeProgress.materialCompleted,
           existingPublishedCount: scopeProgress.publishCompleted,
+          existingPublishSkippedCount: scopeProgress.publishSkipped,
         },
       });
       reportProgress({
@@ -445,15 +405,56 @@ export class XianyuSyncService {
       }
 
       const titleLocks = new Map();
+      const preparePublishPayload = async (candidate, listing) => {
+        let coverUrl = listing.imageUrl;
+        if (this.config.coverCacheEnabled !== false) {
+          recordTaskLog({
+            gameId: candidate.id,
+            stage: "cover",
+            action: "cache",
+            message: `正在缓存游戏 ${candidate.id} 的封面`,
+          });
+          const cachedCover = await this.cacheCover({
+            gameId: candidate.id,
+            imageUrl: listing.imageUrl,
+            cacheDirectory: this.config.coverCacheDir,
+            publicBaseUrl: this.config.publicBaseUrl,
+          });
+          coverUrl = cachedCover.publicUrl;
+          recordTaskLog({
+            gameId: candidate.id,
+            level: "success",
+            stage: "cover",
+            action: cachedCover.cached ? "reused" : "cached",
+            message: cachedCover.cached
+              ? `游戏 ${candidate.id} 复用已缓存封面`
+              : `游戏 ${candidate.id} 封面缓存成功`,
+            details: { coverUrl },
+          });
+        }
+        return {
+          title: listing.title,
+          description: listing.description,
+          price: Number(candidate.effective_price),
+          images: [coverUrl],
+          category: "虚拟商品",
+          deliveryMethod: "express",
+          postage: 0,
+          condition: "全新",
+        };
+      };
       const syncMaterial = async (candidate) => {
         reportProgress({
           currentGameId: candidate.id,
           currentTitle: candidate.title,
           phase: "material",
         });
+        const listing = listingFor(candidate);
         const existingMaterialId = Number(candidate.material_id);
         if (
           candidate.material_sync_status === "synced" &&
+          candidate.synced_content_hash ===
+            candidate.sync_content_hash &&
           Number.isInteger(existingMaterialId) &&
           existingMaterialId > 0
         ) {
@@ -468,9 +469,27 @@ export class XianyuSyncService {
               materialId: existingMaterialId,
             },
           });
-          return { candidate, existingMaterialId };
+          try {
+            return {
+              candidate,
+              existingMaterialId,
+              publishPayload: await preparePublishPayload(
+                candidate,
+                listing,
+              ),
+            };
+          } catch (error) {
+            recordTaskLog({
+              gameId: candidate.id,
+              level: "error",
+              stage: "cover",
+              action: "failed",
+              message: `游戏 ${candidate.id} 封面准备失败：${error.message}`,
+              details: { title: candidate.title },
+            });
+            return { candidate, error };
+          }
         }
-        const listing = listingFor(candidate);
         recordTaskLog({
           gameId: candidate.id,
           stage: "material",
@@ -501,33 +520,11 @@ export class XianyuSyncService {
           .catch(() => {})
           .then(async () => {
             await control?.checkpoint();
-            let coverUrl = listing.imageUrl;
-            if (this.config.coverCacheEnabled !== false) {
-              recordTaskLog({
-                gameId: candidate.id,
-                stage: "cover",
-                action: "cache",
-                message: `正在缓存游戏 ${candidate.id} 的封面`,
-              });
-              const cachedCover = await this.cacheCover({
-                gameId: candidate.id,
-                imageUrl: listing.imageUrl,
-                cacheDirectory: this.config.coverCacheDir,
-                publicBaseUrl: this.config.publicBaseUrl,
-              });
-              coverUrl = cachedCover.publicUrl;
-              recordTaskLog({
-                gameId: candidate.id,
-                level: "success",
-                stage: "cover",
-                action: cachedCover.cached ? "reused" : "cached",
-                message: cachedCover.cached
-                  ? `游戏 ${candidate.id} 复用已缓存封面`
-                  : `游戏 ${candidate.id} 封面缓存成功`,
-                details: { coverUrl },
-              });
-            }
-            payload.images = [coverUrl];
+            const publishPayload = await preparePublishPayload(
+              candidate,
+              listing,
+            );
+            payload.images = [...publishPayload.images];
             recordTaskLog({
               gameId: candidate.id,
               stage: "material",
@@ -563,12 +560,20 @@ export class XianyuSyncService {
                 reason: result.reason ?? null,
               },
             });
-            return result;
+            return {
+              result,
+              publishPayload,
+            };
           });
         titleLocks.set(titleKey, operation);
 
         try {
-          return { candidate, result: await operation };
+          const completed = await operation;
+          return {
+            candidate,
+            result: completed.result,
+            publishPayload: completed.publishPayload,
+          };
         } catch (error) {
           recordTaskLog({
             gameId: candidate.id,
@@ -586,493 +591,252 @@ export class XianyuSyncService {
         }
       };
 
-      const publishEntries = async (entries) => {
-        const firstCandidate = entries[0].candidate;
+      const publishEntry = async ({
+        candidate,
+        materialId,
+        publishPayload,
+      }) => {
         await control?.checkpoint();
-        recordTaskLog({
-          stage: "publish",
-          action: "prepare-batch",
-          message: `正在准备第 ${totals.batch_count + 1} 个发布批次，共 ${entries.length} 个商品`,
-          details: {
-            gameIds: entries.map((entry) => entry.candidate.id),
-            materialIds: entries.map((entry) => entry.materialId),
-          },
-        });
-        if (knownAccountItems === null) {
-          await refreshAccountItems();
-        }
-        const beforeItems = knownAccountItems;
-        totals.batch_count += 1;
-        totals.publish_submitted += entries.length;
-        database.updateSyncRun(runId, {
-          ...totals,
-          processed_count: processedCount,
-          current_game_id: firstCandidate.id,
-          current_title: firstCandidate.title,
-        });
-        reportProgress({
-          total: candidates.length,
-          currentGameId: firstCandidate.id,
-          currentTitle: firstCandidate.title,
-          phase: "publishing",
-        });
-
+        const listing = listingFor(candidate);
+        const itemData =
+          publishPayload ?? {
+            title: listing.title,
+            description: listing.description,
+            price: Number(candidate.effective_price),
+            images: [listing.imageUrl],
+            category: "虚拟商品",
+            deliveryMethod: "express",
+            postage: 0,
+            condition: "全新",
+          };
         const requestId = randomUUID();
-        const materialIds = entries.map((entry) => entry.materialId);
-        let batch;
-        let recoveredStatus = null;
-        let submissionUncertain = false;
-        try {
-          recordTaskLog({
-            stage: "publish",
-            action: "submit",
-            message: `正在提交批量发布请求，共 ${entries.length} 个商品`,
-            details: { requestId, materialIds, accountId },
-          });
-          batch = await this.client.publishBatch({
-            accountId,
-            materialIds,
-            requestId,
-          });
-          recordTaskLog({
-            level: "success",
-            stage: "publish",
-            action: "submitted",
-            message: `批量发布请求提交成功，批次 ${batch.batch_id ?? requestId}`,
-            details: {
-              requestId,
-              batchId: batch.batch_id ?? requestId,
-              itemCount: entries.length,
-              idempotentReplay: Boolean(batch.idempotent_replay),
-            },
-          });
-        } catch (submissionError) {
-          const statusCode = Number(submissionError.status);
-          if ([400, 409, 422].includes(statusCode)) {
-            recordTaskLog({
-              level: "error",
-              stage: "publish",
-              action: "rejected",
-              message: `批量发布请求被拒绝：${submissionError.message}`,
-              details: {
-                requestId,
-                statusCode,
-                itemCount: entries.length,
-              },
-            });
-            const failedAt = nowIso();
-            latestBatchId = requestId;
-            for (const entry of entries) {
-              database.markPublicationSubmitted(
-                entry.candidate.id,
-                accountId,
-                entry.materialId,
-                requestId,
-                failedAt,
-              );
-              database.markPublicationResult({
-                gameId: entry.candidate.id,
-                accountId,
-                status: "failed",
-                errorMessage: submissionError.message,
-                updatedAt: failedAt,
-              });
-            }
-            totals.publish_failed += entries.length;
-            totals.publish_processed_count += entries.length;
-            processedCount += entries.length;
-            database.updateSyncRun(runId, {
-              ...totals,
-              processed_count: processedCount,
-              batch_id: requestId,
-              current_game_id: null,
-              current_title: null,
-            });
-            reportProgress({
-              total: candidates.length,
-              completed: processedCount,
-              phase: "processing",
-            });
-            return {};
-          }
-          if (statusCode >= 400) {
-            throw submissionError;
-          }
-          try {
-            recoveredStatus = await this.client.getBatchStatus(requestId);
-            batch = { batch_id: requestId, idempotent_replay: true };
-            recordTaskLog({
-              level: "warning",
-              stage: "publish",
-              action: "recovered",
-              message: `发布请求响应异常，但已通过幂等请求号恢复批次 ${requestId}`,
-              details: { requestId },
-            });
-          } catch {
-            batch = { batch_id: requestId };
-            submissionUncertain = true;
-            recordTaskLog({
-              level: "error",
-              stage: "publish",
-              action: "unknown",
-              message: `发布请求结果未知，无法确认批次 ${requestId}`,
-              details: { requestId },
-            });
-          }
-        }
-
-        const batchId = batch.batch_id ?? requestId;
-        latestBatchId = batchId;
+        latestRequestId = requestId;
+        totals.batch_count += 1;
+        totals.publish_submitted += 1;
         const submittedAt = nowIso();
-        for (const entry of entries) {
-          database.markPublicationSubmitted(
-            entry.candidate.id,
-            accountId,
-            entry.materialId,
-            batchId,
-            submittedAt,
-          );
-        }
+        database.markPublicationSubmitted(
+          candidate.id,
+          accountId,
+          materialId,
+          requestId,
+          submittedAt,
+        );
         database.updateSyncRun(runId, {
           ...totals,
           status: "publishing",
-          batch_id: batchId,
+          batch_id: requestId,
+          processed_count: processedCount,
+          current_game_id: candidate.id,
+          current_title: candidate.title,
         });
-        submittedPublication = {
-          accountId,
-          batchId,
-          candidates: entries.map((entry) => entry.candidate),
-        };
+        reportProgress({
+          currentGameId: candidate.id,
+          currentTitle: candidate.title,
+          phase: "publishing",
+        });
+        recordTaskLog({
+          gameId: candidate.id,
+          stage: "publish",
+          action: "submit-single",
+          message: `正在单独发布游戏 ${candidate.id}`,
+          details: {
+            requestId,
+            materialId,
+            accountId,
+            title: itemData.title,
+            imageCount: itemData.images.length,
+          },
+        });
 
-        if (submissionUncertain) {
-          const unknownAt = nowIso();
-          for (const entry of entries) {
-            database.markPublicationResult({
-              gameId: entry.candidate.id,
-              accountId,
-              status: "unknown",
-              errorMessage: "发布请求结果未知，需人工确认后再处理",
-              updatedAt: unknownAt,
-            });
-          }
-          database.updateSyncRun(runId, {
-            ...totals,
-            status: "unknown",
-            batch_id: batchId,
-            error_summary: "发布请求结果未知，已停止后续批次和自动重试",
-            finished_at: unknownAt,
-          });
-          recordTaskLog({
-            level: "error",
-            stage: "task",
-            action: "stopped-unknown",
-            message: "发布请求结果未知，任务已停止，避免自动重复发布",
-            details: { batchId, itemCount: entries.length },
-          });
-          return {
-            terminalResult: {
-              runId,
-              accountId,
-              mode,
-              selectedCount: candidates.length,
-              batchCount: totals.batch_count,
-              batchId,
-              status: "unknown",
-            },
-          };
-        }
-
-        const deadline = Date.now() + this.config.syncBatchTimeoutMs;
-        let status = recoveredStatus;
-        let lastLoggedProgress = null;
-        while (Date.now() < deadline) {
-          await control?.checkpoint();
-          if (!status) {
-            status = await this.client.getBatchStatus(batchId);
-          }
-          const statusProgress = `${status.status ?? ""}:${status.processed_count ?? status.processed ?? ""}:${status.done ?? status.finished ?? false}`;
-          if (statusProgress !== lastLoggedProgress) {
-            lastLoggedProgress = statusProgress;
-            recordTaskLog({
-              stage: "publish",
-              action: "poll",
-              message: `批次 ${batchId} 状态：${status.status ?? (status.done || status.finished ? "已完成" : "处理中")}`,
-              details: {
-                batchId,
-                status: status.status ?? null,
-                processedCount:
-                  status.processed_count ?? status.processed ?? null,
-                done: Boolean(status.done || status.finished),
-              },
-            });
-          }
-          if (status.done || status.finished) break;
-          await delay(this.config.syncPollIntervalMs);
-          status = null;
-        }
-
-        if (!status?.done && !status?.finished) {
-          const unknownAt = nowIso();
-          for (const entry of entries) {
-            database.markPublicationResult({
-              gameId: entry.candidate.id,
-              accountId,
-              status: "unknown",
-              errorMessage: "批量发布超过等待时限，需人工确认后再处理",
-              updatedAt: unknownAt,
-            });
-          }
-          database.updateSyncRun(runId, {
-            ...totals,
-            status: "unknown",
-            batch_id: batchId,
-            error_summary: "批量发布结果未知，已停止后续批次和自动重试",
-            finished_at: unknownAt,
-          });
-          recordTaskLog({
-            level: "error",
-            stage: "publish",
-            action: "timeout",
-            message: `批次 ${batchId} 超过等待时限，任务已停止`,
-            details: { batchId, itemCount: entries.length },
-          });
-          return {
-            terminalResult: {
-              runId,
-              accountId,
-              mode,
-              selectedCount: candidates.length,
-              batchCount: totals.batch_count,
-              batchId,
-              status: "unknown",
-            },
-          };
-        }
-
-        let reconciledItems = new Map();
-        let reconciliationError = null;
-        try {
-          const afterItems = await refreshAccountItems();
-          reconciledItems = matchNewPublishedItems(
-            entries,
-            beforeItems,
-            afterItems,
-            listingFor,
+        const heartbeatInterval = Math.max(
+          1,
+          Number(
+            this.config.syncPublishHeartbeatMs ??
+              publishHeartbeatMs,
+          ),
+        );
+        const publishStartedAt = Date.now();
+        let heartbeatCount = 0;
+        const heartbeatTimer = setInterval(() => {
+          heartbeatCount += 1;
+          const elapsedSeconds = Math.floor(
+            (Date.now() - publishStartedAt) / 1_000,
           );
           recordTaskLog({
-            level: "success",
+            gameId: candidate.id,
             stage: "publish",
-            action: "reconciled",
-            message: `批次 ${batchId} 已核对账号商品列表，匹配 ${reconciledItems.size} 个新商品`,
+            action: "heartbeat",
+            message: `游戏 ${candidate.id} 单商品发布仍在执行，已等待 ${elapsedSeconds} 秒`,
             details: {
-              batchId,
-              matchedCount: reconciledItems.size,
-              submittedCount: entries.length,
+              requestId,
+              materialId,
+              heartbeatCount,
+              elapsedSeconds,
             },
           });
-        } catch (error) {
-          reconciliationError = error;
-          recordTaskLog({
-            level: "error",
-            stage: "publish",
-            action: "reconcile-failed",
-            message: `批次 ${batchId} 商品编号核对失败：${error.message}`,
-            details: { batchId },
+        }, heartbeatInterval);
+        heartbeatTimer.unref?.();
+
+        let itemStatus = "failed";
+        let itemId = "";
+        let itemUrl = null;
+        let errorMessage = null;
+        try {
+          const result = await this.client.publishSingle({
+            accountId,
+            materialId,
+            title: itemData.title,
+            description: itemData.description,
+            price: itemData.price,
+            images: itemData.images,
+            category: itemData.category,
+            deliveryMethod: itemData.deliveryMethod,
+            postage: itemData.postage,
+            condition: itemData.condition,
           });
-        }
-
-        const statusByMaterial = new Map();
-        for (const item of status.items ?? []) {
-          if (
-            item.account_id &&
-            item.account_id !== accountId
-          ) {
-            continue;
-          }
-          statusByMaterial.set(Number(item.material_id), item);
-        }
-
-        let batchSuccess = 0;
-        let batchFailed = 0;
-        let batchUnknown = 0;
-        const successfulItems = [];
-        const completedAt = nowIso();
-        for (const entry of entries) {
-          const item = statusByMaterial.get(entry.materialId);
-          const reconciled = reconciledItems.get(entry.materialId);
-          const itemId = String(
-            reconciled?.item_id ?? item?.item_id ?? "",
-          ).trim();
-          const itemUrl =
-            item?.item_url ??
+          itemId = itemIdFromResult(result);
+          itemUrl =
+            result.item_url ??
             (itemId
               ? `https://www.goofish.com/item?id=${encodeURIComponent(itemId)}`
               : null);
-          let itemStatus;
-          let errorMessage = item?.error_message ?? null;
-          if (reconciled || (item?.status === "success" && itemId)) {
-            itemStatus = "success";
-            errorMessage = null;
-            batchSuccess += 1;
-          } else if (item?.status === "success") {
-            itemStatus = "unknown";
-            errorMessage = reconciliationError
-              ? `闲鱼返回成功但缺少商品编号，商品列表核对失败：${reconciliationError.message}`
-              : "闲鱼返回成功但缺少商品编号，商品列表未发现对应新增商品";
-            batchUnknown += 1;
-          } else {
-            itemStatus = "failed";
-            errorMessage =
-              errorMessage ??
-              "批次已结束但未返回该商品结果";
-            batchFailed += 1;
+          if (!itemId) {
+            const missingIdError = new Error(
+              "单商品发布返回成功但缺少闲鱼商品编号",
+            );
+            missingIdError.resultUnknown = true;
+            throw missingIdError;
           }
+          itemStatus = "success";
+          const completedAt = nowIso();
           database.markPublicationResult({
-            gameId: entry.candidate.id,
+            gameId: candidate.id,
+            accountId,
+            status: "success",
+            itemId,
+            itemUrl,
+            updatedAt: completedAt,
+          });
+          totals.publish_success += 1;
+          recordTaskLog({
+            gameId: candidate.id,
+            level: "success",
+            stage: "publish",
+            action: "success",
+            message: `游戏 ${candidate.id} 发布成功，闲鱼商品编号 ${itemId}`,
+            details: {
+              requestId,
+              materialId,
+              itemId,
+              itemUrl,
+            },
+          });
+          await bindDeliveryCard(candidate, itemId);
+        } catch (error) {
+          const statusCode = Number(error.status);
+          const resultUnknown =
+            error.resultUnknown === true ||
+            error.name === "AbortError" ||
+            error.name === "TimeoutError" ||
+            !Number.isFinite(statusCode) ||
+            statusCode <= 0;
+          itemStatus = resultUnknown ? "unknown" : "failed";
+          errorMessage = error.message;
+          database.markPublicationResult({
+            gameId: candidate.id,
             accountId,
             status: itemStatus,
             itemId: itemId || null,
             itemUrl,
             errorMessage,
-            updatedAt: completedAt,
+            updatedAt: nowIso(),
           });
+          totals.publish_failed += 1;
           recordTaskLog({
-            gameId: entry.candidate.id,
-            level:
-              itemStatus === "success"
-                ? "success"
-                : itemStatus === "unknown"
-                  ? "warning"
-                  : "error",
+            gameId: candidate.id,
+            level: resultUnknown ? "warning" : "error",
             stage: "publish",
             action: itemStatus,
-            message:
-              itemStatus === "success"
-                ? `游戏 ${entry.candidate.id} 发布成功，闲鱼商品编号 ${itemId}`
-                : `游戏 ${entry.candidate.id} 发布${itemStatus === "unknown" ? "结果待确认" : "失败"}：${errorMessage}`,
+            message: `游戏 ${candidate.id} 单商品发布${resultUnknown ? "结果待确认" : "失败"}：${errorMessage}`,
             details: {
-              batchId,
-              materialId: entry.materialId,
-              itemId: itemId || null,
+              requestId,
+              materialId,
+              statusCode:
+                Number.isFinite(statusCode) && statusCode > 0
+                  ? statusCode
+                  : null,
               errorMessage,
             },
           });
-          if (itemStatus === "success" && itemId) {
-            successfulItems.push({
-              candidate: entry.candidate,
-              itemId,
-            });
-          }
-        }
-
-        totals.publish_success += batchSuccess;
-        totals.publish_failed += batchFailed;
-        totals.publish_processed_count += entries.length;
-        submittedPublication = null;
-        database.updateSyncRun(runId, {
-          ...totals,
-          batch_id: batchId,
-          processed_count: processedCount,
-        });
-        for (const successfulItem of successfulItems) {
-          await bindDeliveryCard(
-            successfulItem.candidate,
-            successfulItem.itemId,
-          );
-        }
-        processedCount += entries.length;
-        database.updateSyncRun(runId, {
-          ...totals,
-          batch_id: batchId,
-          processed_count: processedCount,
-          current_game_id: null,
-          current_title: null,
-        });
-        reportProgress({
-          total: candidates.length,
-          completed: processedCount,
-          phase: "processing",
-        });
-        recordTaskLog({
-          level:
-            batchFailed > 0 || batchUnknown > 0 ? "warning" : "success",
-          stage: "publish",
-          action: "batch-finished",
-          message: `批次 ${batchId} 完成：成功 ${batchSuccess}，失败 ${batchFailed}，待确认 ${batchUnknown}`,
-          details: {
-            batchId,
-            success: batchSuccess,
-            failed: batchFailed,
-            unknown: batchUnknown,
-          },
-        });
-
-        if (batchUnknown > 0) {
-          const errorSummary = `${batchUnknown} 个商品缺少可核验的商品编号，已停止后续批次`;
+        } finally {
+          clearInterval(heartbeatTimer);
+          totals.publish_processed_count += 1;
+          processedCount += 1;
           database.updateSyncRun(runId, {
             ...totals,
-            status: "unknown",
-            batch_id: batchId,
-            error_summary: errorSummary,
-            finished_at: completedAt,
+            batch_id: requestId,
+            processed_count: processedCount,
+            current_game_id: null,
+            current_title: null,
           });
-          return {
-            terminalResult: {
-              runId,
-              accountId,
-              mode,
-              selectedCount: candidates.length,
-              batchCount: totals.batch_count,
-              batchId,
-              status: "unknown",
-            },
-          };
+          reportProgress({
+            completed: processedCount,
+            phase: "processing",
+          });
         }
+        return itemStatus;
+      };
+      const materialLimiter = createConcurrencyLimiter(
+        materialSyncConcurrency,
+      );
+      const publishLimiter = createConcurrencyLimiter(
+        publishConcurrency,
+      );
+      const publishJobs = [];
 
-        return {};
+      const enqueuePublication = (entry) => {
+        totals.publish_selected_count += 1;
+        const job = publishLimiter(() => publishEntry(entry));
+        job.catch(() => {});
+        publishJobs.push(job);
+        database.updateSyncRun(runId, {
+          ...totals,
+          processed_count: processedCount,
+        });
+        reportProgress({
+          completed: processedCount,
+          phase: "publishing",
+        });
       };
 
-      const publishQueue = [];
-      for (
-        let candidateIndex = 0;
-        candidateIndex < candidates.length;
-        candidateIndex += materialSyncConcurrency
-      ) {
+      const handleCandidate = async (candidate) => {
         await control?.checkpoint();
-        const materialCandidates = candidates.slice(
-          candidateIndex,
-          candidateIndex + materialSyncConcurrency,
-        );
-        const materialOutcomes = await Promise.all(
-          materialCandidates.map(syncMaterial),
-        );
-
-        for (const outcome of materialOutcomes) {
-          const {
+        const outcome = await syncMaterial(candidate);
+        const {
+          existingMaterialId,
+          result,
+          error,
+          publishPayload,
+        } = outcome;
+        if (existingMaterialId) {
+          enqueuePublication({
             candidate,
-            existingMaterialId,
-            result,
-            error,
-          } = outcome;
-          if (existingMaterialId) {
-            publishQueue.push({
-              candidate,
-              materialId: existingMaterialId,
-            });
-            continue;
-          }
-          totals.material_processed_count += 1;
-          if (error) {
-            database.markMaterialFailed(
-              candidate.id,
-              error.message,
-              nowIso(),
-            );
-            totals.material_failed += 1;
-            processedCount += 1;
-            continue;
-          }
+            materialId: existingMaterialId,
+            publishPayload,
+          });
+          return;
+        }
 
+        totals.material_processed_count += 1;
+        if (error) {
+          database.markMaterialFailed(
+            candidate.id,
+            error.message,
+            nowIso(),
+          );
+          totals.material_failed += 1;
+          processedCount += 1;
+        } else {
           const materialId = Number(result.material_id);
           if (!Number.isInteger(materialId) || materialId <= 0) {
             database.markMaterialFailed(
@@ -1090,66 +854,70 @@ export class XianyuSyncService {
               message: `游戏 ${candidate.id} 素材接口没有返回有效 material_id`,
               details: { resultAction: result.action ?? null },
             });
-            continue;
-          }
-
-          const syncedAt = nowIso();
-          if (result.action === "skipped") {
-            database.markMaterialSkipped(
-              candidate.id,
-              materialId,
-              candidate.sync_content_hash,
-              result.reason ?? "闲鱼素材库已存在同名商品",
-              syncedAt,
-            );
           } else {
-            database.markMaterialSynced(
-              candidate.id,
-              materialId,
-              candidate.sync_content_hash,
-              syncedAt,
-            );
-          }
-          const actionCounts = countActions([result]);
-          totals.material_created += actionCounts.created;
-          totals.material_updated += actionCounts.updated;
-          totals.material_unchanged += actionCounts.unchanged;
-          totals.material_skipped += actionCounts.skipped;
-
-          if (
-            candidate.publication_status === "success" ||
-            result.action === "skipped"
-          ) {
-            recordTaskLog({
-              gameId: candidate.id,
-              level: "warning",
-              stage: "publish",
-              action: "skipped",
-              message:
-                candidate.publication_status === "success"
-                  ? `游戏 ${candidate.id} 已发布，跳过重复发布`
-                  : `游戏 ${candidate.id} 使用已有同名素材，按规则跳过发布`,
-              details: {
-                publicationStatus: candidate.publication_status,
-                materialAction: result.action,
-                itemId: candidate.publication_item_id ?? null,
-              },
-            });
-            if (
-              candidate.publication_status === "success" &&
-              candidate.publication_item_id &&
-              candidate.publication_card_bind_status !== "success"
-            ) {
-              await bindDeliveryCard(
-                candidate,
-                candidate.publication_item_id,
+            const syncedAt = nowIso();
+            if (result.action === "skipped") {
+              database.markMaterialSkipped(
+                candidate.id,
+                materialId,
+                candidate.sync_content_hash,
+                result.reason ?? "闲鱼素材库已存在同名商品",
+                syncedAt,
+              );
+            } else {
+              database.markMaterialSynced(
+                candidate.id,
+                materialId,
+                candidate.sync_content_hash,
+                syncedAt,
               );
             }
-            processedCount += 1;
-            continue;
-          }
+            const actionCounts = countActions([result]);
+            totals.material_created += actionCounts.created;
+            totals.material_updated += actionCounts.updated;
+            totals.material_unchanged += actionCounts.unchanged;
+            totals.material_skipped += actionCounts.skipped;
 
-          publishQueue.push({ candidate, materialId });
+            if (
+              candidate.publication_status === "success" ||
+              result.action === "skipped"
+            ) {
+              recordTaskLog({
+                gameId: candidate.id,
+                level: "warning",
+                stage: "publish",
+                action: "skipped",
+                message:
+                  candidate.publication_status === "success"
+                    ? `游戏 ${candidate.id} 已发布，跳过重复发布`
+                    : `游戏 ${candidate.id} 使用已有同名素材，按规则跳过发布`,
+                details: {
+                  publicationStatus: candidate.publication_status,
+                  materialAction: result.action,
+                  itemId:
+                    candidate.publication_item_id ?? null,
+                },
+              });
+              if (
+                candidate.publication_status === "success" &&
+                candidate.publication_item_id &&
+                candidate.publication_card_bind_status !==
+                  "success"
+              ) {
+                await bindDeliveryCard(
+                  candidate,
+                  candidate.publication_item_id,
+                );
+              }
+              processedCount += 1;
+            } else {
+              enqueuePublication({
+                candidate,
+                materialId,
+                publishPayload,
+              });
+            }
+          }
         }
 
         database.updateSyncRun(runId, {
@@ -1159,45 +927,17 @@ export class XianyuSyncService {
           current_title: null,
         });
         reportProgress({
-          total: candidates.length,
           completed: processedCount,
           phase: "processing",
         });
+      };
 
-        const materialEnd =
-          candidateIndex + materialCandidates.length;
-        if (
-          materialEnd < candidates.length &&
-          materialEnd % publishBatchSize !== 0
-        ) {
-          continue;
-        }
-
-        totals.publish_selected_count += publishQueue.length;
-        database.updateSyncRun(runId, {
-          ...totals,
-          processed_count: processedCount,
-          current_game_id: null,
-          current_title: null,
-        });
-        reportProgress({
-          total: candidates.length,
-          completed: processedCount,
-          phase:
-            publishQueue.length > 0
-              ? "publishing"
-              : "material-completed",
-        });
-
-        if (publishQueue.length > 0) {
-          const publicationResult = await publishEntries(publishQueue);
-          if (publicationResult.terminalResult) {
-            return publicationResult.terminalResult;
-          }
-        }
-        publishQueue.length = 0;
-      }
-
+      await Promise.all(
+        candidates.map((candidate) =>
+          materialLimiter(() => handleCandidate(candidate)),
+        ),
+      );
+      await Promise.all(publishJobs);
       const finalStatus =
         totals.material_failed > 0 ||
         totals.publish_failed > 0 ||
@@ -1208,7 +948,7 @@ export class XianyuSyncService {
       database.updateSyncRun(runId, {
         ...totals,
         status: finalStatus,
-        batch_id: latestBatchId,
+        batch_id: latestRequestId,
         processed_count: processedCount,
         current_game_id: null,
         current_title: null,
@@ -1250,7 +990,10 @@ export class XianyuSyncService {
             failed: totals.material_failed,
           },
           publish: {
-            skipped: scopeProgress.publishCompleted,
+            skipped:
+              scopeProgress.publishCompleted +
+              scopeProgress.publishSkipped +
+              totals.material_skipped,
             submitted: totals.publish_submitted,
             success: totals.publish_success,
             failed: totals.publish_failed,
@@ -1282,52 +1025,10 @@ export class XianyuSyncService {
         cardBound: totals.card_bound,
         cardBindFailed: totals.card_bind_failed,
         batchCount: totals.batch_count,
-        batchId: latestBatchId,
+        batchId: latestRequestId,
         status: finalStatus,
       };
     } catch (error) {
-      if (submittedPublication) {
-        const unknownAt = nowIso();
-        for (const candidate of submittedPublication.candidates) {
-          database.markPublicationResult({
-            gameId: candidate.id,
-            accountId: submittedPublication.accountId,
-            status: "unknown",
-            errorMessage: `批次状态查询失败：${error.message}`,
-            updatedAt: unknownAt,
-          });
-        }
-        database.updateSyncRun(runId, {
-          ...totals,
-          status: "unknown",
-          batch_id: submittedPublication.batchId,
-          error_summary: "批量发布已提交但结果查询失败，需人工确认",
-          finished_at: unknownAt,
-        });
-        recordTaskLog({
-          level: "error",
-          stage: "task",
-          action: "stopped-unknown",
-          message: `批次状态查询失败，已将批次 ${submittedPublication.batchId} 标记为待确认：${error.message}`,
-          details: {
-            batchId: submittedPublication.batchId,
-            itemCount: submittedPublication.candidates.length,
-          },
-        });
-        return {
-          runId,
-          accountId,
-          mode,
-          selectedCount: database.listSyncCandidates(
-            accountId,
-            100_000,
-            mode,
-          ).length,
-          batchCount: totals.batch_count,
-          batchId: submittedPublication.batchId,
-          status: "unknown",
-        };
-      }
       database.updateSyncRun(runId, {
         ...totals,
         status: "failed",

@@ -6,7 +6,7 @@ import { CrawlerDatabase } from "./database.mjs";
 import { startDashboardServer } from "./dashboard-server.mjs";
 import {
   materialSyncConcurrency,
-  publishBatchSize,
+  publishConcurrency,
   XianyuSyncService,
 } from "./sync-service.mjs";
 import { TaskControl } from "./task-control.mjs";
@@ -391,7 +391,7 @@ function scheduleRuntime() {
       cronTimezone: schedulerSettings.cronTimezone,
       nextRun: syncJob?.nextRun()?.toISOString() ?? null,
       materialConcurrency: materialSyncConcurrency,
-      batchSize: publishBatchSize,
+      publishConcurrency,
       mode: schedulerSettings.syncMode,
       progress: syncProgress,
     },

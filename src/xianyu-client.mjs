@@ -20,7 +20,10 @@ export class XianyuClient {
     }
   }
 
-  async request(pathname, { method = "GET", body } = {}) {
+  async request(
+    pathname,
+    { method = "GET", body, timeoutMs = this.timeoutMs } = {},
+  ) {
     this.ensureConfigured();
     const response = await fetch(`${this.baseUrl}${pathname}`, {
       method,
@@ -30,7 +33,7 @@ export class XianyuClient {
         ...(body ? { "content-type": "application/json" } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
@@ -93,6 +96,41 @@ export class XianyuClient {
       },
     );
     return payload?.data ?? {};
+  }
+
+  async publishSingle({
+    accountId,
+    title,
+    description,
+    price,
+    images,
+    category,
+    deliveryMethod = "express",
+    postage = 0,
+    condition = "全新",
+  }) {
+    const payload = await this.request(
+      "/api/v1/product-publish/publish/single",
+      {
+        method: "POST",
+        timeoutMs: 10 * 60 * 1_000,
+        body: {
+          account_id: accountId,
+          title,
+          description,
+          price,
+          images,
+          category,
+          delivery_method: deliveryMethod,
+          postage,
+          condition,
+        },
+      },
+    );
+    return {
+      ...(payload?.data ?? {}),
+      message: payload?.message ?? null,
+    };
   }
 
   async getBatchStatus(batchId) {

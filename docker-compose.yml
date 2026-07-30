@@ -2,7 +2,7 @@ services:
   crawler:
     build:
       context: .
-    image: ${IMAGE_NAME:-gamer520-crawler}:${IMAGE_TAG:-2.0.7}
+    image: ${IMAGE_NAME:-gamer520-crawler}:${IMAGE_TAG:-2.0.8}
     init: true
     ipc: host
     restart: unless-stopped
@@ -39,8 +39,6 @@ services:
       COVER_CACHE_DIR: ${COVER_CACHE_DIR:-/app/data/covers}
       COVER_CACHE_ENABLED: ${COVER_CACHE_ENABLED:-true}
       SYNC_CRON_SCHEDULE: ${SYNC_CRON_SCHEDULE:-0 */6 * * *}
-      SYNC_POLL_INTERVAL_MS: ${SYNC_POLL_INTERVAL_MS:-10000}
-      SYNC_BATCH_TIMEOUT_MS: ${SYNC_BATCH_TIMEOUT_MS:-7200000}
       SYNC_ENABLED: ${SYNC_ENABLED:-true}
     volumes:
       - gamer520-data:/app/data
