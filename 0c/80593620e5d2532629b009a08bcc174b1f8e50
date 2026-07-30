@@ -1,0 +1,65 @@
+package.json
+  s_bfd82453425369::t_ce893eab39acdc 3
+README.md
+  s_bfd82453425369::t_e8986bb0040ff6 94-95,132,134,152
+frontend/src/App.jsx
+  s_bfd82453425369::t_3ef480bf85167e 1242-1245
+test/config.test.mjs
+  s_bfd82453425369::t_e8986bb0040ff6 15-28
+test/sync-service.test.mjs
+  s_bfd82453425369::t_f9f45a9b572684 822,849,905-907
+  s_bfd82453425369::t_200a7df6c405dd 9-10,221-223,225-233,237-238,243,245,249,253-257,259-266,279-280,285-287,332,341,343,347-349,351,422-423,429
+  s_bfd82453425369::t_1af46830c60d6b 490,517-521,546,564,569-570,572-575,581,601,605,607,627,656-661
+  s_bfd82453425369::t_57556d48988362 826,829-830
+src/scheduler.mjs
+  s_bfd82453425369::t_3ef480bf85167e 9,82-85,327,435,461
+test/dashboard.test.mjs
+  s_bfd82453425369::t_abd07902f7fe9a 202,256,313,744
+src/sync-service.mjs
+  s_bfd82453425369::t_584ff44fd47da5 17-21,35-59,61-94,96,164,203-204,213
+  s_bfd82453425369::t_f0f4b2d9dd11e2 740-742
+  s_bfd82453425369::t_c7a30703d3badc 269-286,365-367,532
+  s_bfd82453425369::t_66237894688310 636-637,639-651,653,657-658,661-662,666-671,673-685,687-688,691-693,696-739,743-764,766-809,811-816,821-838,840-842,844-890,893-904,909-926,929-930,932-934,938-987,989,995,998-1004,1007-1010,1012-1014,1018-1023,1026-1036,1039,1041-1042,1046,1048-1075,1080-1086,1089-1091,1093-1094,1106-1117,1122-1141,1143-1182,1185-1186,1188-1220,1229,1231,1233-1240
+  s_bfd82453425369::t_2b308047c00807 1251,1328,1332-1369
+  s_bfd82453425369::t_f9f45a9b572684 817-820,905-908,1076-1079
+  s_bfd82453425369::t_c4e14b77905d69 268
+src/config.mjs
+  s_bfd82453425369::t_584ff44fd47da5 147-156
+src/dashboard-server.mjs
+  s_bfd82453425369::t_3ef480bf85167e 1340-1341
+docker-compose.yml
+  s_bfd82453425369::t_e8986bb0040ff6 42-43
+deploy/docker-compose.yml
+  s_bfd82453425369::t_e8986bb0040ff6 38-39
+deploy/.env.example
+  s_bfd82453425369::t_e8986bb0040ff6 29-30
+CHANGELOG.md
+  s_bfd82453425369::t_ce893eab39acdc 3-10
+public/assets/index-B6ImrL25.js
+  s_bfd82453425369::t_7cbf87a5a570f0 49
+public/assets/index-BWGwtJxz.css
+  s_bfd82453425369::t_4b8158d2954ba4 1
+public/index.html
+  s_bfd82453425369::t_abb29eb0134163 12-13
+package-lock.json
+  s_bfd82453425369::t_68767f782f6b20 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "0c80593620e5d2532629b009a08bcc174b1f8e50",
+  "prompts": {},
+  "logical_commit_id": "0c80593620e5d2532629b009a08bcc174b1f8e50",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 797,
+      "total_deletions": 494
+    }
+  }
+}
