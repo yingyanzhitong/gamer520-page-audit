@@ -1,0 +1,111 @@
+package.json
+  s_bfd82453425369::t_e8c2245226019d 3
+  s_bfd82453425369::t_8617ea81642765 12-14,21-24,27,29-39
+Dockerfile
+  s_bfd82453425369::t_8617ea81642765 9,12-15
+vite.config.js
+  s_bfd82453425369::t_d5192eab328b9c 1-17
+README.md
+  s_bfd82453425369::t_e8c2245226019d 3,16,83-86,88,119,127,129
+postcss.config.js
+  s_bfd82453425369::t_d5192eab328b9c 1-6
+test/dashboard.test.mjs
+  s_bfd82453425369::t_ec42f04a92e6f5 249-250,254,299-313,539-541,543,720-738
+test/dashboard-auth.test.mjs
+  s_bfd82453425369::t_ec42f04a92e6f5 1-128
+deploy/docker-compose.yml
+  s_bfd82453425369::t_e8c2245226019d 3
+  s_bfd82453425369::t_8617ea81642765 30-33
+frontend/public/favicon.svg
+  s_bfd82453425369::t_d5192eab328b9c 1-5
+frontend/src/App.jsx
+  s_bfd82453425369::t_280e58164aeac1 1-83,85-86,89-91,93-97,100-126,129-131,133-138,140-145,148-155,158-178,181-282,285-366,370-375,377-393,397-487,491-514,517-649,652-692,696-720,723-746,750-760,763-773,776-1007,1010-1032,1035-1055,1058-1220,1223-1287,1289-1300,1303-1322,1326-1340,1342-1357,1360-1537,1541-1586,1588-1614,1618-1621,1623-1628,1631-1633,1636-1642,1644-1652,1654-1675,1679-1695,1699-1711,1713-1715,1717-1718,1720,1722,1725-1729,1732-1733,1735
+  s_bfd82453425369::t_6548b430cb82a8 1587
+  s_bfd82453425369::t_0b834d849a6fa9 132,1677-1678
+  s_bfd82453425369::t_41f66b9cfe0ec1 139,1653,1676
+test/sync-service.test.mjs
+  s_bfd82453425369::t_f74cb2f0213f1e 820
+  s_bfd82453425369::t_80d814cbf12970 231-246,472-506,975,977
+  s_bfd82453425369::t_a1427e29fe8da7 329,331,339,347,414,421,445-452,468-471
+  s_bfd82453425369::t_43ec7fe8ec2349 974,976,979-1007,1012
+  s_bfd82453425369::t_76f8f8f9274643 769,803,805,807,826,871,874,885,888,898-900,934,971
+  s_bfd82453425369::t_ef654c8e653607 587-588,591,680,683
+  s_4d6fdd61574b1b::t_33bd6ffdb6714d 978
+src/dashboard-server.mjs
+  s_bfd82453425369::t_3ce54c82d44985 10-17,201,205,222,235-249,688-750,834-887,891-912,949-958,961-991,1340-1347,1358-1386
+  s_bfd82453425369::t_6548b430cb82a8 815
+  s_bfd82453425369::t_51360ce40313cb 1348-1357
+src/database.mjs
+  s_bfd82453425369::t_e16aec05b07e30 1151-1153
+CHANGELOG.md
+  s_bfd82453425369::t_e8c2245226019d 3-11
+src/scheduler.mjs
+  s_bfd82453425369::t_0c277d3bf9cb3d 142-146,152-156,171-175,196,380-386
+src/dashboard-auth.mjs
+  s_bfd82453425369::t_e460c1d2a3cbe8 1-136
+frontend/index.html
+  s_bfd82453425369::t_d5192eab328b9c 1-17
+deploy/.env.example
+  s_bfd82453425369::t_8617ea81642765 4-7
+  s_bfd82453425369::t_e8c2245226019d 2
+frontend/src/components/ui.jsx
+  s_bfd82453425369::t_0b834d849a6fa9 159
+  s_bfd82453425369::t_d5192eab328b9c 1-158,160-236
+src/config.mjs
+  s_bfd82453425369::t_e460c1d2a3cbe8 102-120,185-193,215-218
+frontend/src/lib/utils.js
+  s_bfd82453425369::t_d5192eab328b9c 1-35
+frontend/src/lib/api.js
+  s_bfd82453425369::t_d5192eab328b9c 1-31
+tailwind.config.js
+  s_bfd82453425369::t_d5192eab328b9c 1-56
+src/sync-service.mjs
+  s_bfd82453425369::t_feeda9a486fc76 414-451
+  s_bfd82453425369::t_e16aec05b07e30 134,273-282,380,688,694,813-814,859
+  s_bfd82453425369::t_51360ce40313cb 302-311
+docker-compose.yml
+  s_bfd82453425369::t_8617ea81642765 31-34
+  s_bfd82453425369::t_e8c2245226019d 5
+frontend/src/index.css
+  s_bfd82453425369::t_280e58164aeac1 1-32,34-36,43-112
+  s_bfd82453425369::t_41f66b9cfe0ec1 33,37-42
+frontend/src/main.jsx
+  s_bfd82453425369::t_280e58164aeac1 1-11
+public/assets/index-G8gyAjhE.js
+  s_bfd82453425369::t_9356229e0e2afb 1-49
+public/assets/index-pLs2VBdV.css
+  s_bfd82453425369::t_8b17e0e301658e 1
+public/favicon.svg
+  s_bfd82453425369::t_62c7babf46ac70 2-4
+public/index.html
+  s_bfd82453425369::t_57db8d2401ee46 4-5,8-13,16
+package-lock.json
+  s_bfd82453425369::t_1ff66e5cb7abba 3,9,11-14,17,19-22,24-30,33-45,48-52,559-563,565-567,570-575,577,580-602,605-607,609-617,620-625,627-628,630-652,655-681,683-686,689-696,698-701,704-724,726-738,741-745,747-751,753-757,759-775,777-797,800-803,808-3144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ab30d2e77234198dd79835480f78f78022ced30e",
+  "prompts": {},
+  "logical_commit_id": "ab30d2e77234198dd79835480f78f78022ced30e",
+  "sessions": {
+    "s_4d6fdd61574b1b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019facc4-37f4-7df2-9152-92c3103ebd72",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>"
+    },
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 3155,
+      "total_deletions": 204
+    }
+  }
+}
