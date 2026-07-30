@@ -23,17 +23,26 @@ import {
   PackageCheck,
   Pause,
   Play,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
   Search,
   Settings2,
   ShieldCheck,
+  ScrollText,
+  Trash2,
   Truck,
   UserRound,
   X,
 } from "lucide-react";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   Badge,
@@ -122,6 +131,208 @@ function StatusBadge({ status }) {
     <Badge tone={statusTone(status)}>
       {statusLabels[status] ?? status ?? "—"}
     </Badge>
+  );
+}
+
+function SegmentedProgress({
+  success = 0,
+  skipped = 0,
+  failed = 0,
+  total = 0,
+  label,
+}) {
+  const maximum = Math.max(Number(total) || 0, 1);
+  const segments = [
+    {
+      key: "success",
+      label: "成功",
+      value: Math.max(Number(success) || 0, 0),
+      className: "bg-emerald-500",
+      textClassName: "text-emerald-700",
+    },
+    {
+      key: "skipped",
+      label: "已有跳过",
+      value: Math.max(Number(skipped) || 0, 0),
+      className: "bg-amber-400",
+      textClassName: "text-amber-700",
+    },
+    {
+      key: "failed",
+      label: "失败",
+      value: Math.max(Number(failed) || 0, 0),
+      className: "bg-rose-500",
+      textClassName: "text-rose-700",
+    },
+  ];
+  return (
+    <div className="space-y-2" aria-label={label}>
+      <div className="flex h-2 w-full overflow-hidden rounded-full bg-slate-100">
+        {segments.map((segment) =>
+          segment.value > 0 ? (
+            <span
+              key={segment.key}
+              className={segment.className}
+              style={{
+                width: `${Math.min(100, (segment.value / maximum) * 100)}%`,
+              }}
+              title={`${segment.label} ${segment.value}`}
+            />
+          ) : null,
+        )}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 font-data text-[10px]">
+        {segments.map((segment) => (
+          <span key={segment.key} className={segment.textClassName}>
+            {segment.label} {segment.value}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TaskLogDialog({ task, open, onOpenChange }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const afterIdRef = useRef(0);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (!open || !task) return undefined;
+    let active = true;
+    let timer;
+    afterIdRef.current = 0;
+    setItems([]);
+    setError("");
+
+    const load = async () => {
+      if (!active) return;
+      setLoading(true);
+      try {
+        let hasMore = true;
+        const collected = [];
+        while (active && hasMore) {
+          const payload = await api(
+            `/api/task-logs?task_type=${encodeURIComponent(task.taskType)}&run_id=${task.id}&after_id=${afterIdRef.current}&limit=500`,
+          );
+          const nextItems = payload.items ?? [];
+          collected.push(...nextItems);
+          afterIdRef.current =
+            payload.nextAfterId ?? afterIdRef.current;
+          hasMore = Boolean(payload.hasMore);
+        }
+        if (active && collected.length > 0) {
+          setItems((current) => {
+            const byId = new Map(
+              [...current, ...collected].map((item) => [item.id, item]),
+            );
+            return [...byId.values()].sort((left, right) => left.id - right.id);
+          });
+        }
+        if (active) setError("");
+      } catch (caught) {
+        if (active) setError(errorMessage(caught));
+      } finally {
+        if (active) {
+          setLoading(false);
+          timer = window.setTimeout(load, 2000);
+        }
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [open, task]);
+
+  useEffect(() => {
+    if (!open || !scrollRef.current) return;
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [items, open]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl overflow-hidden p-0">
+        <DialogHeader className="border-b px-6 py-5 pr-12">
+          <div className="flex flex-wrap items-center gap-3">
+            <DialogTitle>
+              {task?.taskType === "crawl" ? "采集" : "同步"}任务 #{task?.id} 操作日志
+            </DialogTitle>
+            {task?.status ? <StatusBadge status={task.status} /> : null}
+          </div>
+          <DialogDescription>
+            按执行顺序展示每一步操作、结果与关联数据；运行中每 2 秒自动刷新。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex items-center justify-between border-b bg-slate-50 px-6 py-3 text-xs text-muted-foreground">
+          <span>共 {items.length} 条日志</span>
+          <span className="flex items-center gap-2">
+            {loading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+            {loading ? "正在读取" : "已同步"}
+          </span>
+        </div>
+        <div ref={scrollRef} className="max-h-[62vh] overflow-y-auto p-4">
+          {error ? (
+            <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              {error}
+            </p>
+          ) : null}
+          {items.length ? (
+            <div className="space-y-2">
+              {items.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-lg border bg-white p-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge
+                      tone={
+                        item.level === "success"
+                          ? "success"
+                          : item.level === "warning"
+                            ? "warning"
+                            : item.level === "error"
+                              ? "danger"
+                              : "info"
+                      }
+                    >
+                      {item.stage} · {item.action}
+                    </Badge>
+                    {item.gameId ? (
+                      <span className="font-data text-[10px] text-muted-foreground">
+                        游戏 {item.gameId}
+                      </span>
+                    ) : null}
+                    <span className="ml-auto font-data text-[10px] text-muted-foreground">
+                      {formatDate(item.createdAt)}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6">{item.message}</p>
+                  {item.details ? (
+                    <details className="mt-2">
+                      <summary className="cursor-pointer text-xs text-primary">
+                        查看详细结果
+                      </summary>
+                      <pre className="font-data mt-2 overflow-x-auto rounded-md bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
+                        {JSON.stringify(item.details, null, 2)}
+                      </pre>
+                    </details>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : !loading ? (
+            <EmptyState
+              title="该任务还没有详细日志"
+              description="旧版本创建的任务不会补写历史操作日志。"
+            />
+          ) : null}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -490,6 +701,7 @@ function SyncRail({ dashboard }) {
 function DashboardPage({ notify }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [logTask, setLogTask] = useState(null);
   const load = useCallback(async () => {
     try {
       setData(await api("/api/dashboard"));
@@ -580,7 +792,23 @@ function DashboardPage({ notify }) {
                       ID {data.scheduler.sync.progress.currentGameId ?? "—"}
                     </p>
                   </div>
-                  <StatusBadge status="running" />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setLogTask({
+                          taskType: "sync",
+                          id: data.scheduler.sync.progress.runId,
+                          status: "running",
+                        })
+                      }
+                    >
+                      <ScrollText className="h-3.5 w-3.5" />
+                      查看日志
+                    </Button>
+                    <StatusBadge status="running" />
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between text-xs">
@@ -590,26 +818,67 @@ function DashboardPage({ notify }) {
                       {data.scheduler.sync.progress.materialTotal ?? 0}
                     </span>
                   </div>
-                  <Progress
-                    value={data.scheduler.sync.progress.materialCompleted}
-                    max={data.scheduler.sync.progress.materialTotal}
+                  <SegmentedProgress
+                    success={data.scheduler.sync.progress.materialSuccess}
+                    skipped={data.scheduler.sync.progress.materialSkipped}
+                    failed={data.scheduler.sync.progress.materialFailed}
+                    total={data.scheduler.sync.progress.materialTotal}
                     label="导入素材库进度"
                   />
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between text-xs">
-                    <span>发布成功</span>
+                    <span>发布商品</span>
                     <span className="font-data">
                       {data.scheduler.sync.progress.publishCompleted ?? 0} /{" "}
                       {data.scheduler.sync.progress.publishTotal ?? 0}
                     </span>
                   </div>
-                  <Progress
-                    value={data.scheduler.sync.progress.publishCompleted}
-                    max={data.scheduler.sync.progress.publishTotal}
-                    label="发布成功进度"
+                  <SegmentedProgress
+                    success={data.scheduler.sync.progress.publishSuccess}
+                    skipped={data.scheduler.sync.progress.publishSkipped}
+                    failed={data.scheduler.sync.progress.publishFailed}
+                    total={data.scheduler.sync.progress.publishTotal}
+                    label="发布商品进度"
                   />
                 </div>
+              </>
+            ) : data?.currentRun ? (
+              <>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="font-medium">
+                      采集任务 #{data.currentRun.id}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      已发现 {data.currentRun.discoveredCount ?? 0} 个游戏
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setLogTask({
+                          taskType: "crawl",
+                          id: data.currentRun.id,
+                          status: data.currentRun.status,
+                        })
+                      }
+                    >
+                      <ScrollText className="h-3.5 w-3.5" />
+                      查看日志
+                    </Button>
+                    <StatusBadge status={data.currentRun.status} />
+                  </div>
+                </div>
+                <SegmentedProgress
+                  success={data.currentRun.detailSucceeded}
+                  skipped={data.currentRun.detailSkipped}
+                  failed={data.currentRun.detailFailed}
+                  total={data.currentRun.discoveredCount}
+                  label="采集任务进度"
+                />
               </>
             ) : (
               <EmptyState
@@ -643,19 +912,76 @@ function DashboardPage({ notify }) {
           </CardContent>
         </Card>
       </div>
+      <TaskLogDialog
+        task={logTask}
+        open={Boolean(logTask)}
+        onOpenChange={(open) => {
+          if (!open) setLogTask(null);
+        }}
+      />
     </>
   );
 }
 
-function TaskProgress({ schedule }) {
+function TaskProgress({ schedule, crawlRun, onViewLogs }) {
   const progress = schedule?.sync?.progress;
-  if (!progress) return null;
+  if (!progress && !crawlRun) return null;
+  if (!progress) {
+    return (
+      <Card className="border-blue-200 bg-blue-50/40">
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle>采集任务 #{crawlRun.id}</CardTitle>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onViewLogs(crawlRun)}
+              >
+                <ScrollText className="h-3.5 w-3.5" />
+                查看日志
+              </Button>
+              <StatusBadge status={crawlRun.status} />
+            </div>
+          </div>
+          <CardDescription>
+            已发现 {crawlRun.discoveredCount ?? 0} 个游戏
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SegmentedProgress
+            success={crawlRun.detailSucceeded}
+            skipped={crawlRun.detailSkipped}
+            failed={crawlRun.detailFailed}
+            total={crawlRun.discoveredCount}
+            label="采集任务进度"
+          />
+        </CardContent>
+      </Card>
+    );
+  }
   return (
     <Card className="border-blue-200 bg-blue-50/40">
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <CardTitle>同步任务 #{progress.runId}</CardTitle>
-          <StatusBadge status="running" />
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                onViewLogs({
+                  taskType: "sync",
+                  id: progress.runId,
+                  status: "running",
+                })
+              }
+            >
+              <ScrollText className="h-3.5 w-3.5" />
+              查看日志
+            </Button>
+            <StatusBadge status="running" />
+          </div>
         </div>
         <CardDescription>{progress.currentTitle ?? "正在准备"}</CardDescription>
       </CardHeader>
@@ -667,23 +993,27 @@ function TaskProgress({ schedule }) {
               {progress.materialCompleted ?? 0}/{progress.materialTotal ?? 0}
             </span>
           </div>
-          <Progress
-            value={progress.materialCompleted}
-            max={progress.materialTotal}
+          <SegmentedProgress
+            success={progress.materialSuccess}
+            skipped={progress.materialSkipped}
+            failed={progress.materialFailed}
+            total={progress.materialTotal}
             label="导入素材库进度"
           />
         </div>
         <div className="space-y-2">
           <div className="flex justify-between text-xs font-medium">
-            <span>发布成功</span>
+            <span>发布商品</span>
             <span className="font-data">
               {progress.publishCompleted ?? 0}/{progress.publishTotal ?? 0}
             </span>
           </div>
-          <Progress
-            value={progress.publishCompleted}
-            max={progress.publishTotal}
-            label="发布成功进度"
+          <SegmentedProgress
+            success={progress.publishSuccess}
+            skipped={progress.publishSkipped}
+            failed={progress.publishFailed}
+            total={progress.publishTotal}
+            label="发布商品进度"
           />
         </div>
       </CardContent>
@@ -696,6 +1026,7 @@ function TasksPage({ notify }) {
   const [runs, setRuns] = useState([]);
   const [logs, setLogs] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [logTask, setLogTask] = useState(null);
 
   const load = useCallback(async () => {
     const [nextSchedule, nextRuns, nextLogs] = await Promise.all([
@@ -790,7 +1121,13 @@ function TasksPage({ notify }) {
           </>
         }
       />
-      <TaskProgress schedule={schedule} />
+      <TaskProgress
+        schedule={schedule}
+        crawlRun={runs.find(
+          (run) => run.taskType === "crawl" && run.status === "running",
+        )}
+        onViewLogs={setLogTask}
+      />
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
         <Card>
           <CardHeader>
@@ -935,6 +1272,7 @@ function TasksPage({ notify }) {
                 <TableHead>跳过</TableHead>
                 <TableHead>开始时间</TableHead>
                 <TableHead>说明</TableHead>
+                <TableHead className="text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -964,6 +1302,16 @@ function TasksPage({ notify }) {
                   <TableCell>{formatDate(run.startedAt)}</TableCell>
                   <TableCell className="max-w-xs truncate text-muted-foreground">
                     {run.errorSummary ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setLogTask(run)}
+                    >
+                      <ScrollText className="h-3.5 w-3.5" />
+                      日志
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -1001,6 +1349,13 @@ function TasksPage({ notify }) {
           )}
         </CardContent>
       </Card>
+      <TaskLogDialog
+        task={logTask}
+        open={Boolean(logTask)}
+        onOpenChange={(open) => {
+          if (!open) setLogTask(null);
+        }}
+      />
     </>
   );
 }
@@ -1009,6 +1364,7 @@ function ProductConfigPage({ notify }) {
   const [settings, setSettings] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [previewImageFailed, setPreviewImageFailed] = useState(false);
 
   const load = useCallback(async () => {
     setSettings(await api("/api/settings/xianyu"));
@@ -1055,13 +1411,16 @@ function ProductConfigPage({ notify }) {
 
   const preview = useMemo(() => {
     if (!settings) return null;
+    const sample = settings.preview ?? {};
     const values = {
-      title: "赛博朋克 2077 终极版",
-      id: "4121",
-      description: "夜之城开放世界动作角色扮演游戏。",
-      cloud_drives: "百度 / 夸克",
+      title: sample.title ?? "赛博朋克 2077 终极版",
+      id: String(sample.id ?? "4121"),
+      description:
+        sample.description ?? "夜之城开放世界动作角色扮演游戏。",
+      cloud_drives: sample.cloudDrives ?? "百度 / 夸克",
       price: settings.defaultPrice ?? 1,
-      image_url: "https://www.gamer520.com/sample.jpg",
+      image_url:
+        sample.imageUrl ?? "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='450'%3E%3Crect width='100%25' height='100%25' fill='%23e2e8f0'/%3E%3C/svg%3E",
     };
     const render = (template) =>
       String(template ?? "").replace(
@@ -1074,6 +1433,10 @@ function ProductConfigPage({ notify }) {
       image: render(settings.imageTemplate),
     };
   }, [settings]);
+
+  useEffect(() => {
+    setPreviewImageFailed(false);
+  }, [preview?.image]);
 
   return (
     <>
@@ -1193,13 +1556,18 @@ function ProductConfigPage({ notify }) {
           <CardContent>
             <div className="overflow-hidden rounded-xl border bg-white">
               <div className="aspect-[16/9] bg-slate-100">
-                {preview?.image ? (
+                {preview?.image && !previewImageFailed ? (
                   <img
                     className="h-full w-full object-cover"
                     src={preview.image}
-                    alt=""
+                    alt={preview.title}
+                    onError={() => setPreviewImageFailed(true)}
                   />
-                ) : null}
+                ) : (
+                  <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
+                    当前图片无法加载，请检查图片模板或游戏图片链接
+                  </div>
+                )}
               </div>
               <div className="p-5">
                 <Badge tone="success">¥ {settings?.defaultPrice ?? 1}</Badge>
@@ -1550,10 +1918,16 @@ function GamesPage({ notify }) {
 }
 
 function ApiKeysPage({ notify }) {
-  const [keys, setKeys] = useState([]);
+  const [xianyu, setXianyu] = useState(null);
+  const [downloadKeys, setDownloadKeys] = useState([]);
+  const [editingXianyu, setEditingXianyu] = useState(false);
+  const [xianyuValue, setXianyuValue] = useState("");
+  const [newKeyName, setNewKeyName] = useState("");
+  const [saving, setSaving] = useState(false);
   const load = useCallback(async () => {
     const payload = await api("/api/admin/api-keys");
-    setKeys(payload.items ?? []);
+    setXianyu(payload.xianyu ?? null);
+    setDownloadKeys(payload.downloadKeys ?? []);
   }, []);
   useEffect(() => {
     void load();
@@ -1564,12 +1938,65 @@ function ApiKeysPage({ notify }) {
     notify("API Key 已复制");
   }
 
+  async function saveXianyuKey() {
+    setSaving(true);
+    try {
+      const payload = await api("/api/admin/api-keys/xianyu", {
+        method: "PUT",
+        body: jsonBody({ api_key: xianyuValue }),
+      });
+      setXianyu((current) => ({
+        ...current,
+        configured: true,
+        maskedValue: payload.maskedValue,
+      }));
+      setXianyuValue("");
+      setEditingXianyu(false);
+      notify("闲鱼 API Key 已保存并验证");
+      await load();
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addDownloadKey() {
+    setSaving(true);
+    try {
+      await api("/api/admin/api-keys/download", {
+        method: "POST",
+        body: jsonBody({ name: newKeyName }),
+      });
+      setNewKeyName("");
+      notify("Gamer520 API Key 已生成");
+      await load();
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteDownloadKey(id) {
+    try {
+      await api(
+        `/api/admin/api-keys/download/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      );
+      notify("Gamer520 API Key 已删除");
+      await load();
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    }
+  }
+
   return (
     <>
       <PageHeading
         eyebrow="Credentials"
         title="API Key 管理"
-        description="仅管理员登录会话可以查看。Key 按要求明文展示，请勿通过聊天或截图传播。"
+        description="闲鱼 Key 保存后脱敏展示；Gamer520 下载接口 Key 可新增、删除并按要求明文展示。"
         actions={
           <Button variant="outline" onClick={load}>
             <RefreshCw className="h-4 w-4" />
@@ -1577,42 +2004,142 @@ function ApiKeysPage({ notify }) {
           </Button>
         }
       />
-      <div className="grid gap-5 xl:grid-cols-2">
-        {keys.map((item) => (
-          <Card key={item.id}>
-            <CardHeader>
-              <div className="flex items-center justify-between gap-4">
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-primary">
-                  <KeyRound className="h-5 w-5" />
-                </span>
-                <Badge tone={item.configured ? "success" : "warning"}>
-                  {item.configured ? "已配置" : "未配置"}
-                </Badge>
-              </div>
-              <CardTitle className="pt-3">{item.name}</CardTitle>
-              <CardDescription>{item.description}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-lg border bg-slate-950 p-4 text-slate-100">
-                <code className="font-data block break-all text-xs leading-6">
-                  {item.value || "未配置"}
-                </code>
-              </div>
-              <div className="mt-3 flex gap-2">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-4">
+            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-primary">
+              <KeyRound className="h-5 w-5" />
+            </span>
+            <Badge tone={xianyu?.configured ? "success" : "warning"}>
+              {xianyu?.configured ? "已配置" : "未配置"}
+            </Badge>
+          </div>
+          <CardTitle className="pt-3">闲鱼服务 API Key</CardTitle>
+          <CardDescription>
+            用于账号读取、素材同步和商品发布；提交时会在线验证。
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {editingXianyu ? (
+            <div className="space-y-3">
+              <Input
+                type="password"
+                autoComplete="off"
+                placeholder="输入新的闲鱼 API Key"
+                value={xianyuValue}
+                onChange={(event) => setXianyuValue(event.target.value)}
+              />
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  disabled={saving || !xianyuValue.trim()}
+                  onClick={saveXianyuKey}
+                >
+                  <Save className="h-4 w-4" />
+                  {saving ? "验证并保存中" : "验证并保存"}
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={!item.value}
+                  onClick={() => {
+                    setEditingXianyu(false);
+                    setXianyuValue("");
+                  }}
+                >
+                  取消
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="rounded-lg border bg-slate-950 p-4 text-slate-100">
+                <code className="font-data block break-all text-xs leading-6">
+                  {xianyu?.maskedValue || "未配置"}
+                </code>
+              </div>
+              <Button
+                className="mt-3"
+                variant="outline"
+                size="sm"
+                onClick={() => setEditingXianyu(true)}
+              >
+                <RefreshCw className="h-4 w-4" />
+                {xianyu?.configured ? "更换 Key" : "配置 Key"}
+              </Button>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mt-5">
+        <CardHeader>
+          <CardTitle>Gamer520 API Key</CardTitle>
+          <CardDescription>
+            用于调用 /api/download-sources；每个 Key 独立生效并明文展示。
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Input
+              placeholder="新 Key 名称，例如：闲鱼自动发货"
+              value={newKeyName}
+              onChange={(event) => setNewKeyName(event.target.value)}
+            />
+            <Button
+              disabled={saving || !newKeyName.trim()}
+              onClick={addDownloadKey}
+            >
+              <Plus className="h-4 w-4" />
+              新增 Key
+            </Button>
+          </div>
+          <div className="mt-5 space-y-3">
+            {downloadKeys.map((item) => (
+              <div
+                key={item.id}
+                className="rounded-lg border bg-white p-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-medium">{item.name}</p>
+                    <p className="font-data mt-1 text-[10px] text-muted-foreground">
+                      创建于 {formatDate(item.createdAt)}
+                    </p>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => deleteDownloadKey(item.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    删除
+                  </Button>
+                </div>
+                <div className="mt-3 rounded-lg bg-slate-950 p-4 text-slate-100">
+                  <code className="font-data block break-all text-xs leading-6">
+                    {item.value}
+                  </code>
+                </div>
+                <Button
+                  className="mt-3"
+                  variant="outline"
+                  size="sm"
                   onClick={() => copy(item.value)}
                 >
                   <Copy className="h-4 w-4" />
                   复制
                 </Button>
               </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            ))}
+            {!downloadKeys.length ? (
+              <EmptyState
+                title="还没有 Gamer520 API Key"
+                description="输入用途名称后生成第一个 Key。"
+              />
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
       <Card className="mt-5 border-amber-200 bg-amber-50/60">
         <CardContent className="flex gap-3 p-5 text-sm text-amber-900">
           <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0" />

@@ -384,6 +384,7 @@ test("每导入 20 个素材后立即发布并保持最多 4 个并行", async (
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const storedRun = checkedDatabase.queryOne(
       `SELECT
+         id,
          selected_count,
          processed_count,
          current_game_id,
@@ -400,6 +401,11 @@ test("每导入 20 个素材后立即发布并保持最多 4 个并行", async (
        ORDER BY id DESC
        LIMIT 1`,
     );
+    const operationLogs = checkedDatabase.listTaskOperationLogs({
+      taskType: "sync",
+      runId: storedRun.id,
+      limit: 10_000,
+    });
     checkedDatabase.close();
     assert.equal(storedRun.selected_count, 21);
     assert.equal(storedRun.processed_count, 21);
@@ -413,6 +419,18 @@ test("每导入 20 个素材后立即发布并保持最多 4 个并行", async (
     assert.equal(storedRun.publish_processed_count, 21);
     assert.equal(storedRun.batch_count, 2);
     assert.equal(storedRun.requested_limit, 20);
+    assert.ok(operationLogs.length > 21);
+    assert.ok(
+      operationLogs.some(
+        (item) =>
+          item.stage === "publish" &&
+          item.action === "batch-finished",
+      ),
+    );
+    assert.equal(
+      operationLogs.at(-1).action,
+      "finished",
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

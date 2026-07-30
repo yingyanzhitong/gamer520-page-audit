@@ -488,8 +488,56 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.sync_mode, "updated");
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      9,
+      10,
     );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("任务操作日志和服务 Key 持久化并支持增删", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-task-log-test-"),
+  );
+  const database = new CrawlerDatabase(
+    path.join(directory, "test.sqlite"),
+  );
+  try {
+    const timestamp = "2026-07-30T00:00:00.000Z";
+    const runId = database.startRun("test", timestamp, {});
+    database.recordTaskLog({
+      taskType: "crawl",
+      runId,
+      gameId: 118842,
+      level: "success",
+      stage: "detail",
+      action: "saved",
+      message: "详情保存成功",
+      details: { downloadCount: 2 },
+      createdAt: timestamp,
+    });
+    const logs = database.listTaskOperationLogs({
+      taskType: "crawl",
+      runId,
+    });
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].game_id, 118842);
+    assert.deepEqual(JSON.parse(logs[0].detail_json), {
+      downloadCount: 2,
+    });
+
+    database.setXianyuApiKey("xyk-test-value", timestamp);
+    assert.equal(database.getXianyuApiKey(), "xyk-test-value");
+    database.addDownloadApiKey({
+      id: "key-1",
+      name: "测试调用方",
+      apiKey: "g5k-test-value",
+      createdAt: timestamp,
+    });
+    assert.equal(database.listDownloadApiKeys().length, 1);
+    assert.equal(database.deleteDownloadApiKey("key-1"), true);
+    assert.equal(database.listDownloadApiKeys().length, 0);
   } finally {
     database.close();
     fs.rmSync(directory, { recursive: true, force: true });

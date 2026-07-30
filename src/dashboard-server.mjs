@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { createHash, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
+import { cacheCoverImage } from "./cover-cache.mjs";
 import {
   CrawlerDatabase,
   VALID_GAME_DATA_CONDITION,
@@ -223,16 +229,26 @@ function keyMatches(provided, expected) {
 
 function requireKey(request, response, expected, headerName) {
   if (request.adminAuthenticated) return true;
-  if (!expected) {
+  const expectedKeys = (Array.isArray(expected) ? expected : [expected]).filter(
+    Boolean,
+  );
+  if (expectedKeys.length === 0) {
     sendError(response, 503, `${headerName} 尚未在服务器配置`);
     return false;
   }
   const provided = request.headers[headerName.toLowerCase()];
-  if (!keyMatches(provided, expected)) {
+  if (!expectedKeys.some((expectedKey) => keyMatches(provided, expectedKey))) {
     sendError(response, 401, "API Key 无效");
     return false;
   }
   return true;
+}
+
+function maskApiKey(value) {
+  const key = String(value ?? "").trim();
+  if (!key) return "";
+  if (key.length <= 12) return `${key.slice(0, 3)}••••${key.slice(-2)}`;
+  return `${key.slice(0, 8)}••••••••${key.slice(-4)}`;
 }
 
 function requireAdmin(request, response, config) {
@@ -690,7 +706,7 @@ function listSyncRuns(database, requestUrl) {
     .map(mapSyncRun);
 }
 
-function listTaskLogs(database, requestUrl) {
+function listRecentTaskErrors(database, requestUrl) {
   const limit = integerParameter(
     requestUrl.searchParams.get("limit"),
     50,
@@ -753,6 +769,73 @@ function listTaskLogs(database, requestUrl) {
     .slice(0, limit);
 }
 
+function taskOperationLogs(database, requestUrl) {
+  const taskType = requestUrl.searchParams.get("task_type");
+  const runId = Number.parseInt(
+    requestUrl.searchParams.get("run_id") ?? "",
+    10,
+  );
+  const afterId = integerParameter(
+    requestUrl.searchParams.get("after_id"),
+    0,
+    0,
+    Number.MAX_SAFE_INTEGER,
+  );
+  const limit = integerParameter(
+    requestUrl.searchParams.get("limit"),
+    500,
+    1,
+    500,
+  );
+  if (!new Set(["crawl", "sync"]).has(taskType)) {
+    const error = new Error("task_type 必须是 crawl 或 sync");
+    error.statusCode = 422;
+    throw error;
+  }
+  if (!Number.isInteger(runId) || runId <= 0) {
+    const error = new Error("run_id 必须是正整数");
+    error.statusCode = 422;
+    throw error;
+  }
+  const rows = database
+    .prepare(`
+      SELECT *
+      FROM task_operation_logs
+      WHERE task_type = ?
+        AND run_id = ?
+        AND id > ?
+      ORDER BY id ASC
+      LIMIT ?
+    `)
+    .all(taskType, runId, afterId, limit + 1);
+  const hasMore = rows.length > limit;
+  const items = rows.slice(0, limit).map((row) => {
+    let details = null;
+    try {
+      details = row.detail_json ? JSON.parse(row.detail_json) : null;
+    } catch {
+      details = { raw: row.detail_json };
+    }
+    return {
+      id: row.id,
+      taskType: row.task_type,
+      runId: row.run_id,
+      gameId: row.game_id,
+      level: row.level,
+      stage: row.stage,
+      action: row.action,
+      message: row.message,
+      details,
+      createdAt: row.created_at,
+    };
+  });
+  return {
+    items,
+    nextAfterId: items.at(-1)?.id ?? afterId,
+    hasMore,
+  };
+}
+
 function serveStatic(requestUrl, response) {
   const relativePath =
     requestUrl.pathname === "/" ? "index.html" : requestUrl.pathname.slice(1);
@@ -812,6 +895,33 @@ export async function startDashboardServer(
   runtimeState = () => ({}),
   handlers = {},
 ) {
+  const credentialsDatabase = new CrawlerDatabase(config.dbPath);
+  try {
+    const storedXianyuApiKey = credentialsDatabase.getXianyuApiKey(
+      config.xianyuApiKey,
+    );
+    if (
+      storedXianyuApiKey &&
+      !credentialsDatabase.getXianyuApiKey()
+    ) {
+      credentialsDatabase.setXianyuApiKey(
+        storedXianyuApiKey,
+        new Date().toISOString(),
+      );
+    }
+    config.xianyuApiKey = storedXianyuApiKey;
+    if (config.downloadReadApiKey) {
+      credentialsDatabase.ensureDownloadApiKey({
+        id: "environment-default",
+        name: "默认下载 Key",
+        apiKey: config.downloadReadApiKey,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  } finally {
+    credentialsDatabase.close();
+  }
+
   const server = http.createServer(async (request, response) => {
     response.setHeader(
       "content-security-policy",
@@ -933,6 +1043,32 @@ export async function startDashboardServer(
         );
         return;
       }
+      const gameCoverMatch = requestUrl.pathname.match(
+        /^\/api\/games\/(\d+)\/cover$/,
+      );
+      if (request.method === "GET" && gameCoverMatch) {
+        const game = withDatabase(config.dbPath, (database) =>
+          database
+            .prepare("SELECT id, image_url FROM games WHERE id = ?")
+            .get(Number(gameCoverMatch[1])),
+        );
+        if (!game?.image_url) {
+          sendError(response, 404, "该游戏没有可用封面");
+          return;
+        }
+        const cached = await cacheCoverImage({
+          gameId: game.id,
+          imageUrl: game.image_url,
+          cacheDirectory: config.coverCacheDir,
+          publicBaseUrl: config.publicBaseUrl,
+        });
+        response.writeHead(302, {
+          location: new URL(cached.publicUrl).pathname,
+          "cache-control": "no-store",
+        });
+        response.end();
+        return;
+      }
       if (request.method === "GET" && requestUrl.pathname === "/api/runs") {
         sendJson(
           response,
@@ -958,7 +1094,20 @@ export async function startDashboardServer(
           response,
           200,
           withDatabase(config.dbPath, (database) =>
-            listTaskLogs(database, requestUrl),
+            listRecentTaskErrors(database, requestUrl),
+          ),
+        );
+        return;
+      }
+      if (
+        request.method === "GET" &&
+        requestUrl.pathname === "/api/task-logs"
+      ) {
+        sendJson(
+          response,
+          200,
+          withDatabase(config.dbPath, (database) =>
+            taskOperationLogs(database, requestUrl),
           ),
         );
         return;
@@ -974,32 +1123,132 @@ export async function startDashboardServer(
           sendError(response, 403, "仅后台登录会话可以查看明文 Key");
           return;
         }
-        sendJson(response, 200, {
-          items: [
-            {
-              id: "xianyu",
-              name: "闲鱼服务 API Key",
-              description: "用于账号读取、素材同步和商品发布",
-              value: config.xianyuApiKey,
-              configured: Boolean(config.xianyuApiKey),
+        const keySettings = withDatabase(config.dbPath, (database) => {
+          const xianyuApiKey = database
+            .prepare(
+              "SELECT xianyu_api_key, updated_at FROM service_credentials WHERE id = 1",
+            )
+            .get();
+          const downloadKeys = database
+            .prepare(
+              "SELECT id, name, api_key, created_at FROM download_api_keys ORDER BY created_at, id",
+            )
+            .all();
+          return {
+            xianyu: {
+              configured: Boolean(xianyuApiKey?.xianyu_api_key),
+              maskedValue: maskApiKey(xianyuApiKey?.xianyu_api_key),
+              updatedAt: xianyuApiKey?.updated_at ?? null,
             },
-            {
-              id: "download",
-              name: "下载源只读 API Key",
-              description: "用于调用 /api/download-sources",
-              value: config.downloadReadApiKey,
-              configured: Boolean(config.downloadReadApiKey),
-            },
-          ],
+            downloadKeys: downloadKeys.map((item) => ({
+              id: item.id,
+              name: item.name,
+              value: item.api_key,
+              createdAt: item.created_at,
+            })),
+          };
         });
+        sendJson(response, 200, keySettings);
+        return;
+      }
+      if (
+        request.method === "PUT" &&
+        requestUrl.pathname === "/api/admin/api-keys/xianyu"
+      ) {
+        if (dashboardAuthEnabled(config) && !request.dashboardSession) {
+          sendError(response, 403, "仅后台登录会话可以修改闲鱼 API Key");
+          return;
+        }
+        const body = await readJsonBody(request);
+        const apiKey = String(body.api_key ?? "").trim();
+        if (apiKey.length < 16 || apiKey.length > 500) {
+          sendError(response, 422, "闲鱼 API Key 长度必须在 16 到 500 个字符之间");
+          return;
+        }
+        if (!handlers.updateXianyuApiKey) {
+          sendError(response, 503, "闲鱼密钥服务尚未启用");
+          return;
+        }
+        await handlers.updateXianyuApiKey(apiKey);
+        config.xianyuApiKey = apiKey;
+        sendJson(response, 200, {
+          success: true,
+          configured: true,
+          maskedValue: maskApiKey(apiKey),
+        });
+        return;
+      }
+      if (
+        request.method === "POST" &&
+        requestUrl.pathname === "/api/admin/api-keys/download"
+      ) {
+        if (dashboardAuthEnabled(config) && !request.dashboardSession) {
+          sendError(response, 403, "仅后台登录会话可以新增 Gamer520 API Key");
+          return;
+        }
+        const body = await readJsonBody(request);
+        const name = String(body.name ?? "").trim();
+        const apiKey =
+          String(body.api_key ?? "").trim() ||
+          `g5k_${randomBytes(24).toString("base64url")}`;
+        if (!name || name.length > 80) {
+          sendError(response, 422, "Key 名称不能为空且不能超过 80 个字符");
+          return;
+        }
+        if (apiKey.length < 16 || apiKey.length > 500) {
+          sendError(response, 422, "API Key 长度必须在 16 到 500 个字符之间");
+          return;
+        }
+        const item = {
+          id: randomUUID(),
+          name,
+          value: apiKey,
+          createdAt: new Date().toISOString(),
+        };
+        const database = new CrawlerDatabase(config.dbPath);
+        try {
+          database.addDownloadApiKey({
+            id: item.id,
+            name: item.name,
+            apiKey: item.value,
+            createdAt: item.createdAt,
+          });
+        } finally {
+          database.close();
+        }
+        sendJson(response, 201, { success: true, item });
+        return;
+      }
+      const downloadKeyMatch = requestUrl.pathname.match(
+        /^\/api\/admin\/api-keys\/download\/([^/]+)$/,
+      );
+      if (request.method === "DELETE" && downloadKeyMatch) {
+        if (dashboardAuthEnabled(config) && !request.dashboardSession) {
+          sendError(response, 403, "仅后台登录会话可以删除 Gamer520 API Key");
+          return;
+        }
+        const database = new CrawlerDatabase(config.dbPath);
+        let deleted;
+        try {
+          deleted = database.deleteDownloadApiKey(
+            decodeURIComponent(downloadKeyMatch[1]),
+          );
+        } finally {
+          database.close();
+        }
+        if (!deleted) {
+          sendError(response, 404, "API Key 不存在");
+          return;
+        }
+        sendJson(response, 200, { success: true });
         return;
       }
       if (
         request.method === "GET" &&
         requestUrl.pathname === "/api/settings/xianyu"
       ) {
-        const settings = withDatabase(config.dbPath, (database) =>
-          database
+        const settingsPayload = withDatabase(config.dbPath, (database) => {
+          const settings = database
             .prepare(
               `SELECT
                  account_id,
@@ -1011,8 +1260,27 @@ export async function startDashboardServer(
                FROM xianyu_sync_settings
                WHERE id = 1`,
             )
-            .get(),
-        );
+            .get();
+          const preview = database
+            .prepare(`
+              SELECT
+                games.id,
+                games.title,
+                games.description,
+                games.image_url,
+                GROUP_CONCAT(DISTINCT downloads.provider) AS providers
+              FROM games
+              JOIN downloads ON downloads.game_id = games.id
+              WHERE ${VALID_GAME_DATA_CONDITION}
+              GROUP BY games.id
+              ORDER BY games.hot_rank ASC, games.id ASC
+              LIMIT 1
+            `)
+            .get();
+          return { settings, preview };
+        });
+        const settings = settingsPayload.settings;
+        const preview = settingsPayload.preview;
         sendJson(response, 200, {
           accountId: settings?.account_id ?? null,
           defaultPrice: Number(settings?.default_price ?? 1),
@@ -1027,6 +1295,18 @@ export async function startDashboardServer(
             DEFAULT_XIANYU_TEMPLATES.imageTemplate,
           updatedAt: settings?.updated_at ?? null,
           configured: Boolean(settings?.account_id),
+          preview: preview
+            ? {
+                id: preview.id,
+                title: preview.title,
+                description: preview.description,
+                imageUrl: `/api/games/${preview.id}/cover`,
+                cloudDrives: String(preview.providers ?? "")
+                  .split(",")
+                  .filter(Boolean)
+                  .join(" / "),
+              }
+            : null,
           runtime: runtimeState().sync ?? {},
         });
         return;
@@ -1268,14 +1548,15 @@ export async function startDashboardServer(
           sendError(response, 405, "下载源接口仅支持 POST");
           return;
         }
-        if (
-          !requireKey(
-            request,
-            response,
-            config.downloadReadApiKey,
-            "X-API-Key",
-          )
-        ) {
+        const downloadApiKeys = withDatabase(
+          config.dbPath,
+          (database) =>
+            database
+              .prepare("SELECT api_key FROM download_api_keys")
+              .all()
+              .map((item) => item.api_key),
+        );
+        if (!requireKey(request, response, downloadApiKeys, "X-API-Key")) {
           return;
         }
         const body = await readJsonBody(request);

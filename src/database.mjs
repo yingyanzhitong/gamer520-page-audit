@@ -267,13 +267,44 @@ export class CrawlerDatabase {
         started_at TEXT NOT NULL,
         finished_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS task_operation_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_type TEXT NOT NULL
+          CHECK (task_type IN ('crawl', 'sync')),
+        run_id INTEGER NOT NULL,
+        game_id INTEGER,
+        level TEXT NOT NULL DEFAULT 'info'
+          CHECK (level IN ('info', 'success', 'warning', 'error')),
+        stage TEXT NOT NULL,
+        action TEXT NOT NULL,
+        message TEXT NOT NULL,
+        detail_json TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS task_operation_logs_task_idx
+      ON task_operation_logs(task_type, run_id, id);
+
+      CREATE TABLE IF NOT EXISTS service_credentials (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        xianyu_api_key TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS download_api_keys (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        api_key TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+      );
     `);
 
     this.#migrateSchema();
     this.#backfillContentHashes();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 9;");
+    this.database.exec("PRAGMA user_version = 10;");
   }
 
   #migrateSchema() {
@@ -617,6 +648,131 @@ export class CrawlerDatabase {
         errorMessage.slice(0, 4_000),
         createdAt,
       );
+  }
+
+  recordTaskLog({
+    taskType,
+    runId,
+    gameId = null,
+    level = "info",
+    stage,
+    action,
+    message,
+    details = null,
+    createdAt,
+  }) {
+    this.database
+      .prepare(`
+        INSERT INTO task_operation_logs (
+          task_type,
+          run_id,
+          game_id,
+          level,
+          stage,
+          action,
+          message,
+          detail_json,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        taskType,
+        runId,
+        gameId,
+        level,
+        String(stage).slice(0, 100),
+        String(action).slice(0, 100),
+        String(message).slice(0, 4_000),
+        details == null ? null : JSON.stringify(details),
+        createdAt,
+      );
+  }
+
+  listTaskOperationLogs({
+    taskType,
+    runId,
+    afterId = 0,
+    limit = 500,
+  }) {
+    return this.database
+      .prepare(`
+        SELECT *
+        FROM task_operation_logs
+        WHERE task_type = ?
+          AND run_id = ?
+          AND id > ?
+        ORDER BY id ASC
+        LIMIT ?
+      `)
+      .all(taskType, runId, afterId, limit);
+  }
+
+  getXianyuApiKey(fallback = "") {
+    const row = this.database
+      .prepare(
+        "SELECT xianyu_api_key FROM service_credentials WHERE id = 1",
+      )
+      .get();
+    return String(row?.xianyu_api_key ?? fallback ?? "").trim();
+  }
+
+  setXianyuApiKey(apiKey, updatedAt) {
+    this.database
+      .prepare(`
+        INSERT INTO service_credentials (
+          id,
+          xianyu_api_key,
+          updated_at
+        ) VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          xianyu_api_key = excluded.xianyu_api_key,
+          updated_at = excluded.updated_at
+      `)
+      .run(apiKey, updatedAt);
+  }
+
+  ensureDownloadApiKey({ id, name, apiKey, createdAt }) {
+    this.database
+      .prepare(`
+        INSERT OR IGNORE INTO download_api_keys (
+          id,
+          name,
+          api_key,
+          created_at
+        ) VALUES (?, ?, ?, ?)
+      `)
+      .run(id, name, apiKey, createdAt);
+  }
+
+  addDownloadApiKey({ id, name, apiKey, createdAt }) {
+    this.database
+      .prepare(`
+        INSERT INTO download_api_keys (
+          id,
+          name,
+          api_key,
+          created_at
+        ) VALUES (?, ?, ?, ?)
+      `)
+      .run(id, name, apiKey, createdAt);
+  }
+
+  listDownloadApiKeys() {
+    return this.database
+      .prepare(`
+        SELECT id, name, api_key, created_at
+        FROM download_api_keys
+        ORDER BY created_at ASC, id ASC
+      `)
+      .all();
+  }
+
+  deleteDownloadApiKey(id) {
+    return (
+      this.database
+        .prepare("DELETE FROM download_api_keys WHERE id = ?")
+        .run(id).changes > 0
+    );
   }
 
   upsertDiscoveredGames(games, seenAt) {

@@ -158,6 +158,26 @@ export class XianyuSyncService {
       publishBatchSize,
       startedAt,
     );
+    const recordTaskLog = ({
+      gameId = null,
+      level = "info",
+      stage,
+      action,
+      message,
+      details = null,
+    }) => {
+      database.recordTaskLog({
+        taskType: "sync",
+        runId,
+        gameId,
+        level,
+        stage,
+        action,
+        message,
+        details,
+        createdAt: nowIso(),
+      });
+    };
     const totals = {
       material_created: 0,
       material_updated: 0,
@@ -214,19 +234,41 @@ export class XianyuSyncService {
           materialCompleted:
             scopeProgress.materialCompleted +
             totals.material_processed_count,
-          materialSkipped: totals.material_skipped,
+          materialSuccess:
+            totals.material_created +
+            totals.material_updated +
+            totals.material_unchanged,
+          materialSkipped:
+            scopeProgress.materialCompleted +
+            totals.material_skipped,
+          materialFailed: totals.material_failed,
           publishTotal: scopeProgress.total,
           publishCompleted:
             scopeProgress.publishCompleted +
-            totals.publish_success,
+            totals.publish_processed_count,
+          publishSuccess: totals.publish_success,
+          publishSkipped: scopeProgress.publishCompleted,
+          publishFailed: totals.publish_failed,
         });
       } catch {
         // 页面进度回调不能影响同步任务本身。
       }
     };
     const refreshAccountItems = async () => {
+      recordTaskLog({
+        stage: "account",
+        action: "refresh-items",
+        message: `正在刷新账号 ${accountId} 的商品列表`,
+      });
       await this.client.refreshAccountItems(accountId);
       knownAccountItems = await this.client.listAccountItems(accountId);
+      recordTaskLog({
+        level: "success",
+        stage: "account",
+        action: "items-refreshed",
+        message: `账号商品列表刷新成功，共读取 ${knownAccountItems.length} 个商品`,
+        details: { itemCount: knownAccountItems.length },
+      });
       return knownAccountItems;
     };
     const bindDeliveryCard = async (candidate, itemId) => {
@@ -236,6 +278,17 @@ export class XianyuSyncService {
         currentGameId: candidate.id,
         currentTitle: candidate.title,
         phase: "binding-card",
+      });
+      recordTaskLog({
+        gameId: candidate.id,
+        stage: "card",
+        action: "bind",
+        message: `正在为闲鱼商品 ${itemId} 关联卡券 #${deliveryCardId}`,
+        details: {
+          itemId: String(itemId),
+          cardId: deliveryCardId,
+          itemTitle: listingFor(candidate).title,
+        },
       });
       try {
         const result = await this.client.bindCards({
@@ -255,6 +308,14 @@ export class XianyuSyncService {
           updatedAt: boundAt,
         });
         totals.card_bound += 1;
+        recordTaskLog({
+          gameId: candidate.id,
+          level: "success",
+          stage: "card",
+          action: "bound",
+          message: `闲鱼商品 ${itemId} 已成功关联卡券 #${deliveryCardId}`,
+          details: { itemId: String(itemId), cardId: deliveryCardId },
+        });
         return true;
       } catch (error) {
         database.markCardBindingResult({
@@ -266,12 +327,49 @@ export class XianyuSyncService {
           updatedAt: nowIso(),
         });
         totals.card_bind_failed += 1;
+        recordTaskLog({
+          gameId: candidate.id,
+          level: "error",
+          stage: "card",
+          action: "failed",
+          message: `闲鱼商品 ${itemId} 关联卡券失败：${error.message}`,
+          details: { itemId: String(itemId), cardId: deliveryCardId },
+        });
         return false;
       }
     };
+    recordTaskLog({
+      stage: "task",
+      action: "start",
+      message: `同步任务已启动，范围为 ${mode}`,
+      details: {
+        trigger,
+        mode,
+        accountId,
+        materialConcurrency: materialSyncConcurrency,
+        publishBatchSize,
+        requestedGameIds: Array.isArray(gameIds) ? gameIds : null,
+      },
+    });
     try {
       await control?.checkpoint();
-      await this.validateAccount(accountId);
+      recordTaskLog({
+        stage: "account",
+        action: "validate",
+        message: `正在验证发布账号 ${accountId}`,
+      });
+      const account = await this.validateAccount(accountId);
+      recordTaskLog({
+        level: "success",
+        stage: "account",
+        action: "validated",
+        message: `发布账号 ${accountId} 验证成功`,
+        details: {
+          accountId,
+          remark: account.remark ?? null,
+          enabled: account.enabled,
+        },
+      });
       await control?.checkpoint();
       candidates = database.listSyncCandidates(
         accountId,
@@ -296,6 +394,18 @@ export class XianyuSyncService {
       database.updateSyncRun(runId, {
         selected_count: candidates.length,
       });
+      recordTaskLog({
+        level: "success",
+        stage: "selection",
+        action: "completed",
+        message: `候选商品筛选完成，本轮处理 ${candidates.length} 个，有效范围共 ${scopeProgress.total} 个`,
+        details: {
+          candidateCount: candidates.length,
+          scopeTotal: scopeProgress.total,
+          existingMaterialCount: scopeProgress.materialCompleted,
+          existingPublishedCount: scopeProgress.publishCompleted,
+        },
+      });
       reportProgress({
         total: candidates.length,
         completed: 0,
@@ -306,6 +416,13 @@ export class XianyuSyncService {
         database.updateSyncRun(runId, {
           status: "success",
           finished_at: nowIso(),
+        });
+        recordTaskLog({
+          level: "success",
+          stage: "task",
+          action: "finished",
+          message: "没有需要同步的商品，任务直接完成",
+          details: { status: "success", selectedCount: 0 },
         });
         return {
           runId,
@@ -340,9 +457,31 @@ export class XianyuSyncService {
           Number.isInteger(existingMaterialId) &&
           existingMaterialId > 0
         ) {
+          recordTaskLog({
+            gameId: candidate.id,
+            level: "warning",
+            stage: "material",
+            action: "skipped-existing",
+            message: `游戏 ${candidate.id} 已有关联素材 ${existingMaterialId}，跳过素材导入`,
+            details: {
+              title: candidate.title,
+              materialId: existingMaterialId,
+            },
+          });
           return { candidate, existingMaterialId };
         }
         const listing = listingFor(candidate);
+        recordTaskLog({
+          gameId: candidate.id,
+          stage: "material",
+          action: "prepare",
+          message: `正在准备游戏 ${candidate.id} 的素材`,
+          details: {
+            title: listing.title,
+            price: Number(candidate.effective_price),
+            imageUrl: listing.imageUrl,
+          },
+        });
         const payload = {
           external_id: String(candidate.id),
           content_hash: candidate.sync_content_hash,
@@ -364,6 +503,12 @@ export class XianyuSyncService {
             await control?.checkpoint();
             let coverUrl = listing.imageUrl;
             if (this.config.coverCacheEnabled !== false) {
+              recordTaskLog({
+                gameId: candidate.id,
+                stage: "cover",
+                action: "cache",
+                message: `正在缓存游戏 ${candidate.id} 的封面`,
+              });
               const cachedCover = await this.cacheCover({
                 gameId: candidate.id,
                 imageUrl: listing.imageUrl,
@@ -371,8 +516,29 @@ export class XianyuSyncService {
                 publicBaseUrl: this.config.publicBaseUrl,
               });
               coverUrl = cachedCover.publicUrl;
+              recordTaskLog({
+                gameId: candidate.id,
+                level: "success",
+                stage: "cover",
+                action: cachedCover.cached ? "reused" : "cached",
+                message: cachedCover.cached
+                  ? `游戏 ${candidate.id} 复用已缓存封面`
+                  : `游戏 ${candidate.id} 封面缓存成功`,
+                details: { coverUrl },
+              });
             }
             payload.images = [coverUrl];
+            recordTaskLog({
+              gameId: candidate.id,
+              stage: "material",
+              action: "upsert",
+              message: `正在写入游戏 ${candidate.id} 的闲鱼素材`,
+              details: {
+                title: payload.title,
+                price: payload.price,
+                imageCount: payload.images.length,
+              },
+            });
             const results = await this.client.upsertMaterials([payload]);
             const result = results.find(
               (item) =>
@@ -381,6 +547,22 @@ export class XianyuSyncService {
             if (!result) {
               throw new Error("闲鱼素材接口未返回该商品结果");
             }
+            recordTaskLog({
+              gameId: candidate.id,
+              level:
+                result.action === "skipped" ? "warning" : "success",
+              stage: "material",
+              action: result.action ?? "upserted",
+              message:
+                result.action === "skipped"
+                  ? `游戏 ${candidate.id} 的同名素材已存在，跳过导入`
+                  : `游戏 ${candidate.id} 素材写入成功：${result.action ?? "完成"}`,
+              details: {
+                materialId: result.material_id ?? null,
+                action: result.action ?? null,
+                reason: result.reason ?? null,
+              },
+            });
             return result;
           });
         titleLocks.set(titleKey, operation);
@@ -388,6 +570,14 @@ export class XianyuSyncService {
         try {
           return { candidate, result: await operation };
         } catch (error) {
+          recordTaskLog({
+            gameId: candidate.id,
+            level: "error",
+            stage: "material",
+            action: "failed",
+            message: `游戏 ${candidate.id} 素材同步失败：${error.message}`,
+            details: { title: candidate.title },
+          });
           return { candidate, error };
         } finally {
           if (titleLocks.get(titleKey) === operation) {
@@ -399,6 +589,15 @@ export class XianyuSyncService {
       const publishEntries = async (entries) => {
         const firstCandidate = entries[0].candidate;
         await control?.checkpoint();
+        recordTaskLog({
+          stage: "publish",
+          action: "prepare-batch",
+          message: `正在准备第 ${totals.batch_count + 1} 个发布批次，共 ${entries.length} 个商品`,
+          details: {
+            gameIds: entries.map((entry) => entry.candidate.id),
+            materialIds: entries.map((entry) => entry.materialId),
+          },
+        });
         if (knownAccountItems === null) {
           await refreshAccountItems();
         }
@@ -424,14 +623,43 @@ export class XianyuSyncService {
         let recoveredStatus = null;
         let submissionUncertain = false;
         try {
+          recordTaskLog({
+            stage: "publish",
+            action: "submit",
+            message: `正在提交批量发布请求，共 ${entries.length} 个商品`,
+            details: { requestId, materialIds, accountId },
+          });
           batch = await this.client.publishBatch({
             accountId,
             materialIds,
             requestId,
           });
+          recordTaskLog({
+            level: "success",
+            stage: "publish",
+            action: "submitted",
+            message: `批量发布请求提交成功，批次 ${batch.batch_id ?? requestId}`,
+            details: {
+              requestId,
+              batchId: batch.batch_id ?? requestId,
+              itemCount: entries.length,
+              idempotentReplay: Boolean(batch.idempotent_replay),
+            },
+          });
         } catch (submissionError) {
           const statusCode = Number(submissionError.status);
           if ([400, 409, 422].includes(statusCode)) {
+            recordTaskLog({
+              level: "error",
+              stage: "publish",
+              action: "rejected",
+              message: `批量发布请求被拒绝：${submissionError.message}`,
+              details: {
+                requestId,
+                statusCode,
+                itemCount: entries.length,
+              },
+            });
             const failedAt = nowIso();
             latestBatchId = requestId;
             for (const entry of entries) {
@@ -473,9 +701,23 @@ export class XianyuSyncService {
           try {
             recoveredStatus = await this.client.getBatchStatus(requestId);
             batch = { batch_id: requestId, idempotent_replay: true };
+            recordTaskLog({
+              level: "warning",
+              stage: "publish",
+              action: "recovered",
+              message: `发布请求响应异常，但已通过幂等请求号恢复批次 ${requestId}`,
+              details: { requestId },
+            });
           } catch {
             batch = { batch_id: requestId };
             submissionUncertain = true;
+            recordTaskLog({
+              level: "error",
+              stage: "publish",
+              action: "unknown",
+              message: `发布请求结果未知，无法确认批次 ${requestId}`,
+              details: { requestId },
+            });
           }
         }
 
@@ -520,6 +762,13 @@ export class XianyuSyncService {
             error_summary: "发布请求结果未知，已停止后续批次和自动重试",
             finished_at: unknownAt,
           });
+          recordTaskLog({
+            level: "error",
+            stage: "task",
+            action: "stopped-unknown",
+            message: "发布请求结果未知，任务已停止，避免自动重复发布",
+            details: { batchId, itemCount: entries.length },
+          });
           return {
             terminalResult: {
               runId,
@@ -535,10 +784,27 @@ export class XianyuSyncService {
 
         const deadline = Date.now() + this.config.syncBatchTimeoutMs;
         let status = recoveredStatus;
+        let lastLoggedProgress = null;
         while (Date.now() < deadline) {
           await control?.checkpoint();
           if (!status) {
             status = await this.client.getBatchStatus(batchId);
+          }
+          const statusProgress = `${status.status ?? ""}:${status.processed_count ?? status.processed ?? ""}:${status.done ?? status.finished ?? false}`;
+          if (statusProgress !== lastLoggedProgress) {
+            lastLoggedProgress = statusProgress;
+            recordTaskLog({
+              stage: "publish",
+              action: "poll",
+              message: `批次 ${batchId} 状态：${status.status ?? (status.done || status.finished ? "已完成" : "处理中")}`,
+              details: {
+                batchId,
+                status: status.status ?? null,
+                processedCount:
+                  status.processed_count ?? status.processed ?? null,
+                done: Boolean(status.done || status.finished),
+              },
+            });
           }
           if (status.done || status.finished) break;
           await delay(this.config.syncPollIntervalMs);
@@ -563,6 +829,13 @@ export class XianyuSyncService {
             error_summary: "批量发布结果未知，已停止后续批次和自动重试",
             finished_at: unknownAt,
           });
+          recordTaskLog({
+            level: "error",
+            stage: "publish",
+            action: "timeout",
+            message: `批次 ${batchId} 超过等待时限，任务已停止`,
+            details: { batchId, itemCount: entries.length },
+          });
           return {
             terminalResult: {
               runId,
@@ -586,8 +859,26 @@ export class XianyuSyncService {
             afterItems,
             listingFor,
           );
+          recordTaskLog({
+            level: "success",
+            stage: "publish",
+            action: "reconciled",
+            message: `批次 ${batchId} 已核对账号商品列表，匹配 ${reconciledItems.size} 个新商品`,
+            details: {
+              batchId,
+              matchedCount: reconciledItems.size,
+              submittedCount: entries.length,
+            },
+          });
         } catch (error) {
           reconciliationError = error;
+          recordTaskLog({
+            level: "error",
+            stage: "publish",
+            action: "reconcile-failed",
+            message: `批次 ${batchId} 商品编号核对失败：${error.message}`,
+            details: { batchId },
+          });
         }
 
         const statusByMaterial = new Map();
@@ -645,6 +936,27 @@ export class XianyuSyncService {
             errorMessage,
             updatedAt: completedAt,
           });
+          recordTaskLog({
+            gameId: entry.candidate.id,
+            level:
+              itemStatus === "success"
+                ? "success"
+                : itemStatus === "unknown"
+                  ? "warning"
+                  : "error",
+            stage: "publish",
+            action: itemStatus,
+            message:
+              itemStatus === "success"
+                ? `游戏 ${entry.candidate.id} 发布成功，闲鱼商品编号 ${itemId}`
+                : `游戏 ${entry.candidate.id} 发布${itemStatus === "unknown" ? "结果待确认" : "失败"}：${errorMessage}`,
+            details: {
+              batchId,
+              materialId: entry.materialId,
+              itemId: itemId || null,
+              errorMessage,
+            },
+          });
           if (itemStatus === "success" && itemId) {
             successfulItems.push({
               candidate: entry.candidate,
@@ -680,6 +992,19 @@ export class XianyuSyncService {
           total: candidates.length,
           completed: processedCount,
           phase: "processing",
+        });
+        recordTaskLog({
+          level:
+            batchFailed > 0 || batchUnknown > 0 ? "warning" : "success",
+          stage: "publish",
+          action: "batch-finished",
+          message: `批次 ${batchId} 完成：成功 ${batchSuccess}，失败 ${batchFailed}，待确认 ${batchUnknown}`,
+          details: {
+            batchId,
+            success: batchSuccess,
+            failed: batchFailed,
+            unknown: batchUnknown,
+          },
         });
 
         if (batchUnknown > 0) {
@@ -757,6 +1082,14 @@ export class XianyuSyncService {
             );
             totals.material_failed += 1;
             processedCount += 1;
+            recordTaskLog({
+              gameId: candidate.id,
+              level: "error",
+              stage: "material",
+              action: "invalid-result",
+              message: `游戏 ${candidate.id} 素材接口没有返回有效 material_id`,
+              details: { resultAction: result.action ?? null },
+            });
             continue;
           }
 
@@ -787,6 +1120,21 @@ export class XianyuSyncService {
             candidate.publication_status === "success" ||
             result.action === "skipped"
           ) {
+            recordTaskLog({
+              gameId: candidate.id,
+              level: "warning",
+              stage: "publish",
+              action: "skipped",
+              message:
+                candidate.publication_status === "success"
+                  ? `游戏 ${candidate.id} 已发布，跳过重复发布`
+                  : `游戏 ${candidate.id} 使用已有同名素材，按规则跳过发布`,
+              details: {
+                publicationStatus: candidate.publication_status,
+                materialAction: result.action,
+                itemId: candidate.publication_item_id ?? null,
+              },
+            });
             if (
               candidate.publication_status === "success" &&
               candidate.publication_item_id &&
@@ -884,6 +1232,35 @@ export class XianyuSyncService {
             : null,
         finished_at: finishedAt,
       });
+      recordTaskLog({
+        level: finalStatus === "success" ? "success" : "warning",
+        stage: "task",
+        action: "finished",
+        message: `同步任务完成：素材成功 ${totals.material_created + totals.material_updated + totals.material_unchanged}，已有跳过 ${scopeProgress.materialCompleted + totals.material_skipped}，素材失败 ${totals.material_failed}，发布成功 ${totals.publish_success}，发布失败 ${totals.publish_failed}`,
+        details: {
+          status: finalStatus,
+          selectedCount: candidates.length,
+          material: {
+            created: totals.material_created,
+            updated: totals.material_updated,
+            unchanged: totals.material_unchanged,
+            skipped:
+              scopeProgress.materialCompleted +
+              totals.material_skipped,
+            failed: totals.material_failed,
+          },
+          publish: {
+            skipped: scopeProgress.publishCompleted,
+            submitted: totals.publish_submitted,
+            success: totals.publish_success,
+            failed: totals.publish_failed,
+          },
+          card: {
+            success: totals.card_bound,
+            failed: totals.card_bind_failed,
+          },
+        },
+      });
       reportProgress({
         total: candidates.length,
         completed: processedCount,
@@ -927,6 +1304,16 @@ export class XianyuSyncService {
           error_summary: "批量发布已提交但结果查询失败，需人工确认",
           finished_at: unknownAt,
         });
+        recordTaskLog({
+          level: "error",
+          stage: "task",
+          action: "stopped-unknown",
+          message: `批次状态查询失败，已将批次 ${submittedPublication.batchId} 标记为待确认：${error.message}`,
+          details: {
+            batchId: submittedPublication.batchId,
+            itemCount: submittedPublication.candidates.length,
+          },
+        });
         return {
           runId,
           accountId,
@@ -947,6 +1334,13 @@ export class XianyuSyncService {
         processed_count: processedCount,
         error_summary: JSON.stringify(serializeError(error)).slice(0, 4_000),
         finished_at: nowIso(),
+      });
+      recordTaskLog({
+        level: "error",
+        stage: "task",
+        action: "failed",
+        message: `同步任务失败：${error.message}`,
+        details: serializeError(error),
       });
       throw error;
     } finally {

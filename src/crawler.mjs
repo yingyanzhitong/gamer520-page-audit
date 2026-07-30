@@ -83,6 +83,26 @@ export async function runCrawl({
     startedAt,
     publicConfig(config),
   );
+  const recordTaskLog = ({
+    gameId = null,
+    level = "info",
+    stage,
+    action,
+    message,
+    details = null,
+  }) => {
+    database.recordTaskLog({
+      taskType: "crawl",
+      runId,
+      gameId,
+      level,
+      stage,
+      action,
+      message,
+      details,
+      createdAt: nowIso(),
+    });
+  };
   let browser;
   let fatalError = null;
   let abortReason = null;
@@ -92,10 +112,36 @@ export async function runCrawl({
     trigger,
     config: publicConfig(config),
   });
+  recordTaskLog({
+    stage: "task",
+    action: "start",
+    message: `采集任务已启动，将读取前 ${config.pageCount} 页`,
+    details: {
+      trigger,
+      pageCount: config.pageCount,
+      detailConcurrency: config.detailConcurrency,
+      maxRetries: config.maxRetries,
+    },
+  });
 
   try {
     await control?.checkpoint();
+    recordTaskLog({
+      stage: "browser",
+      action: "launch",
+      message: "正在启动采集浏览器",
+      details: {
+        channel: config.playwrightChannel,
+        headless: config.headless,
+      },
+    });
     browser = await launchBrowser(config);
+    recordTaskLog({
+      level: "success",
+      stage: "browser",
+      action: "launched",
+      message: "采集浏览器启动成功",
+    });
     const listContext = await createCrawlerContext(browser);
     const discovered = new Map();
 
@@ -103,8 +149,14 @@ export async function runCrawl({
       for (let pageNumber = 1; pageNumber <= config.pageCount; pageNumber += 1) {
         await control?.checkpoint();
         const pageUrl = buildListPageUrl(config.listUrl, pageNumber);
+        recordTaskLog({
+          stage: "list",
+          action: "request",
+          message: `开始读取列表第 ${pageNumber} 页`,
+          details: { pageNumber, pageUrl },
+        });
         try {
-          const { value: items } = await runWithRetry(
+          const { value: items, attemptCount } = await runWithRetry(
             () =>
               discoverListPage(
                 listContext,
@@ -118,6 +170,13 @@ export async function runCrawl({
           statistics.listPagesSucceeded += 1;
 
           if (items.length === 0) {
+            recordTaskLog({
+              level: "warning",
+              stage: "list",
+              action: "exhausted",
+              message: `列表第 ${pageNumber} 页没有商品，提前结束列表采集`,
+              details: { pageNumber, pageUrl, attemptCount },
+            });
             log("list_exhausted", { runId, pageNumber, pageUrl });
             break;
           }
@@ -133,6 +192,18 @@ export async function runCrawl({
             runId,
             pageNumber,
             itemCount: items.length,
+          });
+          recordTaskLog({
+            level: "success",
+            stage: "list",
+            action: "succeeded",
+            message: `列表第 ${pageNumber} 页读取成功，发现 ${items.length} 个商品`,
+            details: {
+              pageNumber,
+              itemCount: items.length,
+              discoveredCount: discovered.size,
+              attemptCount,
+            },
           });
         } catch (error) {
           statistics.listPagesFailed += 1;
@@ -150,6 +221,19 @@ export async function runCrawl({
             runId,
             pageNumber,
             error: serialized,
+          });
+          recordTaskLog({
+            level: "error",
+            stage: "list",
+            action: "failed",
+            message: `列表第 ${pageNumber} 页读取失败：${serialized.message}`,
+            details: {
+              pageNumber,
+              pageUrl,
+              attemptCount:
+                error.attemptCount ?? config.maxRetries + 1,
+              errorName: serialized.name,
+            },
           });
         }
 
@@ -170,6 +254,17 @@ export async function runCrawl({
     statistics.discoveredCount = queue.length;
     database.upsertDiscoveredGames(queue, startedAt);
     database.updateRunProgress(runId, statistics);
+    recordTaskLog({
+      level: "success",
+      stage: "discovery",
+      action: "saved",
+      message: `列表采集完成，共保存 ${queue.length} 个候选游戏`,
+      details: {
+        listPagesSucceeded: statistics.listPagesSucceeded,
+        listPagesFailed: statistics.listPagesFailed,
+        discoveredCount: queue.length,
+      },
+    });
 
     if (queue.length === 0) {
       throw new Error("热度列表没有发现任何有效游戏");
@@ -179,8 +274,17 @@ export async function runCrawl({
     try {
       for (const batch of chunks(queue, 100)) {
         await control?.checkpoint();
+        recordTaskLog({
+          stage: "metadata",
+          action: "request",
+          message: `正在批量读取 ${batch.length} 个游戏的来源更新时间`,
+          details: {
+            firstGameId: batch[0]?.id ?? null,
+            lastGameId: batch.at(-1)?.id ?? null,
+          },
+        });
         try {
-          const { value: timestamps } = await runWithRetry(
+          const { value: timestamps, attemptCount } = await runWithRetry(
             () =>
               fetchSourceUpdateTimes(
                 metadataContext,
@@ -199,6 +303,17 @@ export async function runCrawl({
             gameCount: batch.length,
             timestampCount: timestamps.size,
           });
+          recordTaskLog({
+            level: "success",
+            stage: "metadata",
+            action: "succeeded",
+            message: `来源更新时间读取成功，${timestamps.size}/${batch.length} 个游戏返回时间`,
+            details: {
+              gameCount: batch.length,
+              timestampCount: timestamps.size,
+              attemptCount,
+            },
+          });
         } catch (error) {
           const serialized = serializeError(error);
           database.recordError({
@@ -214,6 +329,18 @@ export async function runCrawl({
             runId,
             gameCount: batch.length,
             error: serialized,
+          });
+          recordTaskLog({
+            level: "error",
+            stage: "metadata",
+            action: "failed",
+            message: `来源更新时间读取失败：${serialized.message}`,
+            details: {
+              gameCount: batch.length,
+              attemptCount:
+                error.attemptCount ?? config.maxRetries + 1,
+              errorName: serialized.name,
+            },
           });
         }
       }
@@ -240,8 +367,31 @@ export async function runCrawl({
           hotRank: game.hotRank,
           sourceUpdatedAt: game.sourceUpdatedAt,
         });
+        recordTaskLog({
+          gameId: game.id,
+          level: "warning",
+          stage: "detail",
+          action: "skipped",
+          message: `游戏 ${game.id} 来源更新时间未变化，跳过详情采集`,
+          details: {
+            title: game.title,
+            hotRank: game.hotRank,
+            sourceUpdatedAt: game.sourceUpdatedAt,
+          },
+        });
       } else {
         detailQueue.push(game);
+        recordTaskLog({
+          gameId: game.id,
+          stage: "detail",
+          action: "queued",
+          message: `游戏 ${game.id} 已加入详情采集队列`,
+          details: {
+            title: game.title,
+            hotRank: game.hotRank,
+            sourceUpdatedAt: game.sourceUpdatedAt,
+          },
+        });
       }
     }
     database.updateRunProgress(runId, statistics);
@@ -261,6 +411,17 @@ export async function runCrawl({
 
           const refreshState = database.getGameRefreshState(game.id) ?? {};
           database.markGameAttempt(game.id, nowIso());
+          recordTaskLog({
+            gameId: game.id,
+            stage: "detail",
+            action: "request",
+            message: `工作线程 ${workerId} 开始采集游戏 ${game.id} 详情`,
+            details: {
+              title: game.title,
+              sourceUrl: game.sourceUrl,
+              hotRank: game.hotRank,
+            },
+          });
           try {
             const { value: result, attemptCount } = await runWithRetry(
               () =>
@@ -288,6 +449,19 @@ export async function runCrawl({
                 attemptCount,
                 sourceUpdatedAt: result.sourceUpdatedAt,
               });
+              recordTaskLog({
+                gameId: game.id,
+                level: "warning",
+                stage: "detail",
+                action: "skipped",
+                message: `游戏 ${game.id} 详情更新时间未变化，保留原数据`,
+                details: {
+                  title: game.title,
+                  workerId,
+                  attemptCount,
+                  sourceUpdatedAt: result.sourceUpdatedAt,
+                },
+              });
               database.updateRunProgress(runId, statistics);
               const delay = randomBetween(
                 config.detailDelayMinMs,
@@ -306,6 +480,20 @@ export async function runCrawl({
               hotRank: game.hotRank,
               attemptCount,
               downloadCount: result.resource.downloads.length,
+            });
+            recordTaskLog({
+              gameId: game.id,
+              level: "success",
+              stage: "detail",
+              action: "succeeded",
+              message: `游戏 ${game.id} 详情采集成功，保存 ${result.resource.downloads.length} 个下载源`,
+              details: {
+                title: result.page.title,
+                workerId,
+                attemptCount,
+                downloadCount: result.resource.downloads.length,
+                imageAvailable: Boolean(result.page.image),
+              },
             });
           } catch (error) {
             statistics.detailFailed += 1;
@@ -332,6 +520,20 @@ export async function runCrawl({
               gameId: game.id,
               hotRank: game.hotRank,
               error: serialized,
+            });
+            recordTaskLog({
+              gameId: game.id,
+              level: "error",
+              stage: "detail",
+              action: "failed",
+              message: `游戏 ${game.id} 详情采集失败：${serialized.message}`,
+              details: {
+                title: game.title,
+                workerId,
+                attemptCount:
+                  error.attemptCount ?? config.maxRetries + 1,
+                errorName: serialized.name,
+              },
             });
 
             if (error instanceof AccessBlockedError) {
@@ -382,6 +584,15 @@ export async function runCrawl({
       runId,
       error: serializeError(error),
     });
+    recordTaskLog({
+      level: "error",
+      stage: "task",
+      action: "failed",
+      message: `采集任务异常终止：${serializeError(error).message}`,
+      details: {
+        errorName: serializeError(error).name,
+      },
+    });
   } finally {
     await browser?.close().catch(() => {});
 
@@ -411,6 +622,22 @@ export async function runCrawl({
       statistics,
       summary,
     );
+    recordTaskLog({
+      level:
+        status === "success"
+          ? "success"
+          : status === "failed"
+            ? "error"
+            : "warning",
+      stage: "task",
+      action: "finished",
+      message: `采集任务已结束：成功 ${statistics.detailSucceeded}，跳过 ${statistics.detailSkipped}，失败 ${statistics.detailFailed}`,
+      details: {
+        status,
+        ...statistics,
+        errorSummary: summary,
+      },
+    });
     database.close();
 
     log("crawl_finished", {

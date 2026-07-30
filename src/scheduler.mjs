@@ -25,7 +25,7 @@ let dashboard;
 let crawlJob = null;
 let syncJob = null;
 let schedulerSettings;
-const syncService = new XianyuSyncService(config);
+let syncService;
 
 function log(event, fields = {}) {
   console.log(
@@ -292,6 +292,28 @@ function updateScheduleSettings(input) {
   return scheduleRuntime();
 }
 
+async function updateXianyuApiKey(apiKey) {
+  if (activeSync) {
+    const error = new Error("同步任务运行中，不能修改闲鱼 API Key");
+    error.statusCode = 409;
+    throw error;
+  }
+  const nextService = new XianyuSyncService({
+    ...config,
+    xianyuApiKey: apiKey,
+  });
+  await nextService.listAccounts();
+  const database = new CrawlerDatabase(config.dbPath);
+  try {
+    database.setXianyuApiKey(apiKey, nowIso());
+  } finally {
+    database.close();
+  }
+  config.xianyuApiKey = apiKey;
+  syncService = nextService;
+  log("xianyu_api_key_updated");
+}
+
 function controlTask(task, action) {
   const control =
     task === "crawl"
@@ -321,6 +343,32 @@ function controlTask(task, action) {
     action,
     interrupted: control.interrupted,
   });
+  const database = new CrawlerDatabase(config.dbPath);
+  try {
+    const runId =
+      task === "sync"
+        ? syncProgress?.runId
+        : database.queryOne(
+            "SELECT id FROM crawl_runs WHERE status = 'running' ORDER BY id DESC LIMIT 1",
+          )?.id;
+    if (runId) {
+      database.recordTaskLog({
+        taskType: task,
+        runId,
+        level: action === "interrupt" ? "warning" : "success",
+        stage: "control",
+        action,
+        message:
+          action === "interrupt"
+            ? "管理员已请求中断任务，任务将在安全检查点暂停"
+            : "管理员已恢复任务执行",
+        details: { interrupted: control.interrupted },
+        createdAt: nowIso(),
+      });
+    }
+  } finally {
+    database.close();
+  }
   return scheduleRuntime();
 }
 
@@ -352,6 +400,12 @@ function scheduleRuntime() {
 
 const database = new CrawlerDatabase(config.dbPath);
 database.markInterruptedRuns(nowIso());
+config.xianyuApiKey = database.getXianyuApiKey(
+  config.xianyuApiKey,
+);
+if (config.xianyuApiKey && !database.getXianyuApiKey()) {
+  database.setXianyuApiKey(config.xianyuApiKey, nowIso());
+}
 schedulerSettings = settingsFromRow(
   database.getSchedulerSettings(
     {
@@ -366,6 +420,7 @@ schedulerSettings = settingsFromRow(
   ),
 );
 database.close();
+syncService = new XianyuSyncService(config);
 replaceScheduledJobs(schedulerSettings);
 
 dashboard = await startDashboardServer(config, scheduleRuntime, {
@@ -373,6 +428,7 @@ dashboard = await startDashboardServer(config, scheduleRuntime, {
   validateXianyuAccount: (accountId) =>
     syncService.validateAccount(accountId),
   updateScheduleSettings,
+  updateXianyuApiKey,
   triggerCrawl: (reason) => {
     void triggerCrawl(reason);
     return { active: true, mode: "full" };

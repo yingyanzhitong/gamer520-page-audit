@@ -44,7 +44,7 @@ test("后台会话支持签名校验、篡改拒绝和过期失效", () => {
   );
 });
 
-test("后台数据需要登录且 API Key 明文仅对登录会话展示", async () => {
+test("后台数据需要登录，闲鱼 Key 脱敏且 Gamer520 Key 明文展示", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-auth-test-"),
   );
@@ -69,6 +69,19 @@ test("后台数据需要登录且 API Key 明文仅对登录会话展示", async
         mode: "pending",
       },
     }),
+    {
+      updateXianyuApiKey: async (apiKey) => {
+        const credentials = new CrawlerDatabase(databasePath);
+        try {
+          credentials.setXianyuApiKey(
+            apiKey,
+            "2026-07-30T00:00:00.000Z",
+          );
+        } finally {
+          credentials.close();
+        }
+      },
+    },
   );
   const baseUrl = `http://127.0.0.1:${dashboard.address.port}`;
   try {
@@ -112,8 +125,54 @@ test("后台数据需要登录且 API Key 明文仅对登录会话展示", async
     const keys = await fetch(`${baseUrl}/api/admin/api-keys`, {
       headers: { cookie },
     }).then((response) => response.json());
-    assert.equal(keys.items[0].value, "xianyu-plain-key");
-    assert.equal(keys.items[1].value, "download-plain-key");
+    assert.equal(keys.xianyu.configured, true);
+    assert.notEqual(keys.xianyu.maskedValue, "xianyu-plain-key");
+    assert.match(keys.xianyu.maskedValue, /••/u);
+    assert.equal(keys.downloadKeys[0].value, "download-plain-key");
+
+    const savedXianyuKey = await fetch(
+      `${baseUrl}/api/admin/api-keys/xianyu`,
+      {
+        method: "PUT",
+        headers: {
+          cookie,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          api_key: "xyk_new-test-key-value",
+        }),
+      },
+    );
+    assert.equal(savedXianyuKey.status, 200);
+    const refreshedKeys = await fetch(
+      `${baseUrl}/api/admin/api-keys`,
+      { headers: { cookie } },
+    ).then((response) => response.json());
+    assert.notEqual(
+      refreshedKeys.xianyu.maskedValue,
+      "xyk_new-test-key-value",
+    );
+
+    const createdDownloadKey = await fetch(
+      `${baseUrl}/api/admin/api-keys/download`,
+      {
+        method: "POST",
+        headers: {
+          cookie,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ name: "自动发货测试" }),
+      },
+    ).then((response) => response.json());
+    assert.match(createdDownloadKey.item.value, /^g5k_/);
+    const deletedDownloadKey = await fetch(
+      `${baseUrl}/api/admin/api-keys/download/${createdDownloadKey.item.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie },
+      },
+    );
+    assert.equal(deletedDownloadKey.status, 200);
 
     const logout = await fetch(`${baseUrl}/api/auth/logout`, {
       method: "POST",

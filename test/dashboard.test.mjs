@@ -155,6 +155,17 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     batch_count: 1,
     finished_at: "2026-07-28T00:02:00.000Z",
   });
+  database.recordTaskLog({
+    taskType: "sync",
+    runId: syncRunId,
+    gameId: game.id,
+    level: "success",
+    stage: "publish",
+    action: "success",
+    message: "测试商品发布成功",
+    details: { itemId: "1067769058126" },
+    createdAt: "2026-07-28T00:01:50.000Z",
+  });
   database.close();
 
   let savedSchedule = null;
@@ -318,6 +329,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /有效游戏数据/);
     assert.match(appSource, /已同步素材库数据/);
     assert.match(appSource, /已发布数据/);
+    assert.match(appSource, /查看日志/);
+    assert.match(appSource, /已有跳过/);
+    assert.match(appSource, /Gamer520 API Key/);
+    assert.match(appSource, /更换 Key/);
 
     const games = await fetch(
       `${baseUrl}/api/games?query=118842&status=success`,
@@ -552,6 +567,15 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       (response) => response.json(),
     );
     assert.ok(Array.isArray(logs));
+    const operationLogs = await fetch(
+      `${baseUrl}/api/task-logs?task_type=sync&run_id=${syncRunId}&after_id=0&limit=20`,
+    ).then((response) => response.json());
+    assert.equal(operationLogs.items.length, 1);
+    assert.equal(operationLogs.items[0].action, "success");
+    assert.equal(
+      operationLogs.items[0].details.itemId,
+      "1067769058126",
+    );
 
     const unauthorizedAccounts = await fetch(
       `${baseUrl}/api/xianyu/accounts`,
