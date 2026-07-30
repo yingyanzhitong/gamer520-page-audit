@@ -9,13 +9,13 @@ import {
   isSourceTimestampCurrent,
   launchBrowser,
 } from "./playwright-extractor.mjs";
+import { isTaskTerminatedError } from "./task-control.mjs";
 import {
   buildListPageUrl,
   errorSummary,
   nowIso,
   randomBetween,
   serializeError,
-  sleep,
 } from "./utils.mjs";
 
 function createStatistics() {
@@ -41,15 +41,39 @@ async function runWithRetry(operation, config, control = null) {
         attemptCount: attempt,
       };
     } catch (error) {
+      if (control?.terminated || isTaskTerminatedError(error)) {
+        throw error;
+      }
       lastError = error;
       if (attempt > config.maxRetries) break;
       const baseDelay = attempt === 1 ? 5_000 : 15_000 * attempt;
-      await sleep(baseDelay + randomBetween(0, 2_000));
+      await interruptibleDelay(
+        baseDelay + randomBetween(0, 2_000),
+        control?.signal,
+      );
     }
   }
 
   lastError.attemptCount = config.maxRetries + 1;
   throw lastError;
+}
+
+function interruptibleDelay(milliseconds, signal = null) {
+  if (!signal) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function log(event, fields = {}) {
@@ -108,6 +132,14 @@ export async function runCrawl({
   let browser;
   let fatalError = null;
   let abortReason = null;
+  const closeBrowserOnTerminate = () => {
+    void browser?.close().catch(() => {});
+  };
+  control?.signal.addEventListener(
+    "abort",
+    closeBrowserOnTerminate,
+    { once: true },
+  );
 
   log("crawl_started", {
     runId,
@@ -138,6 +170,7 @@ export async function runCrawl({
       },
     });
     browser = await launchBrowser(config);
+    await control?.checkpoint();
     recordTaskLog({
       level: "success",
       stage: "browser",
@@ -208,6 +241,9 @@ export async function runCrawl({
             },
           });
         } catch (error) {
+          if (control?.terminated || isTaskTerminatedError(error)) {
+            throw error;
+          }
           statistics.listPagesFailed += 1;
           const serialized = serializeError(error);
           database.recordError({
@@ -243,7 +279,10 @@ export async function runCrawl({
         database.updateRunProgress(runId, statistics);
 
         if (config.listDelayMs > 0) {
-          await sleep(config.listDelayMs);
+          await interruptibleDelay(
+            config.listDelayMs,
+            control?.signal,
+          );
         }
       }
     } finally {
@@ -317,6 +356,9 @@ export async function runCrawl({
             },
           });
         } catch (error) {
+          if (control?.terminated || isTaskTerminatedError(error)) {
+            throw error;
+          }
           const serialized = serializeError(error);
           database.recordError({
             runId,
@@ -469,7 +511,9 @@ export async function runCrawl({
                 config.detailDelayMinMs,
                 config.detailDelayMaxMs,
               );
-              if (delay > 0) await sleep(delay);
+              if (delay > 0) {
+                await interruptibleDelay(delay, control?.signal);
+              }
               continue;
             }
             database.saveGameSuccess(game, result, nowIso());
@@ -498,6 +542,9 @@ export async function runCrawl({
               },
             });
           } catch (error) {
+            if (control?.terminated || isTaskTerminatedError(error)) {
+              throw error;
+            }
             statistics.detailFailed += 1;
             const serialized = serializeError(error);
             const attemptedAt = nowIso();
@@ -553,7 +600,9 @@ export async function runCrawl({
             config.detailDelayMinMs,
             config.detailDelayMaxMs,
           );
-          if (delay > 0) await sleep(delay);
+          if (delay > 0) {
+            await interruptibleDelay(delay, control?.signal);
+          }
         }
       } finally {
         await context.close().catch(() => {});
@@ -582,23 +631,33 @@ export async function runCrawl({
     }
   } catch (error) {
     fatalError = error;
+    const terminated =
+      control?.terminated || isTaskTerminatedError(error);
     log("crawl_fatal_error", {
       runId,
       error: serializeError(error),
     });
     recordTaskLog({
-      level: "error",
+      level: terminated ? "warning" : "error",
       stage: "task",
-      action: "failed",
-      message: `采集任务异常终止：${serializeError(error).message}`,
+      action: terminated ? "terminated" : "failed",
+      message: terminated
+        ? "采集任务已由管理员终止，不可恢复"
+        : `采集任务异常终止：${serializeError(error).message}`,
       details: {
         errorName: serializeError(error).name,
       },
     });
   } finally {
+    control?.signal.removeEventListener(
+      "abort",
+      closeBrowserOnTerminate,
+    );
     await browser?.close().catch(() => {});
 
     let status = "success";
+    const terminated =
+      control?.terminated || isTaskTerminatedError(fatalError);
     const summary =
       abortReason ||
       (fatalError ? errorSummary(fatalError) : null) ||
@@ -606,7 +665,9 @@ export async function runCrawl({
       statistics.detailFailed > 0
         ? `列表页失败 ${statistics.listPagesFailed}，详情失败 ${statistics.detailFailed}`
         : null);
-    if (fatalError && statistics.detailSucceeded === 0) {
+    if (terminated) {
+      status = "interrupted";
+    } else if (fatalError && statistics.detailSucceeded === 0) {
       status = "failed";
     } else if (
       abortReason ||

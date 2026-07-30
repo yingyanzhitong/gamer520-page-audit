@@ -275,10 +275,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       controlTask: (task, action) => {
         taskControl = { task, action };
         return {
-          active: task === "crawl",
+          active: action === "terminate" ? false : task === "crawl",
           interrupted: action === "pause" || action === "interrupt",
           sync: {
-            active: task === "sync",
+            active: action === "terminate" ? false : task === "sync",
             interrupted:
               task === "sync" &&
               (action === "pause" || action === "interrupt"),
@@ -807,6 +807,24 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.deepEqual(taskControl, {
       task: "sync",
       action: "pause",
+    });
+
+    const terminatedSync = await fetch(
+      `${baseUrl}/api/tasks/sync/terminate`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({}),
+      },
+    ).then((response) => response.json());
+    assert.equal(terminatedSync.success, true);
+    assert.equal(terminatedSync.scheduler.sync.active, false);
+    assert.deepEqual(taskControl, {
+      task: "sync",
+      action: "terminate",
     });
 
     const writeResponse = await fetch(`${baseUrl}/api/games`, {

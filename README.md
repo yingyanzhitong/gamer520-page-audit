@@ -164,11 +164,13 @@ curl -X POST \
   -d '{"mode":"all"}' \
   http://127.0.0.1:13520/api/sync/run
 
-# 立即暂停和恢复当前采集任务；同步任务把 crawl 改为 sync
+# 立即暂停、恢复或真正终止当前采集任务；同步任务把 crawl 改为 sync
 curl -X POST -H 'X-API-Key: <闲鱼用户API Key>' \
   http://127.0.0.1:13520/api/tasks/crawl/pause
 curl -X POST -H 'X-API-Key: <闲鱼用户API Key>' \
   http://127.0.0.1:13520/api/tasks/crawl/resume
+curl -X POST -H 'X-API-Key: <闲鱼用户API Key>' \
+  http://127.0.0.1:13520/api/tasks/crawl/terminate
 
 # 设置单商品售价；price 传 null 恢复使用默认售价
 curl -X PUT \
@@ -198,6 +200,8 @@ curl -X POST \
   -d '{"item_id":"1067769058126","item_title":"【秒发】游戏名称","id":118842}' \
   'http://127.0.0.1:13520/api/download-sources'
 ```
+
+`pause` 后可以使用 `resume` 继续；`terminate` 会取消当前请求、关闭采集浏览器并等待任务真正退出，终止后的任务不能恢复。终止当前任务不会修改定时任务的启用状态，后续 Cron 仍按页面配置运行。
 
 下载源接口仅接受 `POST` JSON；旧 `GET` 请求返回 `405`。请求体的 `id`（Gamer520 游戏编号）、`item_id`（闲鱼商品编号）和 `item_title`（闲鱼商品标题）至少提供一个，也可以同时提供。查询按 `item_id → item_title → id` 的优先级执行：当前条件没有匹配结果时才尝试下一个条件。`item_title` 会先移除 `【秒发】`（兼容括号内空格），再做精确名称匹配；旧字段 `name` 已废弃，不再作为查询条件。名称重名返回 `409` 和候选 ID；无效 Key 返回 `401`；商品或账号不存在返回 `404`；任务冲突或当前没有可控制任务返回 `409`；参数或素材不可发布返回 `422`。
 

@@ -368,7 +368,7 @@ async function updateXianyuApiKey(apiKey) {
   log("xianyu_api_key_updated");
 }
 
-function controlTask(task, action) {
+async function controlTask(task, action) {
   const control =
     task === "crawl"
       ? crawlControl
@@ -387,6 +387,10 @@ function controlTask(task, action) {
     control.pause();
   } else if (action === "resume") {
     control.resume();
+  } else if (action === "terminate") {
+    deferredSync = null;
+    deferredCrawl = null;
+    control.terminate();
   } else {
     const error = new Error("任务控制操作无效");
     error.statusCode = 422;
@@ -396,6 +400,7 @@ function controlTask(task, action) {
     task,
     action,
     interrupted: control.interrupted,
+    terminated: control.terminated,
   });
   const database = new CrawlerDatabase(config.dbPath);
   try {
@@ -410,7 +415,9 @@ function controlTask(task, action) {
         taskType: task,
         runId,
         level:
-          action === "pause" || action === "interrupt"
+          action === "pause" ||
+          action === "interrupt" ||
+          action === "terminate"
             ? "warning"
             : "success",
         stage: "control",
@@ -418,13 +425,21 @@ function controlTask(task, action) {
         message:
           action === "pause" || action === "interrupt"
             ? "管理员已立即暂停任务，停止领取新的处理步骤"
-            : "管理员已恢复任务执行",
-        details: { interrupted: control.interrupted },
+            : action === "terminate"
+              ? "管理员已终止任务，任务将退出且不能恢复"
+              : "管理员已恢复任务执行",
+        details: {
+          interrupted: control.interrupted,
+          terminated: control.terminated,
+        },
         createdAt: nowIso(),
       });
     }
   } finally {
     database.close();
+  }
+  if (action === "terminate") {
+    await active;
   }
   return scheduleRuntime();
 }
@@ -511,8 +526,8 @@ async function shutdown(signal) {
   stopping = true;
   crawlJob?.stop();
   syncJob?.stop();
-  crawlControl?.resume();
-  syncControl?.resume();
+  crawlControl?.terminate();
+  syncControl?.terminate();
   log("scheduler_stopping", { signal });
   await Promise.allSettled(
     [activeRun, activeSync].filter(Boolean),

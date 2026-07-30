@@ -1526,7 +1526,7 @@ export async function startDashboardServer(
         return;
       }
       const taskControlMatch = requestUrl.pathname.match(
-        /^\/api\/tasks\/(crawl|sync)\/(pause|interrupt|resume)$/,
+        /^\/api\/tasks\/(crawl|sync)\/(pause|interrupt|resume|terminate)$/,
       );
       if (request.method === "POST" && taskControlMatch) {
         if (
@@ -1544,7 +1544,7 @@ export async function startDashboardServer(
           return;
         }
         const [, task, action] = taskControlMatch;
-        const scheduler = handlers.controlTask(task, action);
+        const scheduler = await handlers.controlTask(task, action);
         sendJson(response, 200, {
           success: true,
           task,

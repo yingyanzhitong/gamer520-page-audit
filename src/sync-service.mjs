@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { cacheCoverImage } from "./cover-cache.mjs";
 import { CrawlerDatabase } from "./database.mjs";
+import { isTaskTerminatedError } from "./task-control.mjs";
 import { nowIso, serializeError } from "./utils.mjs";
 import { XianyuClient } from "./xianyu-client.mjs";
 import {
@@ -17,8 +18,22 @@ export const materialSyncConcurrency = 4;
 export const publishBatchSize = 20;
 export const publishBatchLogIntervalMs = 60_000;
 
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+function delay(milliseconds, signal = null) {
+  if (!signal) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function countActions(items) {
@@ -109,12 +124,12 @@ export class XianyuSyncService {
       });
   }
 
-  async listAccounts() {
-    return this.client.listAccounts();
+  async listAccounts({ signal = null } = {}) {
+    return this.client.listAccounts({ signal });
   }
 
-  async validateAccount(accountId) {
-    const accounts = await this.listAccounts();
+  async validateAccount(accountId, { signal = null } = {}) {
+    const accounts = await this.listAccounts({ signal });
     const account = accounts.find((item) => item.accountId === accountId);
     if (!account) {
       const error = new Error("账号不存在或当前 API Key 无权访问");
@@ -281,9 +296,13 @@ export class XianyuSyncService {
         action: "refresh-items",
         message: `正在刷新账号 ${accountId} 的商品列表`,
       });
-      await this.client.refreshAccountItems(accountId);
+      await this.client.refreshAccountItems(accountId, {
+        signal: control?.signal,
+      });
       await control?.checkpoint();
-      knownAccountItems = await this.client.listAccountItems(accountId);
+      knownAccountItems = await this.client.listAccountItems(accountId, {
+        signal: control?.signal,
+      });
       await control?.checkpoint();
       recordTaskLog({
         level: "success",
@@ -314,11 +333,14 @@ export class XianyuSyncService {
         },
       });
       try {
-        const result = await this.client.bindCards({
-          cardIds: [deliveryCardId],
-          itemIds: [String(itemId)],
-          itemTitle: listingFor(candidate).title,
-        });
+        const result = await this.client.bindCards(
+          {
+            cardIds: [deliveryCardId],
+            itemIds: [String(itemId)],
+            itemTitle: listingFor(candidate).title,
+          },
+          { signal: control?.signal },
+        );
         await control?.checkpoint();
         if (Number(result.fail_count ?? 0) > 0) {
           throw new Error(`卡券关联失败：${result.fail_count} 条未成功`);
@@ -342,6 +364,9 @@ export class XianyuSyncService {
         });
         return true;
       } catch (error) {
+        if (control?.terminated || isTaskTerminatedError(error)) {
+          throw error;
+        }
         database.markCardBindingResult({
           gameId: candidate.id,
           accountId,
@@ -384,7 +409,9 @@ export class XianyuSyncService {
         action: "validate",
         message: `正在验证发布账号 ${accountId}`,
       });
-      const account = await this.validateAccount(accountId);
+      const account = await this.validateAccount(accountId, {
+        signal: control?.signal,
+      });
       await control?.checkpoint();
       recordTaskLog({
         level: "success",
@@ -487,6 +514,7 @@ export class XianyuSyncService {
             imageUrl: listing.imageUrl,
             cacheDirectory: this.config.coverCacheDir,
             publicBaseUrl: this.config.publicBaseUrl,
+            signal: control?.signal,
           });
           await control?.checkpoint();
           coverUrl = cachedCover.publicUrl;
@@ -586,7 +614,10 @@ export class XianyuSyncService {
                 imageCount: payload.images.length,
               },
             });
-            const results = await this.client.upsertMaterials([payload]);
+            const results = await this.client.upsertMaterials(
+              [payload],
+              { signal: control?.signal },
+            );
             await control?.checkpoint();
             const result = results.find(
               (item) =>
@@ -626,6 +657,9 @@ export class XianyuSyncService {
             publishPayload: completed.publishPayload,
           };
         } catch (error) {
+          if (control?.terminated || isTaskTerminatedError(error)) {
+            throw error;
+          }
           recordTaskLog({
             gameId: candidate.id,
             level: "error",
@@ -684,11 +718,14 @@ export class XianyuSyncService {
             message: `正在提交批量发布请求，共 ${entries.length} 个商品`,
             details: { requestId, materialIds, accountId },
           });
-          batch = await this.client.publishBatch({
-            accountId,
-            materialIds,
-            requestId,
-          });
+          batch = await this.client.publishBatch(
+            {
+              accountId,
+              materialIds,
+              requestId,
+            },
+            { signal: control?.signal },
+          );
           await control?.checkpoint();
           recordTaskLog({
             level: "success",
@@ -750,7 +787,10 @@ export class XianyuSyncService {
             throw submissionError;
           }
           try {
-            recoveredStatus = await this.client.getBatchStatus(requestId);
+            recoveredStatus = await this.client.getBatchStatus(
+              requestId,
+              { signal: control?.signal },
+            );
             batch = { batch_id: requestId, idempotent_replay: true };
             recordTaskLog({
               level: "warning",
@@ -847,7 +887,9 @@ export class XianyuSyncService {
         while (Date.now() < deadline) {
           await control?.checkpoint();
           if (!status) {
-            status = await this.client.getBatchStatus(batchId);
+            status = await this.client.getBatchStatus(batchId, {
+              signal: control?.signal,
+            });
             await control?.checkpoint();
           }
           const statusProgress = `${status.status ?? ""}:${status.processed_count ?? status.processed ?? ""}:${status.done ?? status.finished ?? false}`;
@@ -872,7 +914,10 @@ export class XianyuSyncService {
             });
           }
           if (status.done || status.finished) break;
-          await delay(Number(this.config.syncPollIntervalMs ?? 10_000));
+          await delay(
+            Number(this.config.syncPollIntervalMs ?? 10_000),
+            control?.signal,
+          );
           status = null;
         }
 
@@ -944,6 +989,9 @@ export class XianyuSyncService {
             },
           });
         } catch (error) {
+          if (control?.terminated || isTaskTerminatedError(error)) {
+            throw error;
+          }
           reconciliationError = error;
           recordTaskLog({
             level: "error",
@@ -1437,6 +1485,47 @@ export class XianyuSyncService {
           batchCount: totals.batch_count,
           batchId: submittedPublication.batchId,
           status: "unknown",
+        };
+      }
+      if (control?.terminated || isTaskTerminatedError(error)) {
+        const finishedAt = nowIso();
+        database.updateSyncRun(runId, {
+          ...totals,
+          status: "interrupted",
+          processed_count: processedCount,
+          current_game_id: null,
+          current_title: null,
+          error_summary: "管理员已终止任务",
+          finished_at: finishedAt,
+        });
+        recordTaskLog({
+          level: "warning",
+          stage: "task",
+          action: "terminated",
+          message: "同步任务已由管理员终止，不可恢复",
+          details: {
+            processedCount,
+            selectedCount: candidates.length,
+          },
+        });
+        return {
+          runId,
+          accountId,
+          mode,
+          selectedCount: candidates.length,
+          materialSkipped: totals.material_skipped,
+          materialFailed: totals.material_failed,
+          materialProcessedCount: totals.material_processed_count,
+          publishSelectedCount: totals.publish_selected_count,
+          publishProcessedCount: totals.publish_processed_count,
+          publishSubmitted: totals.publish_submitted,
+          publishSuccess: totals.publish_success,
+          publishFailed: totals.publish_failed,
+          cardBound: totals.card_bound,
+          cardBindFailed: totals.card_bind_failed,
+          batchCount: totals.batch_count,
+          batchId: latestBatchId,
+          status: "interrupted",
         };
       }
       database.updateSyncRun(runId, {

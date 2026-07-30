@@ -31,6 +31,7 @@ import {
   Settings2,
   ShieldCheck,
   ScrollText,
+  Square,
   Trash2,
   Truck,
   UserRound,
@@ -1108,7 +1109,9 @@ function TasksPage({ notify }) {
       notify(
         action === "pause"
           ? "任务已立即暂停"
-          : "任务已恢复执行",
+          : action === "terminate"
+            ? "任务已终止"
+            : "任务已恢复执行",
       );
       await load();
     } catch (caught) {
@@ -1277,7 +1280,7 @@ function TasksPage({ notify }) {
           <CardHeader>
             <CardTitle>手动操作</CardTitle>
             <CardDescription>
-              发布失败会记录后跳过，结果未知时停止避免重复。
+              暂停后可以恢复；终止会真正结束当前任务且不能恢复。发布失败会记录后跳过，结果未知时停止避免重复。
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -1299,7 +1302,7 @@ function TasksPage({ notify }) {
               </Button>
             </div>
             <Separator />
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               <Button
                 variant="secondary"
                 onClick={() =>
@@ -1345,6 +1348,29 @@ function TasksPage({ notify }) {
                 {controlAction === "resume"
                   ? "正在恢复"
                   : "恢复任务"}
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() =>
+                  control(
+                    schedule?.sync?.active ? "sync" : "crawl",
+                    "terminate",
+                  )
+                }
+                disabled={
+                  Boolean(controlAction) ||
+                  (!schedule?.crawl?.active &&
+                    !schedule?.sync?.active)
+                }
+              >
+                {controlAction === "terminate" ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Square className="h-4 w-4" />
+                )}
+                {controlAction === "terminate"
+                  ? "正在终止"
+                  : "终止当前任务"}
               </Button>
             </div>
           </CardContent>

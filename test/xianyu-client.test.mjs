@@ -90,3 +90,34 @@ test("单商品发布使用同步接口并透传素材内容", async () => {
     condition: "全新",
   });
 });
+
+test("外部终止信号会取消正在进行的闲鱼请求", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let requestSignal;
+  globalThis.fetch = async (_url, options) => {
+    requestSignal = options.signal;
+    return new Promise((_resolve, reject) => {
+      options.signal.addEventListener(
+        "abort",
+        () => reject(options.signal.reason),
+        { once: true },
+      );
+    });
+  };
+
+  try {
+    const client = new XianyuClient({
+      baseUrl: "https://xianyu.example",
+      apiKey: "test-key",
+    });
+    const request = client.listAccounts({
+      signal: controller.signal,
+    });
+    controller.abort(new Error("测试终止"));
+    await assert.rejects(request, /测试终止/);
+    assert.equal(requestSignal.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

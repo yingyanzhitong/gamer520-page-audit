@@ -65,3 +65,34 @@ test("封面下载后转为 JPEG 并复用本地缓存", async () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("终止信号会取消正在进行的封面下载", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-cover-abort-test-"),
+  );
+  const controller = new AbortController();
+  const fetchImpl = async (_url, options) =>
+    new Promise((_resolve, reject) => {
+      options.signal.addEventListener(
+        "abort",
+        () => reject(options.signal.reason),
+        { once: true },
+      );
+    });
+
+  try {
+    const request = cacheCoverImage({
+      gameId: 118842,
+      imageUrl: "https://images.example/cover.png",
+      cacheDirectory: directory,
+      publicBaseUrl: "https://gamer520.example",
+      fetchImpl,
+      attempts: 1,
+      signal: controller.signal,
+    });
+    controller.abort(new Error("测试终止"));
+    await assert.rejects(request, /测试终止/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -6,8 +6,22 @@ import sharp from "sharp";
 
 const maximumCoverBytes = 10 * 1024 * 1024;
 
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+function delay(milliseconds, signal = null) {
+  if (!signal) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 async function readLimitedBody(response) {
@@ -40,6 +54,7 @@ export async function cacheCoverImage({
   fetchImpl = fetch,
   attempts = 3,
   timeoutMs = 20_000,
+  signal = null,
 }) {
   const parsedUrl = new URL(imageUrl);
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
@@ -68,11 +83,15 @@ export async function cacheCoverImage({
 
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (signal?.aborted) throw signal.reason;
     const temporaryPath = `${filePath}.${process.pid}.tmp`;
     try {
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
       const response = await fetchImpl(parsedUrl, {
         redirect: "follow",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: signal
+          ? AbortSignal.any([timeoutSignal, signal])
+          : timeoutSignal,
         headers: {
           accept: "image/avif,image/webp,image/png,image/jpeg,image/*",
           "user-agent": "gamer520-page-audit/cover-cache",
@@ -105,7 +124,10 @@ export async function cacheCoverImage({
     } catch (error) {
       lastError = error;
       await fs.promises.rm(temporaryPath, { force: true });
-      if (attempt < attempts) await delay(attempt * 500);
+      if (signal?.aborted) throw signal.reason;
+      if (attempt < attempts) {
+        await delay(attempt * 500, signal);
+      }
     }
   }
 

@@ -505,6 +505,61 @@ test("暂停后并发队列立即停止领取新商品", async () => {
   }
 });
 
+test("终止会结束同步任务且不会继续发布", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-terminate-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const database = new CrawlerDatabase(databasePath);
+  const timestamp = "2026-07-30T00:00:00.000Z";
+  try {
+    for (let id = 1; id <= 3; id += 1) {
+      const discovered = game(id);
+      database.upsertDiscoveredGames([discovered], timestamp);
+      database.saveGameSuccess(
+        discovered,
+        result(id, undefined, discovered.imageUrl),
+        timestamp,
+      );
+    }
+    database.setXianyuSettings("account-a", 1, timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new TrackingXianyuClient();
+  const control = new TaskControl();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const running = service.run({
+      trigger: "test",
+      control,
+      materialConcurrency: 1,
+    });
+    while (client.activeUpserts === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    control.terminate();
+
+    const sync = await running;
+    assert.equal(sync.status, "interrupted");
+    assert.equal(client.publishCalls.length, 0);
+
+    const saved = new CrawlerDatabase(databasePath);
+    try {
+      const run = saved.queryOne(
+        "SELECT status, finished_at FROM xianyu_sync_runs ORDER BY id DESC LIMIT 1",
+      );
+      assert.equal(run.status, "interrupted");
+      assert.ok(run.finished_at);
+    } finally {
+      saved.close();
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("批量发布失败后跳过本批并继续处理后续批次", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-canary-test-"),
