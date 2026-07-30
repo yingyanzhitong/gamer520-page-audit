@@ -107,7 +107,7 @@ export class XianyuClient {
       method: "POST",
       body: {
         cookie_id: accountId,
-        page_size: 100,
+        page_size: 20,
       },
     });
   }
