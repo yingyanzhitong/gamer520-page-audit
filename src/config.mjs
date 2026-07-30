@@ -144,6 +144,16 @@ export function loadConfig(overrides = {}) {
       overrides.syncCronSchedule ??
       env.SYNC_CRON_SCHEDULE ??
       "0 */6 * * *",
+    syncPollIntervalMs: integerValue(
+      overrides.syncPollIntervalMs ?? env.SYNC_POLL_INTERVAL_MS,
+      10_000,
+      { min: 1_000, max: 60_000 },
+    ),
+    syncBatchTimeoutMs: integerValue(
+      overrides.syncBatchTimeoutMs ?? env.SYNC_BATCH_TIMEOUT_MS,
+      2 * 60 * 60 * 1_000,
+      { min: 60_000, max: 6 * 60 * 60 * 1_000 },
+    ),
     syncEnabled: booleanValue(
       overrides.syncEnabled ?? env.SYNC_ENABLED,
       true,

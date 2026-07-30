@@ -1337,8 +1337,8 @@ export async function startDashboardServer(
             materialConcurrency: Number(
               state.sync?.materialConcurrency ?? 4,
             ),
-            publishConcurrency: Number(
-              state.sync?.publishConcurrency ?? 4,
+            publishBatchSize: Number(
+              state.sync?.publishBatchSize ?? 20,
             ),
             progress: state.sync?.progress ?? null,
           },
@@ -1373,7 +1373,6 @@ export async function startDashboardServer(
           syncEnabled: body.sync?.enabled,
           syncMode: syncMode(body.sync?.mode),
           materialConcurrency: body.sync?.material_concurrency,
-          publishConcurrency: body.sync?.publish_concurrency,
         });
         sendJson(response, 200, {
           success: true,

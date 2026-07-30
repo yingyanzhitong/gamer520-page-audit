@@ -1069,9 +1069,6 @@ function TasksPage({ notify }) {
             material_concurrency: Number(
               schedule.sync.materialConcurrency,
             ),
-            publish_concurrency: Number(
-              schedule.sync.publishConcurrency,
-            ),
           },
         }),
       });
@@ -1242,21 +1239,10 @@ function TasksPage({ notify }) {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>商品发布并行数</Label>
-                        <Input
-                          type="number"
-                          min="1"
-                          max="12"
-                          value={
-                            schedule?.sync?.publishConcurrency ?? 4
-                          }
-                          onChange={(event) =>
-                            updateSchedule(
-                              ["sync", "publishConcurrency"],
-                              event.target.value,
-                            )
-                          }
-                        />
+                        <Label>商品发布方式</Label>
+                        <div className="flex h-10 items-center rounded-md border bg-muted/40 px-3 text-sm">
+                          每批最多 {schedule?.sync?.publishBatchSize ?? 20} 件，逐批执行
+                        </div>
                       </div>
                     </div>
                   </>

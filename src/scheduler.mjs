@@ -6,7 +6,7 @@ import { CrawlerDatabase } from "./database.mjs";
 import { startDashboardServer } from "./dashboard-server.mjs";
 import {
   materialSyncConcurrency,
-  publishConcurrency,
+  publishBatchSize,
   XianyuSyncService,
 } from "./sync-service.mjs";
 import { TaskControl } from "./task-control.mjs";
@@ -79,8 +79,10 @@ function normalizeScheduleSettings(input) {
       "素材导入并行数",
     ),
     publishConcurrency: concurrencyValue(
-      input.publishConcurrency,
-      "商品发布并行数",
+      input.publishConcurrency ??
+        schedulerSettings?.publishConcurrency ??
+        4,
+      "兼容发布并行数",
     ),
   };
   if (
@@ -227,7 +229,6 @@ function triggerSync(
       gameIds: options.gameIds ?? null,
       control,
       materialConcurrency: schedulerSettings.materialConcurrency,
-      publishConcurrency: schedulerSettings.publishConcurrency,
       onProgress: (progress) => {
         syncProgress = progress;
       },
@@ -323,7 +324,7 @@ function updateScheduleSettings(input) {
     syncMode: schedulerSettings.syncMode,
     crawlConcurrency: schedulerSettings.crawlConcurrency,
     materialConcurrency: schedulerSettings.materialConcurrency,
-    publishConcurrency: schedulerSettings.publishConcurrency,
+    publishBatchSize,
   });
   return scheduleRuntime();
 }
@@ -431,7 +432,7 @@ function scheduleRuntime() {
       cronTimezone: schedulerSettings.cronTimezone,
       nextRun: syncJob?.nextRun()?.toISOString() ?? null,
       materialConcurrency: schedulerSettings.materialConcurrency,
-      publishConcurrency: schedulerSettings.publishConcurrency,
+      publishBatchSize,
       mode: schedulerSettings.syncMode,
       progress: syncProgress,
     },
@@ -457,7 +458,7 @@ schedulerSettings = settingsFromRow(
       syncMode: "all",
       crawlConcurrency: config.detailConcurrency,
       materialConcurrency: materialSyncConcurrency,
-      publishConcurrency,
+      publishConcurrency: 4,
     },
     nowIso(),
   ),

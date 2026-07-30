@@ -6,7 +6,8 @@ import test from "node:test";
 
 import { CrawlerDatabase } from "../src/database.mjs";
 import {
-  publishHeartbeatMs,
+  publishBatchLogIntervalMs,
+  publishBatchSize,
   XianyuSyncService,
 } from "../src/sync-service.mjs";
 import { TaskControl } from "../src/task-control.mjs";
@@ -119,25 +120,6 @@ class FakeXianyuClient {
     return { batch_id: payload.requestId };
   }
 
-  async publishSingle(payload) {
-    this.publishCalls.push(payload);
-    this.events.push({ type: "publish", count: 1 });
-    const accountItems =
-      this.accountItems.get(payload.accountId) ?? [];
-    const itemId = `item-${payload.accountId}-${payload.materialId}`;
-    if (!accountItems.some((item) => item.item_id === itemId)) {
-      accountItems.push({
-        item_id: itemId,
-        item_title: payload.title,
-      });
-    }
-    this.accountItems.set(payload.accountId, accountItems);
-    return {
-      item_id: itemId,
-      item_url: `https://www.goofish.com/item?id=${encodeURIComponent(itemId)}`,
-    };
-  }
-
   async getBatchStatus(batchId) {
     const call = this.publishCalls.find(
       (item) => item.requestId === batchId,
@@ -191,9 +173,6 @@ class TrackingXianyuClient extends FakeXianyuClient {
     super();
     this.activeUpserts = 0;
     this.maxActiveUpserts = 0;
-    this.activePublishes = 0;
-    this.maxActivePublishes = 0;
-    this.pipelineOverlapObserved = false;
   }
 
   async upsertMaterials(items) {
@@ -210,22 +189,6 @@ class TrackingXianyuClient extends FakeXianyuClient {
     }
   }
 
-  async publishSingle(payload) {
-    if (this.activeUpserts > 0) {
-      this.pipelineOverlapObserved = true;
-    }
-    this.activePublishes += 1;
-    this.maxActivePublishes = Math.max(
-      this.maxActivePublishes,
-      this.activePublishes,
-    );
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      return await super.publishSingle(payload);
-    } finally {
-      this.activePublishes -= 1;
-    }
-  }
 }
 
 class MaterialFailureClient extends TrackingXianyuClient {
@@ -255,38 +218,52 @@ class FlakyCardClient extends FakeXianyuClient {
 }
 
 class ProbeFailureClient extends FakeXianyuClient {
-  async publishSingle(payload) {
-    this.publishCalls.push(payload);
-    const error = new Error(
-      "可能发布失败（页面未跳转，仍停留在发布页）",
+  async getBatchStatus(batchId) {
+    const call = this.publishCalls.find(
+      (item) => item.requestId === batchId,
     );
-    error.status = 200;
-    throw error;
+    return {
+      done: true,
+      items: call.materialIds.map((materialId) => ({
+        account_id: call.accountId,
+        material_id: materialId,
+        status: "failed",
+        error_message: "可能发布失败（页面未跳转，仍停留在发布页）",
+      })),
+    };
   }
 }
 
-class RejectedSingleClient extends FakeXianyuClient {
-  async publishSingle(payload) {
+class RejectedBatchClient extends FakeXianyuClient {
+  async publishBatch(payload) {
     if (this.publishCalls.length === 0) {
       this.publishCalls.push(payload);
       this.events.push({
         type: "publish",
-        count: 1,
+        count: payload.materialIds.length,
       });
-      const error = new Error("当前单商品参数不符合发布要求");
+      const error = new Error("当前批次参数不符合发布要求");
       error.status = 422;
       throw error;
     }
-    return super.publishSingle(payload);
+    return super.publishBatch(payload);
   }
 }
 
-class MissingItemIdClient extends FakeXianyuClient {
-  async publishSingle(payload) {
-    this.publishCalls.push(payload);
+class MissingItemIdBatchClient extends FakeXianyuClient {
+  async getBatchStatus(batchId) {
+    const call = this.publishCalls.find(
+      (item) => item.requestId === batchId,
+    );
     return {
-      item_id: null,
-      item_url: null,
+      done: true,
+      items: call.materialIds.map((materialId) => ({
+        account_id: call.accountId,
+        material_id: materialId,
+        status: "success",
+        item_id: null,
+        item_url: null,
+      })),
     };
   }
 }
@@ -299,12 +276,15 @@ function config(databasePath, overrides = {}) {
     publicBaseUrl: "https://gamer520.example",
     coverCacheDir: path.join(path.dirname(databasePath), "covers"),
     coverCacheEnabled: false,
+    syncPollIntervalMs: 1,
+    syncBatchTimeoutMs: 100,
     ...overrides,
   };
 }
 
-test("素材导入和单商品发布使用页面配置的并行数形成流水线", async () => {
-  assert.equal(publishHeartbeatMs, 60_000);
+test("素材按页面配置并行导入，商品固定每 20 件批量发布", async () => {
+  assert.equal(publishBatchSize, 20);
+  assert.equal(publishBatchLogIntervalMs, 60_000);
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-limit-test-"),
   );
@@ -349,33 +329,26 @@ test("素材导入和单商品发布使用页面配置的并行数形成流水�
   }
 
   const client = new TrackingXianyuClient();
-  const service = new XianyuSyncService(
-    config(databasePath, { syncPublishHeartbeatMs: 2 }),
-    client,
-  );
+  const service = new XianyuSyncService(config(databasePath), client);
   const progressEvents = [];
   try {
     const sync = await service.run({
       trigger: "test",
       materialConcurrency: 5,
-      publishConcurrency: 3,
       onProgress: (progress) => progressEvents.push(progress),
     });
     assert.equal(sync.selectedCount, 21);
-    assert.equal(sync.batchCount, 21);
+    assert.equal(sync.batchCount, 2);
     assert.equal(client.upsertCalls.length, 21);
-    assert.equal(client.publishCalls.length, 21);
+    assert.equal(client.publishCalls.length, 2);
     assert.equal(client.cardBindCalls.length, 21);
     assert.equal(client.maxActiveUpserts, 5);
-    assert.equal(client.maxActivePublishes, 3);
-    assert.equal(client.pipelineOverlapObserved, true);
     assert.ok(client.upsertCalls.every((items) => items.length === 1));
-    assert.ok(
-      client.publishCalls.every(
-        (payload) =>
-          payload.materialId > 0 &&
-          payload.images.length === 1,
+    assert.deepEqual(
+      client.publishCalls.map(
+        (payload) => payload.materialIds.length,
       ),
+      [20, 1],
     );
     assert.ok(
       client.cardBindCalls.every(
@@ -446,14 +419,14 @@ test("素材导入和单商品发布使用页面配置的并行数形成流水�
     assert.equal(storedRun.material_processed_count, 21);
     assert.equal(storedRun.publish_selected_count, 21);
     assert.equal(storedRun.publish_processed_count, 21);
-    assert.equal(storedRun.batch_count, 21);
-    assert.equal(storedRun.requested_limit, 1);
+    assert.equal(storedRun.batch_count, 2);
+    assert.equal(storedRun.requested_limit, 20);
     assert.ok(operationLogs.length > 21);
     assert.ok(
       operationLogs.some(
         (item) =>
           item.stage === "publish" &&
-          item.action === "heartbeat",
+          item.action === "batch-finished",
       ),
     );
     assert.equal(
@@ -495,7 +468,6 @@ test("暂停后并发队列立即停止领取新商品", async () => {
       trigger: "test",
       control,
       materialConcurrency: 1,
-      publishConcurrency: 1,
     });
     while (client.activeUpserts === 0) {
       await new Promise((resolve) => setImmediate(resolve));
@@ -515,7 +487,7 @@ test("暂停后并发队列立即停止领取新商品", async () => {
   }
 });
 
-test("单商品发布失败后跳过并继续处理后续商品", async () => {
+test("批量发布失败后跳过本批并继续处理后续批次", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-canary-test-"),
   );
@@ -542,7 +514,11 @@ test("单商品发布失败后跳过并继续处理后续商品", async () => {
     assert.equal(sync.publishSubmitted, 25);
     assert.equal(sync.publishFailed, 25);
     assert.equal(client.upsertCalls.length, 25);
-    assert.equal(client.publishCalls.length, 25);
+    assert.equal(client.publishCalls.length, 2);
+    assert.deepEqual(
+      client.publishCalls.map((call) => call.materialIds.length),
+      [20, 5],
+    );
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const storedRun = checkedDatabase.queryOne(
@@ -567,7 +543,7 @@ test("单商品发布失败后跳过并继续处理后续商品", async () => {
   }
 });
 
-test("单商品发布参数错误时只跳过当前商品", async () => {
+test("批量发布参数错误时跳过当前批次并继续下一批", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-rejected-batch-test-"),
   );
@@ -585,21 +561,24 @@ test("单商品发布参数错误时只跳过当前商品", async () => {
     database.close();
   }
 
-  const client = new RejectedSingleClient();
+  const client = new RejectedBatchClient();
   const service = new XianyuSyncService(config(databasePath), client);
   try {
     const sync = await service.run({ trigger: "test" });
     assert.equal(sync.status, "partial");
-    assert.equal(sync.publishFailed, 1);
-    assert.equal(sync.publishSuccess, 24);
+    assert.equal(sync.publishFailed, 20);
+    assert.equal(sync.publishSuccess, 5);
     assert.equal(sync.publishProcessedCount, 25);
-    assert.equal(client.publishCalls.length, 25);
+    assert.deepEqual(
+      client.publishCalls.map((call) => call.materialIds.length),
+      [20, 5],
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("单商品发布缺少商品编号时标记为待确认", async () => {
+test("批量发布缺少商品编号时标记为待确认并停止后续批次", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-reconcile-test-"),
   );
@@ -619,13 +598,13 @@ test("单商品发布缺少商品编号时标记为待确认", async () => {
     database.close();
   }
 
-  const client = new MissingItemIdClient();
+  const client = new MissingItemIdBatchClient();
   const service = new XianyuSyncService(config(databasePath), client);
   try {
     const sync = await service.run({ trigger: "test" });
-    assert.equal(sync.status, "partial");
+    assert.equal(sync.status, "unknown");
     assert.equal(sync.publishSuccess, 0);
-    assert.equal(sync.publishFailed, 1);
+    assert.equal(sync.publishFailed, 0);
     assert.equal(client.cardBindCalls.length, 0);
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
@@ -645,7 +624,7 @@ test("单商品发布缺少商品编号时标记为待确认", async () => {
   }
 });
 
-test("单个素材失败不会阻止其他商品进入单品发布队列", async () => {
+test("单个素材失败不会阻止其他商品进入尾批发布", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-material-failure-test-"),
   );
@@ -674,8 +653,12 @@ test("单个素材失败不会阻止其他商品进入单品发布队列", async
     assert.equal(sync.status, "partial");
     assert.equal(sync.materialFailed, 1);
     assert.equal(sync.publishSuccess, 4);
-    assert.equal(sync.batchCount, 4);
-    assert.equal(client.publishCalls.length, 4);
+    assert.equal(sync.batchCount, 1);
+    assert.equal(client.publishCalls.length, 1);
+    assert.deepEqual(
+      client.publishCalls.map((call) => call.materialIds.length),
+      [4],
+    );
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const storedRun = checkedDatabase.queryOne(
@@ -836,14 +819,15 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
     assert.equal(sync.materialSkipped, 1);
     assert.equal(sync.publishSubmitted, 1);
     assert.equal(client.publishCalls.length, 1);
-    assert.ok(client.publishCalls[0].materialId > 0);
+    assert.equal(client.publishCalls[0].materialIds.length, 1);
     assert.equal(progressEvents.at(-1).materialSkipped, 1);
     const publishingProgress = progressEvents.find(
       (progress) =>
-        progress.phase === "publishing" &&
-        progress.publishCompleted === 0,
+        progress.phase === "publishing",
     );
     assert.equal(publishingProgress.publishTotal, 2);
+    assert.equal(publishingProgress.publishCompleted, 1);
+    assert.equal(publishingProgress.publishSkipped, 1);
     assert.equal(progressEvents.at(-1).publishTotal, 2);
     assert.equal(progressEvents.at(-1).publishCompleted, 2);
     assert.equal(progressEvents.at(-1).publishSkipped, 1);
@@ -862,7 +846,7 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
   }
 });
 
-test("已有素材跳过上传但继续发布且不虚增发布进度", async () => {
+test("已有素材跳过上传但加入同一发布批次且不虚增发布进度", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-scope-progress-test-"),
   );
@@ -918,20 +902,9 @@ test("已有素材跳过上传但继续发布且不虚增发布进度", async ()
     });
     assert.equal(sync.selectedCount, 2);
     assert.equal(client.upsertCalls.length, 1);
-    assert.equal(client.publishCalls.length, 2);
-    assert.ok(
-      client.publishCalls.every((call) => call.materialId > 0),
-    );
-    assert.deepEqual(cachedGameIds.sort((a, b) => a - b), [71, 72]);
-    assert.deepEqual(
-      client.publishCalls
-        .map((call) => call.images[0])
-        .sort(),
-      [
-        "https://gamer520.example/covers/71.jpg",
-        "https://gamer520.example/covers/72.jpg",
-      ],
-    );
+    assert.equal(client.publishCalls.length, 1);
+    assert.deepEqual(client.publishCalls[0].materialIds, [7100, 1]);
+    assert.deepEqual(cachedGameIds, [72]);
     const initialProgress = progressEvents.find(
       (progress) =>
         progress.phase === "preparing" &&
