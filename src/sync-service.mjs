@@ -178,8 +178,11 @@ export class XianyuSyncService {
     let latestBatchId = null;
     let processedCount = 0;
     let candidates = [];
-    let scopeTotal = 0;
-    let scopeSkipped = 0;
+    let scopeProgress = {
+      total: 0,
+      materialCompleted: 0,
+      publishCompleted: 0,
+    };
     let knownAccountItems = null;
     const listingCache = new Map();
     const listingFor = (candidate) => {
@@ -205,15 +208,17 @@ export class XianyuSyncService {
           currentTitle: null,
           phase: "preparing",
           ...progress,
-          total: scopeTotal,
-          completed: scopeSkipped + processedCount,
-          materialTotal: scopeTotal,
+          total: scopeProgress.total,
+          completed: processedCount,
+          materialTotal: scopeProgress.total,
           materialCompleted:
-            scopeSkipped + totals.material_processed_count,
+            scopeProgress.materialCompleted +
+            totals.material_processed_count,
           materialSkipped: totals.material_skipped,
-          publishTotal: scopeTotal,
-          publishCompleted: scopeSkipped + processedCount,
-          scopeSkipped,
+          publishTotal: scopeProgress.total,
+          publishCompleted:
+            scopeProgress.publishCompleted +
+            totals.publish_success,
         });
       } catch {
         // 页面进度回调不能影响同步任务本身。
@@ -283,14 +288,10 @@ export class XianyuSyncService {
           requestedGameIds.has(candidate.id),
         );
       }
-      scopeTotal = database.countSyncScope(
+      scopeProgress = database.getSyncScopeProgress(
         accountId,
         mode,
         gameIds,
-      );
-      scopeSkipped = Math.max(
-        0,
-        scopeTotal - candidates.length,
       );
       database.updateSyncRun(runId, {
         selected_count: candidates.length,
@@ -328,6 +329,19 @@ export class XianyuSyncService {
 
       const titleLocks = new Map();
       const syncMaterial = async (candidate) => {
+        reportProgress({
+          currentGameId: candidate.id,
+          currentTitle: candidate.title,
+          phase: "material",
+        });
+        const existingMaterialId = Number(candidate.material_id);
+        if (
+          candidate.material_sync_status === "synced" &&
+          Number.isInteger(existingMaterialId) &&
+          existingMaterialId > 0
+        ) {
+          return { candidate, existingMaterialId };
+        }
         const listing = listingFor(candidate);
         const payload = {
           external_id: String(candidate.id),
@@ -342,13 +356,6 @@ export class XianyuSyncService {
           condition: "全新",
           remark: `来源 gamer520，商品ID ${candidate.id}`,
         };
-        reportProgress({
-          total: candidates.length,
-          currentGameId: candidate.id,
-          currentTitle: candidate.title,
-          phase: "material",
-        });
-
         const titleKey = listing.title.trim();
         const previous = titleLocks.get(titleKey) ?? Promise.resolve();
         const operation = previous
@@ -716,7 +723,19 @@ export class XianyuSyncService {
         );
 
         for (const outcome of materialOutcomes) {
-          const { candidate, result, error } = outcome;
+          const {
+            candidate,
+            existingMaterialId,
+            result,
+            error,
+          } = outcome;
+          if (existingMaterialId) {
+            publishQueue.push({
+              candidate,
+              materialId: existingMaterialId,
+            });
+            continue;
+          }
           totals.material_processed_count += 1;
           if (error) {
             database.markMaterialFailed(

@@ -754,11 +754,11 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
     const publishingProgress = progressEvents.find(
       (progress) =>
         progress.phase === "publishing" &&
-        progress.publishCompleted === 1,
+        progress.publishCompleted === 0,
     );
     assert.equal(publishingProgress.publishTotal, 2);
     assert.equal(progressEvents.at(-1).publishTotal, 2);
-    assert.equal(progressEvents.at(-1).publishCompleted, 2);
+    assert.equal(progressEvents.at(-1).publishCompleted, 1);
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const rows = checkedDatabase.queryAll(
@@ -774,7 +774,7 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
   }
 });
 
-test("同步进度将已有素材记录计入已处理与本轮总量", async () => {
+test("已有素材跳过上传但继续发布且不虚增发布进度", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-scope-progress-test-"),
   );
@@ -811,17 +811,18 @@ test("同步进度将已有素材记录计入已处理与本轮总量", async ()
       mode: "pending",
       onProgress: (progress) => progressEvents.push(progress),
     });
-    assert.equal(sync.selectedCount, 1);
+    assert.equal(sync.selectedCount, 2);
     assert.equal(client.upsertCalls.length, 1);
+    assert.equal(client.publishCalls.length, 1);
+    assert.equal(client.publishCalls[0].materialIds.length, 2);
     const initialProgress = progressEvents.find(
       (progress) =>
         progress.phase === "preparing" &&
         progress.total === 2,
     );
-    assert.equal(initialProgress.completed, 1);
+    assert.equal(initialProgress.completed, 0);
     assert.equal(initialProgress.materialCompleted, 1);
-    assert.equal(initialProgress.publishCompleted, 1);
-    assert.equal(initialProgress.scopeSkipped, 1);
+    assert.equal(initialProgress.publishCompleted, 0);
     assert.equal(progressEvents.at(-1).completed, 2);
     assert.equal(progressEvents.at(-1).materialCompleted, 2);
     assert.equal(progressEvents.at(-1).publishCompleted, 2);

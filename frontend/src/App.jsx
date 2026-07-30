@@ -410,7 +410,7 @@ function SyncRail({ dashboard }) {
       icon: Database,
       label: "素材",
       detail: progress
-        ? `${progress.materialCompleted ?? 0}/${progress.materialTotal ?? 0}`
+        ? `${dashboard?.totals?.materialSynced ?? 0} 已同步 · 本轮 ${progress.materialCompleted ?? 0}/${progress.materialTotal ?? 0}`
         : `${dashboard?.totals?.materialSynced ?? 0} 已同步`,
       active: progress?.phase === "material",
     },
@@ -418,7 +418,7 @@ function SyncRail({ dashboard }) {
       icon: Truck,
       label: "发布",
       detail: progress
-        ? `${progress.publishCompleted ?? 0}/${progress.publishTotal ?? 0}`
+        ? `${dashboard?.totals?.publishedGames ?? 0} 已发布 · 本轮 ${progress.publishCompleted ?? 0}/${progress.publishTotal ?? 0}`
         : `${dashboard?.totals?.publishedGames ?? 0} 已发布`,
       active: progress?.phase === "publishing",
     },
@@ -598,7 +598,7 @@ function DashboardPage({ notify }) {
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between text-xs">
-                    <span>发布商品</span>
+                    <span>发布成功</span>
                     <span className="font-data">
                       {data.scheduler.sync.progress.publishCompleted ?? 0} /{" "}
                       {data.scheduler.sync.progress.publishTotal ?? 0}
@@ -607,7 +607,7 @@ function DashboardPage({ notify }) {
                   <Progress
                     value={data.scheduler.sync.progress.publishCompleted}
                     max={data.scheduler.sync.progress.publishTotal}
-                    label="发布商品进度"
+                    label="发布成功进度"
                   />
                 </div>
               </>
@@ -675,7 +675,7 @@ function TaskProgress({ schedule }) {
         </div>
         <div className="space-y-2">
           <div className="flex justify-between text-xs font-medium">
-            <span>发布商品</span>
+            <span>发布成功</span>
             <span className="font-data">
               {progress.publishCompleted ?? 0}/{progress.publishTotal ?? 0}
             </span>
@@ -683,7 +683,7 @@ function TaskProgress({ schedule }) {
           <Progress
             value={progress.publishCompleted}
             max={progress.publishTotal}
-            label="发布商品进度"
+            label="发布成功进度"
           />
         </div>
       </CardContent>

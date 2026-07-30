@@ -312,7 +312,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /游戏数据/);
     assert.match(appSource, /API Key 管理/);
     assert.match(appSource, /导入素材库/);
-    assert.match(appSource, /发布商品/);
+    assert.match(appSource, /发布成功/);
     assert.match(appSource, /图片链接/);
     assert.match(appSource, /总游戏数据/);
     assert.match(appSource, /有效游戏数据/);

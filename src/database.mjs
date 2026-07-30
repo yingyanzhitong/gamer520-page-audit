@@ -1123,7 +1123,7 @@ export class CrawlerDatabase {
       .run(...entries.map(([, value]) => value), runId);
   }
 
-  countSyncScope(accountId, mode = "all", gameIds = null) {
+  getSyncScopeProgress(accountId, mode = "all", gameIds = null) {
     const normalizedMode = new Set([
       "all",
       "pending",
@@ -1137,6 +1137,7 @@ export class CrawlerDatabase {
       conditions.push(
         "games.xianyu_item_id IS NULL",
         "publication.item_id IS NULL",
+        "COALESCE(publication.status, 'pending') != 'success'",
       );
     } else if (normalizedMode === "updated") {
       conditions.push("games.last_change_type = 'updated'");
@@ -1154,15 +1155,39 @@ export class CrawlerDatabase {
     }
     const row = this.database
       .prepare(`
-        SELECT COUNT(*) AS total
+        SELECT
+          COUNT(*) AS total,
+          SUM(
+            CASE
+              WHEN material.material_id IS NOT NULL
+               AND material.status IN ('synced', 'skipped')
+              THEN 1
+              ELSE 0
+            END
+          ) AS material_completed,
+          SUM(
+            CASE
+              WHEN games.xianyu_item_id IS NOT NULL
+                OR publication.item_id IS NOT NULL
+                OR publication.status = 'success'
+              THEN 1
+              ELSE 0
+            END
+          ) AS publish_completed
         FROM games
+        LEFT JOIN xianyu_material_sync AS material
+          ON material.game_id = games.id
         LEFT JOIN xianyu_publications AS publication
           ON publication.game_id = games.id
          AND publication.account_id = ?
         WHERE ${conditions.join("\n          AND ")}
       `)
       .get(...parameters);
-    return Number(row.total ?? 0);
+    return {
+      total: Number(row.total ?? 0),
+      materialCompleted: Number(row.material_completed ?? 0),
+      publishCompleted: Number(row.publish_completed ?? 0),
+    };
   }
 
   listSyncCandidates(accountId, limit, mode = "all") {
@@ -1196,9 +1221,8 @@ export class CrawlerDatabase {
          AND publication.account_id = ?
         WHERE ${VALID_GAME_DATA_CONDITION}
           AND games.xianyu_item_id IS NULL
-          AND material.material_id IS NULL
           AND publication.item_id IS NULL
-          AND COALESCE(publication.status, 'pending') NOT IN ('publishing', 'unknown')
+          AND COALESCE(publication.status, 'pending') NOT IN ('publishing', 'unknown', 'success')
         ORDER BY
           CASE WHEN publication.status = 'failed' THEN 0 ELSE 1 END,
           COALESCE(games.last_changed_at, games.first_seen_at) ASC,
@@ -1262,7 +1286,7 @@ export class CrawlerDatabase {
         if (normalizedMode === "updated") {
           return row.publication_status === "success" && materialNeedsSync;
         }
-        return true;
+        return row.material_sync_status !== "skipped";
       })
       .slice(0, limit);
   }
