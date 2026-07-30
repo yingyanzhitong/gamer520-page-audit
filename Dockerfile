@@ -6,7 +6,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --include=dev
 
 COPY --chown=pwuser:pwuser . .
 RUN npm run build \
