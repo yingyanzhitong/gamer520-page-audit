@@ -1,0 +1,60 @@
+frontend/src/App.jsx
+  s_bfd82453425369::t_ac111871e0b524 1063,1069-1074,1109-1110,1194-1213,1215-1262,1305,1314,1319-1321
+test/database.test.mjs
+  s_bfd82453425369::t_59f0bb7b7142f1 467-469,476-478,488-490,498-500,503
+README.md
+  s_bfd82453425369::t_fccecba68295e3 130,150,165,167
+src/dashboard-server.mjs
+  s_bfd82453425369::t_9be5f1e5be2683 1328,1337-1342,1371,1375-1376,1529
+src/scheduler.mjs
+  s_bfd82453425369::t_84f8115661864a 48-50,55-64,73-84,154-160,229-230,324-326,368-369,394-397,399,401-402,422,433-434,458-460
+test/sync-service.test.mjs
+  s_bfd82453425369::t_6f8ef60ce2bc84 12,463-512
+  s_bfd82453425369::t_5d70ff70dd86d4 360,369
+  s_bfd82453425369::t_08c8a797288dbf 306,361,370
+src/sync-service.mjs
+  s_bfd82453425369::t_ca79a84d3d85f9 20,22,25-34,117-118,128-138,280,331-332,346,449,567,725-726,820-821,824-825,847
+test/dashboard.test.mjs
+  s_bfd82453425369::t_59f0bb7b7142f1 191,201-202,247,255-256,279,283-284,309,312-313,727,733-734,741,744-745,793,807
+package.json
+  s_bfd82453425369::t_2a2d3d94d7257c 3
+src/database.mjs
+  s_bfd82453425369::t_1800afdf57947f 202-204,310,400-410
+  s_bfd82453425369::t_594a499e4b499a 1195-1197,1199,1208-1210,1229-1231,1233,1241-1243,1253-1255
+  s_bfd82453425369::t_2195b008f2df45 411
+src/task-control.mjs
+  s_bfd82453425369::t_ca79a84d3d85f9 9-12
+test/task-control.test.mjs
+  s_bfd82453425369::t_59f0bb7b7142f1 6,8-9
+docker-compose.yml
+  s_bfd82453425369::t_2a2d3d94d7257c 5
+CHANGELOG.md
+  s_bfd82453425369::t_2a2d3d94d7257c 3-9
+src/crawler.mjs
+  s_bfd82453425369::t_55a6c98aa12e8e 37-38,40
+public/assets/index-BJNFisnK.js
+  s_bfd82453425369::t_fd6e7cc2e6d801 49
+public/index.html
+  s_bfd82453425369::t_3482b39faf1536 12
+package-lock.json
+  s_bfd82453425369::t_498a4941270c8f 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "17fb4a0fb15f965f9d250860258f3fed6fea7ed0",
+  "prompts": {},
+  "logical_commit_id": "17fb4a0fb15f965f9d250860258f3fed6fea7ed0",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 330,
+      "total_deletions": 54
+    }
+  }
+}
