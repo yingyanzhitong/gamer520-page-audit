@@ -61,6 +61,7 @@ class FakeXianyuClient {
     this.publishCalls = [];
     this.cardBindCalls = [];
     this.events = [];
+    this.accountItems = new Map();
   }
 
   async listAccounts() {
@@ -118,6 +119,21 @@ class FakeXianyuClient {
     const call = this.publishCalls.find(
       (item) => item.requestId === batchId,
     );
+    const accountItems =
+      this.accountItems.get(call.accountId) ?? [];
+    for (const materialId of call.materialIds) {
+      const material = [...this.materials.values()].find(
+        (item) => item.materialId === materialId,
+      );
+      const itemId = `item-${call.accountId}-${materialId}`;
+      if (!accountItems.some((item) => item.item_id === itemId)) {
+        accountItems.push({
+          item_id: itemId,
+          item_title: material?.title ?? `商品 ${materialId}`,
+        });
+      }
+    }
+    this.accountItems.set(call.accountId, accountItems);
     return {
       done: true,
       items: call.materialIds.map((materialId) => ({
@@ -128,6 +144,14 @@ class FakeXianyuClient {
         item_url: `https://www.goofish.com/item?id=${materialId}`,
       })),
     };
+  }
+
+  async refreshAccountItems() {
+    return { success: true };
+  }
+
+  async listAccountItems(accountId) {
+    return [...(this.accountItems.get(accountId) ?? [])];
   }
 
   async bindCards(payload) {
@@ -187,6 +211,39 @@ class FlakyCardClient extends FakeXianyuClient {
   }
 }
 
+class ProbeFailureClient extends FakeXianyuClient {
+  async getBatchStatus(batchId) {
+    const call = this.publishCalls.find(
+      (item) => item.requestId === batchId,
+    );
+    return {
+      done: true,
+      items: call.materialIds.map((materialId) => ({
+        account_id: call.accountId,
+        material_id: materialId,
+        status: "failed",
+        error_message: "可能发布失败（页面未跳转，仍停留在发布页）",
+      })),
+    };
+  }
+}
+
+class MisreportedFailureClient extends FakeXianyuClient {
+  async getBatchStatus(batchId) {
+    const success = await super.getBatchStatus(batchId);
+    return {
+      ...success,
+      items: success.items.map((item) => ({
+        ...item,
+        status: "failed",
+        item_id: null,
+        item_url: null,
+        error_message: "可能发布失败（页面未跳转，仍停留在发布页）",
+      })),
+    };
+  }
+}
+
 function config(databasePath) {
   return {
     dbPath: databasePath,
@@ -194,6 +251,9 @@ function config(databasePath) {
     syncBatchTimeoutMs: 100,
     xianyuApiKey: "unused-by-fake",
     xianyuBaseUrl: "https://xianyu.example",
+    publicBaseUrl: "https://gamer520.example",
+    coverCacheDir: path.join(path.dirname(databasePath), "covers"),
+    coverCacheEnabled: false,
   };
 }
 
@@ -260,7 +320,7 @@ test("素材最多 4 个并行并按 20 件批量发布", async () => {
       client.publishCalls.map(
         (payload) => payload.materialIds.length,
       ),
-      [20, 1],
+      [1, 20],
     );
     assert.ok(
       client.events
@@ -338,6 +398,103 @@ test("素材最多 4 个并行并按 20 件批量发布", async () => {
   }
 });
 
+test("探针商品失败后停止后续批次", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-canary-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-07-28T00:00:00.000Z";
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    for (let id = 1; id <= 5; id += 1) {
+      const discovered = game(id);
+      database.upsertDiscoveredGames([discovered], timestamp);
+      database.saveGameSuccess(discovered, result(id), timestamp);
+    }
+    database.setXianyuAccountId("account-a", timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new ProbeFailureClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const sync = await service.run({ trigger: "test" });
+    assert.equal(sync.status, "partial");
+    assert.equal(sync.publishSubmitted, 1);
+    assert.equal(sync.publishFailed, 1);
+    assert.equal(client.upsertCalls.length, 5);
+    assert.equal(client.publishCalls.length, 1);
+    assert.equal(client.publishCalls[0].materialIds.length, 1);
+    assert.match(sync.safetyStopReason, /探针商品发布失败/);
+
+    const checkedDatabase = new CrawlerDatabase(databasePath);
+    const storedRun = checkedDatabase.queryOne(
+      `SELECT
+         status,
+         publish_selected_count,
+         publish_processed_count,
+         error_summary
+       FROM xianyu_sync_runs
+       ORDER BY id DESC
+       LIMIT 1`,
+    );
+    checkedDatabase.close();
+    assert.equal(storedRun.status, "partial");
+    assert.equal(storedRun.publish_selected_count, 5);
+    assert.equal(storedRun.publish_processed_count, 1);
+    assert.match(storedRun.error_summary, /探针商品发布失败/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("商品列表新增记录会纠正页面未跳转的失败结果", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-reconcile-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-07-28T00:00:00.000Z";
+  const discovered = game(91);
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    database.upsertDiscoveredGames([discovered], timestamp);
+    database.saveGameSuccess(
+      discovered,
+      result(discovered.id),
+      timestamp,
+    );
+    database.setXianyuAccountId("account-a", timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new MisreportedFailureClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const sync = await service.run({ trigger: "test" });
+    assert.equal(sync.status, "success");
+    assert.equal(sync.publishSuccess, 1);
+    assert.equal(sync.publishFailed, 0);
+    assert.equal(client.cardBindCalls.length, 1);
+
+    const checkedDatabase = new CrawlerDatabase(databasePath);
+    const publication = checkedDatabase.queryOne(
+      `SELECT status, item_id, card_bind_status
+       FROM xianyu_publications
+       WHERE game_id = ? AND account_id = ?`,
+      discovered.id,
+      "account-a",
+    );
+    checkedDatabase.close();
+    assert.equal(publication.status, "success");
+    assert.equal(publication.item_id, "item-account-a-1");
+    assert.equal(publication.card_bind_status, "success");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("单个素材失败不会阻止其他商品进入尾批发布", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-material-failure-test-"),
@@ -367,9 +524,12 @@ test("单个素材失败不会阻止其他商品进入尾批发布", async () =>
     assert.equal(sync.status, "partial");
     assert.equal(sync.materialFailed, 1);
     assert.equal(sync.publishSuccess, 4);
-    assert.equal(sync.batchCount, 1);
-    assert.equal(client.publishCalls.length, 1);
-    assert.equal(client.publishCalls[0].materialIds.length, 4);
+    assert.equal(sync.batchCount, 2);
+    assert.equal(client.publishCalls.length, 2);
+    assert.deepEqual(
+      client.publishCalls.map((call) => call.materialIds.length),
+      [1, 3],
+    );
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const storedRun = checkedDatabase.queryOne(

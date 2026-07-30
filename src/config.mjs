@@ -18,6 +18,10 @@ function stringValue(value, fallback = "") {
 
 export function loadConfig(overrides = {}) {
   const env = process.env;
+  const dbPath =
+    overrides.dbPath ??
+    env.DB_PATH ??
+    path.resolve("data/gamer520.sqlite");
   const channel =
     overrides.playwrightChannel ??
     env.PLAYWRIGHT_CHANNEL ??
@@ -68,10 +72,7 @@ export function loadConfig(overrides = {}) {
       10,
       { min: 1, max: 100 },
     ),
-    dbPath:
-      overrides.dbPath ??
-      env.DB_PATH ??
-      path.resolve("data/gamer520.sqlite"),
+    dbPath,
     cronSchedule:
       overrides.cronSchedule ?? env.CRON_SCHEDULE ?? "0 3 * * *",
     cronTimezone:
@@ -107,6 +108,18 @@ export function loadConfig(overrides = {}) {
     ),
     downloadReadApiKey: stringValue(
       overrides.downloadReadApiKey ?? env.GAMER520_READ_API_KEY,
+    ),
+    publicBaseUrl: stringValue(
+      overrides.publicBaseUrl ?? env.PUBLIC_BASE_URL,
+      "https://gamer520.xyyamsz.cn",
+    ).replace(/\/+$/, ""),
+    coverCacheDir:
+      overrides.coverCacheDir ??
+      env.COVER_CACHE_DIR ??
+      path.join(path.dirname(dbPath), "covers"),
+    coverCacheEnabled: booleanValue(
+      overrides.coverCacheEnabled ?? env.COVER_CACHE_ENABLED,
+      true,
     ),
     syncCronSchedule:
       overrides.syncCronSchedule ??
@@ -147,6 +160,10 @@ export function loadConfig(overrides = {}) {
   if (!["http:", "https:"].includes(xianyuUrl.protocol)) {
     throw new Error("XIANYU_BASE_URL 必须是 HTTP/HTTPS 地址");
   }
+  const publicUrl = new URL(config.publicBaseUrl);
+  if (!["http:", "https:"].includes(publicUrl.protocol)) {
+    throw new Error("PUBLIC_BASE_URL 必须是 HTTP/HTTPS 地址");
+  }
 
   return config;
 }
@@ -170,6 +187,8 @@ export function publicConfig(config) {
     xianyuBaseUrl: config.xianyuBaseUrl,
     xianyuConfigured: Boolean(config.xianyuApiKey),
     downloadReadApiConfigured: Boolean(config.downloadReadApiKey),
+    publicBaseUrl: config.publicBaseUrl,
+    coverCacheEnabled: config.coverCacheEnabled,
     syncCronSchedule: config.syncCronSchedule,
     syncEnabled: config.syncEnabled,
   };

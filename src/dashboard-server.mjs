@@ -695,6 +695,27 @@ function serveStatic(requestUrl, response) {
   fs.createReadStream(filePath).pipe(response);
 }
 
+function serveCachedCover(requestUrl, response, cacheDirectory) {
+  const match = requestUrl.pathname.match(
+    /^\/covers\/(\d+-[a-f0-9]{20}\.jpg)$/,
+  );
+  if (!match) {
+    sendError(response, 404, "封面不存在");
+    return;
+  }
+  const filePath = path.join(cacheDirectory, match[1]);
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    sendError(response, 404, "封面不存在");
+    return;
+  }
+  response.writeHead(200, {
+    "content-type": "image/jpeg",
+    "content-length": fs.statSync(filePath).size,
+    "cache-control": "public, max-age=31536000, immutable",
+  });
+  fs.createReadStream(filePath).pipe(response);
+}
+
 export async function startDashboardServer(
   config,
   runtimeState = () => ({}),
@@ -712,6 +733,17 @@ export async function startDashboardServer(
     try {
       if (request.method === "GET" && requestUrl.pathname === "/healthz") {
         sendJson(response, 200, { ok: true });
+        return;
+      }
+      if (
+        request.method === "GET" &&
+        requestUrl.pathname.startsWith("/covers/")
+      ) {
+        serveCachedCover(
+          requestUrl,
+          response,
+          config.coverCacheDir,
+        );
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/dashboard") {

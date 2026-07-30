@@ -89,6 +89,7 @@ const syncPhaseLabels = {
   publishing: "发布商品",
   "binding-card": "关联卡券 #6",
   processing: "处理下一件",
+  halted: "安全熔断",
   completed: "本轮完成",
 };
 

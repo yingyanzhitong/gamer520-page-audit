@@ -102,6 +102,23 @@ export class XianyuClient {
     return payload?.data ?? {};
   }
 
+  async refreshAccountItems(accountId) {
+    return this.request("/api/v1/items/get-all-from-account", {
+      method: "POST",
+      body: {
+        cookie_id: accountId,
+        page_size: 100,
+      },
+    });
+  }
+
+  async listAccountItems(accountId) {
+    const payload = await this.request(
+      `/api/v1/items/cookie/${encodeURIComponent(accountId)}`,
+    );
+    return Array.isArray(payload?.items) ? payload.items : [];
+  }
+
   async bindCards({ cardIds, itemIds, itemTitle }) {
     const payload = await this.request("/api/v1/cards/batch-bind", {
       method: "POST",

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { cacheCoverImage } from "./cover-cache.mjs";
 import { CrawlerDatabase } from "./database.mjs";
 import { nowIso, serializeError } from "./utils.mjs";
 import { XianyuClient } from "./xianyu-client.mjs";
@@ -32,9 +33,114 @@ function countActions(items) {
   return counts;
 }
 
+function normalizedTitle(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s+/gu, "");
+}
+
+function titleMatchScore(listingTitle, itemTitle) {
+  const listing = normalizedTitle(listingTitle);
+  const item = normalizedTitle(itemTitle);
+  const shorterLength = Math.min(listing.length, item.length);
+  if (shorterLength < 6) return 0;
+  if (listing.startsWith(item) || item.startsWith(listing)) {
+    return shorterLength;
+  }
+  let commonPrefix = 0;
+  while (
+    commonPrefix < shorterLength &&
+    listing[commonPrefix] === item[commonPrefix]
+  ) {
+    commonPrefix += 1;
+  }
+  return commonPrefix >= 12 ? commonPrefix : 0;
+}
+
+function matchNewPublishedItems(
+  entries,
+  beforeItems,
+  afterItems,
+  listingFor,
+) {
+  const previousIds = new Set(
+    beforeItems
+      .map((item) => String(item.item_id ?? ""))
+      .filter(Boolean),
+  );
+  const available = afterItems.filter((item) => {
+    const itemId = String(item.item_id ?? "");
+    return itemId && !previousIds.has(itemId);
+  });
+  const matches = new Map();
+
+  for (const entry of entries) {
+    let bestIndex = -1;
+    let bestScore = 0;
+    for (let index = 0; index < available.length; index += 1) {
+      const score = titleMatchScore(
+        listingFor(entry.candidate).title,
+        available[index].item_title ?? available[index].title,
+      );
+      if (score > bestScore) {
+        bestIndex = index;
+        bestScore = score;
+      }
+    }
+    if (bestIndex < 0) continue;
+    const [matched] = available.splice(bestIndex, 1);
+    matches.set(entry.materialId, matched);
+  }
+  return matches;
+}
+
+function safetyStopReason(outcomes, isCanary) {
+  const failures = outcomes.filter(
+    (outcome) => outcome.status === "failed",
+  );
+  if (failures.length === 0) return null;
+  if (isCanary) {
+    return `探针商品发布失败：${failures[0].errorMessage ?? "未知错误"}`;
+  }
+
+  const errors = failures.map((outcome) =>
+    String(outcome.errorMessage ?? ""),
+  );
+  const pageFailures = errors.filter((message) =>
+    message.includes("页面未跳转"),
+  ).length;
+  const imageFailures = errors.filter((message) =>
+    message.includes("没有成功上传任何图片"),
+  ).length;
+  const accountFailures = errors.filter(
+    (message) =>
+      message.includes("Cookie无效") ||
+      message.includes("不是发布页面"),
+  ).length;
+
+  if (accountFailures > 0) {
+    return "检测到账号登录页或 Cookie 异常，已停止后续批次";
+  }
+  if (pageFailures >= 3) {
+    return `同一批次有 ${pageFailures} 条停留在发布页，已停止后续批次`;
+  }
+  if (imageFailures >= 3) {
+    return `同一批次有 ${imageFailures} 条图片上传失败，已停止后续批次`;
+  }
+  if (failures.length * 2 >= outcomes.length) {
+    return `当前批次失败率达到 ${Math.round(
+      (failures.length / outcomes.length) * 100,
+    )}%，已停止后续批次`;
+  }
+  return null;
+}
+
 export class XianyuSyncService {
-  constructor(config, client = null) {
+  constructor(config, client = null, dependencies = {}) {
     this.config = config;
+    this.cacheCover =
+      dependencies.cacheCover ?? cacheCoverImage;
     this.client =
       client ??
       new XianyuClient({
@@ -112,6 +218,8 @@ export class XianyuSyncService {
     let latestBatchId = null;
     let processedCount = 0;
     let candidates = [];
+    let knownAccountItems = null;
+    let stoppedForSafety = null;
     const listingCache = new Map();
     const listingFor = (candidate) => {
       if (!listingCache.has(candidate.id)) {
@@ -147,6 +255,11 @@ export class XianyuSyncService {
       } catch {
         // 页面进度回调不能影响同步任务本身。
       }
+    };
+    const refreshAccountItems = async () => {
+      await this.client.refreshAccountItems(accountId);
+      knownAccountItems = await this.client.listAccountItems(accountId);
+      return knownAccountItems;
     };
     const bindDeliveryCard = async (candidate, itemId) => {
       await control?.checkpoint();
@@ -231,7 +344,7 @@ export class XianyuSyncService {
           title: listing.title,
           description: listing.description,
           price: Number(candidate.effective_price),
-          images: [listing.imageUrl],
+          images: [],
           category: "虚拟商品",
           delivery_method: "express",
           postage: 0,
@@ -251,6 +364,17 @@ export class XianyuSyncService {
           .catch(() => {})
           .then(async () => {
             await control?.checkpoint();
+            let coverUrl = listing.imageUrl;
+            if (this.config.coverCacheEnabled !== false) {
+              const cachedCover = await this.cacheCover({
+                gameId: candidate.id,
+                imageUrl: listing.imageUrl,
+                cacheDirectory: this.config.coverCacheDir,
+                publicBaseUrl: this.config.publicBaseUrl,
+              });
+              coverUrl = cachedCover.publicUrl;
+            }
+            payload.images = [coverUrl];
             const results = await this.client.upsertMaterials([payload]);
             const result = results.find(
               (item) =>
@@ -274,9 +398,16 @@ export class XianyuSyncService {
         }
       };
 
-      const publishEntries = async (entries) => {
+      const publishEntries = async (
+        entries,
+        { isCanary = false } = {},
+      ) => {
         const firstCandidate = entries[0].candidate;
         await control?.checkpoint();
+        if (knownAccountItems === null) {
+          await refreshAccountItems();
+        }
+        const beforeItems = knownAccountItems;
         totals.batch_count += 1;
         totals.publish_submitted += entries.length;
         database.updateSyncRun(runId, {
@@ -358,13 +489,15 @@ export class XianyuSyncService {
             finished_at: unknownAt,
           });
           return {
-            runId,
-            accountId,
-            mode,
-            selectedCount: candidates.length,
-            batchCount: totals.batch_count,
-            batchId,
-            status: "unknown",
+            terminalResult: {
+              runId,
+              accountId,
+              mode,
+              selectedCount: candidates.length,
+              batchCount: totals.batch_count,
+              batchId,
+              status: "unknown",
+            },
           };
         }
 
@@ -399,66 +532,98 @@ export class XianyuSyncService {
             finished_at: unknownAt,
           });
           return {
-            runId,
-            accountId,
-            mode,
-            selectedCount: candidates.length,
-            batchCount: totals.batch_count,
-            batchId,
-            status: "unknown",
+            terminalResult: {
+              runId,
+              accountId,
+              mode,
+              selectedCount: candidates.length,
+              batchCount: totals.batch_count,
+              batchId,
+              status: "unknown",
+            },
           };
         }
 
-        const entryByMaterial = new Map(
-          entries.map((entry) => [entry.materialId, entry]),
-        );
+        let reconciledItems = new Map();
+        let reconciliationError = null;
+        try {
+          const afterItems = await refreshAccountItems();
+          reconciledItems = matchNewPublishedItems(
+            entries,
+            beforeItems,
+            afterItems,
+            listingFor,
+          );
+        } catch (error) {
+          reconciliationError = error;
+        }
+
+        const statusByMaterial = new Map();
+        for (const item of status.items ?? []) {
+          if (
+            item.account_id &&
+            item.account_id !== accountId
+          ) {
+            continue;
+          }
+          statusByMaterial.set(Number(item.material_id), item);
+        }
+
         let batchSuccess = 0;
         let batchFailed = 0;
+        let batchUnknown = 0;
         const successfulItems = [];
+        const outcomes = [];
         const completedAt = nowIso();
-        for (const item of status.items ?? []) {
-          const entry = entryByMaterial.get(Number(item.material_id));
-          if (!entry || item.account_id !== accountId) continue;
-          const itemStatus =
-            item.status === "success" ? "success" : "failed";
-          if (itemStatus === "success") batchSuccess += 1;
-          else batchFailed += 1;
+        for (const entry of entries) {
+          const item = statusByMaterial.get(entry.materialId);
+          const reconciled = reconciledItems.get(entry.materialId);
+          const itemId = String(
+            reconciled?.item_id ?? item?.item_id ?? "",
+          ).trim();
+          const itemUrl =
+            item?.item_url ??
+            (itemId
+              ? `https://www.goofish.com/item?id=${encodeURIComponent(itemId)}`
+              : null);
+          let itemStatus;
+          let errorMessage = item?.error_message ?? null;
+          if (reconciled || (item?.status === "success" && itemId)) {
+            itemStatus = "success";
+            errorMessage = null;
+            batchSuccess += 1;
+          } else if (item?.status === "success") {
+            itemStatus = "unknown";
+            errorMessage = reconciliationError
+              ? `闲鱼返回成功但缺少商品编号，商品列表核对失败：${reconciliationError.message}`
+              : "闲鱼返回成功但缺少商品编号，商品列表未发现对应新增商品";
+            batchUnknown += 1;
+          } else {
+            itemStatus = "failed";
+            errorMessage =
+              errorMessage ??
+              "批次已结束但未返回该商品结果";
+            batchFailed += 1;
+          }
           database.markPublicationResult({
             gameId: entry.candidate.id,
             accountId,
             status: itemStatus,
-            itemId: item.item_id,
-            itemUrl: item.item_url,
-            errorMessage: item.error_message,
+            itemId: itemId || null,
+            itemUrl,
+            errorMessage,
             updatedAt: completedAt,
           });
-          if (itemStatus === "success" && item.item_id) {
+          outcomes.push({
+            entry,
+            status: itemStatus,
+            errorMessage,
+          });
+          if (itemStatus === "success" && itemId) {
             successfulItems.push({
               candidate: entry.candidate,
-              itemId: item.item_id,
+              itemId,
             });
-          }
-        }
-
-        const missingResults =
-          entries.length - batchSuccess - batchFailed;
-        if (missingResults > 0) {
-          batchFailed += missingResults;
-          for (const entry of entries) {
-            const hasResult = (status.items ?? []).some(
-              (item) =>
-                Number(item.material_id) === entry.materialId &&
-                item.account_id === accountId,
-            );
-            if (!hasResult) {
-              database.markPublicationResult({
-                gameId: entry.candidate.id,
-                accountId,
-                status: "failed",
-                errorMessage: "批次已结束但未返回该商品结果",
-                updatedAt: completedAt,
-              });
-            }
           }
         }
 
@@ -490,7 +655,32 @@ export class XianyuSyncService {
           completed: processedCount,
           phase: "processing",
         });
-        return null;
+
+        if (batchUnknown > 0) {
+          const errorSummary = `${batchUnknown} 个商品缺少可核验的商品编号，已停止后续批次`;
+          database.updateSyncRun(runId, {
+            ...totals,
+            status: "unknown",
+            batch_id: batchId,
+            error_summary: errorSummary,
+            finished_at: completedAt,
+          });
+          return {
+            terminalResult: {
+              runId,
+              accountId,
+              mode,
+              selectedCount: candidates.length,
+              batchCount: totals.batch_count,
+              batchId,
+              status: "unknown",
+            },
+          };
+        }
+
+        return {
+          stopReason: safetyStopReason(outcomes, isCanary),
+        };
       };
 
       const publishQueue = [];
@@ -605,9 +795,22 @@ export class XianyuSyncService {
           publishQueue.length > 0 ? "publishing" : "material-completed",
       });
 
+      let publishIndex = 0;
+      if (publishQueue.length > 0) {
+        const canaryResult = await publishEntries(
+          publishQueue.slice(0, 1),
+          { isCanary: true },
+        );
+        if (canaryResult.terminalResult) {
+          return canaryResult.terminalResult;
+        }
+        stoppedForSafety = canaryResult.stopReason;
+        publishIndex = 1;
+      }
+
       for (
-        let publishIndex = 0;
-        publishIndex < publishQueue.length;
+        ;
+        !stoppedForSafety && publishIndex < publishQueue.length;
         publishIndex += publishBatchSize
       ) {
         const publicationResult = await publishEntries(
@@ -616,10 +819,14 @@ export class XianyuSyncService {
             publishIndex + publishBatchSize,
           ),
         );
-        if (publicationResult) return publicationResult;
+        if (publicationResult.terminalResult) {
+          return publicationResult.terminalResult;
+        }
+        stoppedForSafety = publicationResult.stopReason;
       }
 
       const finalStatus =
+        stoppedForSafety ||
         totals.material_failed > 0 ||
         totals.publish_failed > 0 ||
         totals.card_bind_failed > 0
@@ -634,10 +841,12 @@ export class XianyuSyncService {
         current_game_id: null,
         current_title: null,
         error_summary:
+          stoppedForSafety ||
           totals.material_failed > 0 ||
           totals.publish_failed > 0 ||
           totals.card_bind_failed > 0
             ? [
+                stoppedForSafety,
                 totals.material_failed > 0
                   ? `${totals.material_failed} 个素材同步失败`
                   : null,
@@ -656,7 +865,7 @@ export class XianyuSyncService {
       reportProgress({
         total: candidates.length,
         completed: processedCount,
-        phase: "completed",
+        phase: stoppedForSafety ? "halted" : "completed",
       });
       return {
         runId,
@@ -676,6 +885,7 @@ export class XianyuSyncService {
         batchCount: totals.batch_count,
         batchId: latestBatchId,
         status: finalStatus,
+        safetyStopReason: stoppedForSafety,
       };
     } catch (error) {
       if (submittedPublication) {
