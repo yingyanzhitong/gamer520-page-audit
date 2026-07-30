@@ -1146,7 +1146,13 @@ export class CrawlerDatabase {
             )
           )
           AND EXISTS (
-            SELECT 1 FROM downloads WHERE downloads.game_id = games.id
+            SELECT 1
+            FROM downloads
+            WHERE downloads.game_id = games.id
+              AND (
+                trim(downloads.url) LIKE 'http://%'
+                OR trim(downloads.url) LIKE 'https://%'
+              )
           )
           AND games.xianyu_item_id IS NULL
           AND material.material_id IS NULL
@@ -1160,7 +1166,14 @@ export class CrawlerDatabase {
       `)
       .all(accountId, requiresSourceImage ? 1 : 0);
     const downloadStatement = this.database.prepare(
-      "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
+      `SELECT *
+       FROM downloads
+       WHERE game_id = ?
+         AND (
+           trim(url) LIKE 'http://%'
+           OR trim(url) LIKE 'https://%'
+         )
+       ORDER BY provider, url`,
     );
     const normalizedMode = new Set([
       "all",
@@ -1235,7 +1248,13 @@ export class CrawlerDatabase {
             OR length(trim(games.image_url)) = 0
           )
           AND EXISTS (
-            SELECT 1 FROM downloads WHERE downloads.game_id = games.id
+            SELECT 1
+            FROM downloads
+            WHERE downloads.game_id = games.id
+              AND (
+                trim(downloads.url) LIKE 'http://%'
+                OR trim(downloads.url) LIKE 'https://%'
+              )
           )
       `)
       .all();

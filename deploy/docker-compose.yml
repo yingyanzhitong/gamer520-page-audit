@@ -1,6 +1,6 @@
 services:
   crawler:
-    image: ${IMAGE_NAME:?请在 .env 中设置 Docker Hub 镜像名}:${IMAGE_TAG:-2.0.2}
+    image: ${IMAGE_NAME:?请在 .env 中设置 Docker Hub 镜像名}:${IMAGE_TAG:-2.0.3}
     pull_policy: always
     init: true
     ipc: host

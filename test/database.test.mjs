@@ -560,3 +560,47 @@ test("发布成功后把闲鱼商品编号写回游戏数据", () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("闲鱼同步候选只保留有效 HTTP 下载资源", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-download-filter-test-"),
+  );
+  const database = new CrawlerDatabase(
+    path.join(directory, "test.sqlite"),
+  );
+  try {
+    const timestamp = "2026-07-30T00:00:00.000Z";
+    const cases = [
+      [120001, "有效资源", "https://pan.example/valid"],
+      [120002, "空下载地址", ""],
+      [120003, "非网页协议", "ftp://pan.example/file"],
+    ];
+    for (const [id, title, url] of cases) {
+      const discovered = discovery(id, title, id - 120000);
+      database.upsertDiscoveredGames([discovered], timestamp);
+      database.saveGameSuccess(
+        discovered,
+        result(id, title, url),
+        timestamp,
+      );
+    }
+    database.setXianyuAccountId("account-a", timestamp);
+
+    const candidates = database.listSyncCandidates(
+      "account-a",
+      20,
+      "all",
+    );
+    assert.deepEqual(
+      candidates.map((candidate) => candidate.id),
+      [120001],
+    );
+    assert.deepEqual(
+      candidates[0].downloads.map((download) => download.url),
+      ["https://pan.example/valid"],
+    );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

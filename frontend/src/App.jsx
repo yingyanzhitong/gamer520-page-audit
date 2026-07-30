@@ -1232,7 +1232,7 @@ function GameDetail({ gameId, open, onOpenChange }) {
         <DialogHeader>
           <DialogTitle>{detail?.game?.title ?? `游戏 ${gameId}`}</DialogTitle>
           <DialogDescription>
-            游戏凭证、下载源与资源详情页
+            游戏凭证、图片链接、下载源与资源详情页
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -1249,6 +1249,19 @@ function GameDetail({ gameId, open, onOpenChange }) {
             </p>
           </div>
         </div>
+        {detail?.game?.imageUrl ? (
+          <div className="rounded-lg border p-4">
+            <p className="text-xs text-muted-foreground">图片链接</p>
+            <a
+              className="mt-2 block break-all text-sm text-primary hover:underline"
+              href={detail.game.imageUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {detail.game.imageUrl}
+            </a>
+          </div>
+        ) : null}
         <div className="space-y-3">
           {(detail?.downloads ?? []).map((download, index) => (
             <div key={`${download.url}-${index}`} className="rounded-lg border p-4">

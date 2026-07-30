@@ -311,6 +311,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /API Key 管理/);
     assert.match(appSource, /导入素材库/);
     assert.match(appSource, /发布商品/);
+    assert.match(appSource, /图片链接/);
 
     const games = await fetch(
       `${baseUrl}/api/games?query=118842&status=success`,
@@ -344,6 +345,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       (response) => response.json(),
     );
     assert.equal(detail.game.archivePassword, "laoquzhang.com");
+    assert.equal(
+      detail.game.imageUrl,
+      "https://images.example/118842.jpg",
+    );
     assert.equal(detail.downloads[0].extractionCode, "e15a");
 
     const legacyGet = await fetch(
