@@ -246,11 +246,12 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         crawlTrigger = trigger;
         return { trigger, mode: "full", active: true };
       },
-      triggerSync: (trigger, mode) => {
-        syncTrigger = { trigger, mode };
+      triggerSync: (trigger, mode, options = {}) => {
+        syncTrigger = { trigger, mode, options };
         return {
           trigger,
           mode,
+          gameIds: options.gameIds ?? null,
           active: true,
         };
       },
@@ -292,29 +293,24 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(schedule.sync.progress.materialCompleted, 4);
     assert.equal(schedule.sync.progress.publishCompleted, 2);
 
-    const appSource = await fetch(`${baseUrl}/app.js`).then(
-      (response) => response.text(),
-    );
     const pageSource = await fetch(baseUrl).then((response) =>
       response.text(),
     );
-    assert.match(appSource, /个列表页 · 跳过/);
-    assert.match(appSource, /materialSkipped/);
-    assert.match(appSource, /syncMaterialProgressCount/);
-    assert.match(appSource, /syncPublishProgressCount/);
-    assert.match(pageSource, /id="sync-material-progress-track"/);
-    assert.match(pageSource, /id="sync-publish-progress-track"/);
-    assert.match(pageSource, /导入素材库进度/);
-    assert.match(pageSource, /发布商品进度/);
-    for (const status of [
-      "none",
-      "material",
-      "publishing",
-      "published",
-      "material_update",
-    ]) {
-      assert.match(pageSource, new RegExp(`value="${status}"`));
-    }
+    const scriptPath = pageSource.match(
+      /<script[^>]+src="([^"]+)"[^>]*>/,
+    )?.[1];
+    assert.ok(scriptPath);
+    const appSource = await fetch(`${baseUrl}${scriptPath}`).then(
+      (response) => response.text(),
+    );
+    assert.match(pageSource, /id="root"/);
+    assert.match(appSource, /运营看板/);
+    assert.match(appSource, /任务记录/);
+    assert.match(appSource, /商品配置/);
+    assert.match(appSource, /游戏数据/);
+    assert.match(appSource, /API Key 管理/);
+    assert.match(appSource, /导入素材库/);
+    assert.match(appSource, /发布商品/);
 
     const games = await fetch(
       `${baseUrl}/api/games?query=118842&status=success`,
@@ -541,6 +537,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       runs.find((run) => run.taskType === "sync").publishProcessedCount,
       1,
     );
+    const logs = await fetch(`${baseUrl}/api/logs?limit=12`).then(
+      (response) => response.json(),
+    );
+    assert.ok(Array.isArray(logs));
 
     const unauthorizedAccounts = await fetch(
       `${baseUrl}/api/xianyu/accounts`,
@@ -717,6 +717,25 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.deepEqual(syncTrigger, {
       trigger: "manual",
       mode: "pending",
+      options: {},
+    });
+
+    const singleSync = await fetch(
+      `${baseUrl}/api/games/118842/sync`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({}),
+      },
+    );
+    assert.equal(singleSync.status, 202);
+    assert.deepEqual(syncTrigger, {
+      trigger: "manual-game",
+      mode: "all",
+      options: { gameIds: [118842] },
     });
 
     const interruptedSync = await fetch(
@@ -736,11 +755,6 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       task: "sync",
       action: "interrupt",
     });
-
-    const page = await fetch(baseUrl).then((response) => response.text());
-    assert.match(page, /G520 采集观测台/);
-    assert.match(page, /id="xianyu-status-filter"/);
-    assert.match(page, /<option value="updated">已更新<\/option>/);
 
     const writeResponse = await fetch(`${baseUrl}/api/games`, {
       method: "POST",

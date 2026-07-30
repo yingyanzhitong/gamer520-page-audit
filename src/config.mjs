@@ -99,6 +99,25 @@ export function loadConfig(overrides = {}) {
       3_000,
       { min: 1, max: 65_535 },
     ),
+    dashboardAdminUsername: stringValue(
+      overrides.dashboardAdminUsername ??
+        env.DASHBOARD_ADMIN_USERNAME,
+      "admin",
+    ),
+    dashboardAdminPassword: stringValue(
+      overrides.dashboardAdminPassword ??
+        env.DASHBOARD_ADMIN_PASSWORD,
+    ),
+    dashboardSessionSecret: stringValue(
+      overrides.dashboardSessionSecret ??
+        env.DASHBOARD_SESSION_SECRET,
+    ),
+    dashboardSessionTtlSeconds: integerValue(
+      overrides.dashboardSessionTtlSeconds ??
+        env.DASHBOARD_SESSION_TTL_SECONDS,
+      12 * 60 * 60,
+      { min: 15 * 60, max: 7 * 24 * 60 * 60 },
+    ),
     xianyuBaseUrl: stringValue(
       overrides.xianyuBaseUrl ?? env.XIANYU_BASE_URL,
       "https://xianyu.xyyamsz.cn",
@@ -164,6 +183,15 @@ export function loadConfig(overrides = {}) {
   if (!["http:", "https:"].includes(publicUrl.protocol)) {
     throw new Error("PUBLIC_BASE_URL 必须是 HTTP/HTTPS 地址");
   }
+  if (
+    env.NODE_ENV === "production" &&
+    (!config.dashboardAdminPassword ||
+      !config.dashboardSessionSecret)
+  ) {
+    throw new Error(
+      "生产环境必须配置 DASHBOARD_ADMIN_PASSWORD 和 DASHBOARD_SESSION_SECRET",
+    );
+  }
 
   return config;
 }
@@ -184,6 +212,10 @@ export function publicConfig(config) {
     dbPath: config.dbPath,
     dashboardHost: config.dashboardHost,
     dashboardPort: config.dashboardPort,
+    dashboardAuthConfigured: Boolean(
+      config.dashboardAdminPassword &&
+        config.dashboardSessionSecret,
+    ),
     xianyuBaseUrl: config.xianyuBaseUrl,
     xianyuConfigured: Boolean(config.xianyuApiKey),
     downloadReadApiConfigured: Boolean(config.downloadReadApiKey),

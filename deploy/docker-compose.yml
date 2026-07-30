@@ -1,6 +1,6 @@
 services:
   crawler:
-    image: ${IMAGE_NAME:?请在 .env 中设置 Docker Hub 镜像名}:${IMAGE_TAG:-1.9.1}
+    image: ${IMAGE_NAME:?请在 .env 中设置 Docker Hub 镜像名}:${IMAGE_TAG:-2.0.0}
     pull_policy: always
     init: true
     ipc: host
@@ -27,6 +27,10 @@ services:
       NODE_OPTIONS: --disable-warning=ExperimentalWarning
       DASHBOARD_HOST: 0.0.0.0
       DASHBOARD_PORT: "3000"
+      DASHBOARD_ADMIN_USERNAME: ${DASHBOARD_ADMIN_USERNAME:-admin}
+      DASHBOARD_ADMIN_PASSWORD: ${DASHBOARD_ADMIN_PASSWORD:?请配置后台管理员密码}
+      DASHBOARD_SESSION_SECRET: ${DASHBOARD_SESSION_SECRET:?请配置后台会话密钥}
+      DASHBOARD_SESSION_TTL_SECONDS: ${DASHBOARD_SESSION_TTL_SECONDS:-43200}
       XIANYU_BASE_URL: ${XIANYU_BASE_URL:-https://xianyu.xyyamsz.cn}
       XIANYU_API_KEY: ${XIANYU_API_KEY:?请在 .env 中配置闲鱼用户 API Key}
       GAMER520_READ_API_KEY: ${GAMER520_READ_API_KEY:?请在 .env 中配置下载只读 Key}

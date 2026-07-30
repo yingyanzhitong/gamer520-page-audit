@@ -7,6 +7,14 @@ import { fileURLToPath } from "node:url";
 
 import { CrawlerDatabase } from "./database.mjs";
 import {
+  clearDashboardSessionCookieHeader,
+  createDashboardSession,
+  dashboardAuthEnabled,
+  dashboardSessionCookieHeader,
+  dashboardSessionFromRequest,
+  verifyDashboardCredentials,
+} from "./dashboard-auth.mjs";
+import {
   DEFAULT_XIANYU_TEMPLATES,
   validateXianyuTemplates,
 } from "./xianyu-templates.mjs";
@@ -190,10 +198,11 @@ function syncMode(value, fallback = "all") {
   return normalized;
 }
 
-function sendJson(response, status, payload) {
+function sendJson(response, status, payload, headers = {}) {
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
+    ...headers,
   });
   response.end(JSON.stringify(payload));
 }
@@ -210,6 +219,7 @@ function keyMatches(provided, expected) {
 }
 
 function requireKey(request, response, expected, headerName) {
+  if (request.adminAuthenticated) return true;
   if (!expected) {
     sendError(response, 503, `${headerName} 尚未在服务器配置`);
     return false;
@@ -220,6 +230,21 @@ function requireKey(request, response, expected, headerName) {
     return false;
   }
   return true;
+}
+
+function requireAdmin(request, response, config) {
+  if (!dashboardAuthEnabled(config)) {
+    return true;
+  }
+  const session = dashboardSessionFromRequest(config, request);
+  const apiKey = request.headers["x-api-key"];
+  if (session || keyMatches(apiKey, config.xianyuApiKey)) {
+    request.adminAuthenticated = true;
+    request.dashboardSession = session;
+    return true;
+  }
+  sendError(response, 401, "请先登录后台");
+  return false;
 }
 
 async function readJsonBody(request, maximumBytes = 64 * 1024) {
@@ -662,6 +687,69 @@ function listSyncRuns(database, requestUrl) {
     .map(mapSyncRun);
 }
 
+function listTaskLogs(database, requestUrl) {
+  const limit = integerParameter(
+    requestUrl.searchParams.get("limit"),
+    50,
+    1,
+    200,
+  );
+  const crawlLogs = database
+    .prepare(`
+      SELECT
+        id,
+        run_id,
+        game_id,
+        stage,
+        error_name,
+        error_message,
+        created_at
+      FROM crawl_errors
+      ORDER BY id DESC
+      LIMIT ?
+    `)
+    .all(limit)
+    .map((row) => ({
+      id: `crawl-${row.id}`,
+      taskType: "crawl",
+      runId: row.run_id,
+      gameId: row.game_id,
+      level: "error",
+      stage: row.stage,
+      title: row.error_name ?? "采集失败",
+      message: row.error_message,
+      createdAt: row.created_at,
+    }));
+  const syncLogs = database
+    .prepare(`
+      SELECT id, status, error_summary, finished_at, started_at
+      FROM xianyu_sync_runs
+      WHERE error_summary IS NOT NULL
+        AND length(trim(error_summary)) > 0
+      ORDER BY id DESC
+      LIMIT ?
+    `)
+    .all(limit)
+    .map((row) => ({
+      id: `sync-${row.id}`,
+      taskType: "sync",
+      runId: row.id,
+      gameId: null,
+      level: row.status === "failed" ? "error" : "warning",
+      stage: "publish",
+      title: `同步任务 #${row.id}`,
+      message: row.error_summary,
+      createdAt: row.finished_at ?? row.started_at,
+    }));
+  return [...crawlLogs, ...syncLogs]
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() -
+        new Date(left.createdAt).getTime(),
+    )
+    .slice(0, limit);
+}
+
 function serveStatic(requestUrl, response) {
   const relativePath =
     requestUrl.pathname === "/" ? "index.html" : requestUrl.pathname.slice(1);
@@ -724,7 +812,7 @@ export async function startDashboardServer(
   const server = http.createServer(async (request, response) => {
     response.setHeader(
       "content-security-policy",
-      "default-src 'self'; img-src 'self' data: https:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+      "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
     );
     response.setHeader("x-content-type-options", "nosniff");
     response.setHeader("referrer-policy", "strict-origin-when-cross-origin");
@@ -744,6 +832,82 @@ export async function startDashboardServer(
           response,
           config.coverCacheDir,
         );
+        return;
+      }
+      if (
+        request.method === "GET" &&
+        requestUrl.pathname === "/api/auth/session"
+      ) {
+        const session = dashboardSessionFromRequest(config, request);
+        sendJson(response, 200, {
+          enabled: dashboardAuthEnabled(config),
+          authenticated:
+            !dashboardAuthEnabled(config) || Boolean(session),
+          username:
+            session?.username ??
+            (!dashboardAuthEnabled(config)
+              ? config.dashboardAdminUsername
+              : null),
+        });
+        return;
+      }
+      if (
+        request.method === "POST" &&
+        requestUrl.pathname === "/api/auth/login"
+      ) {
+        if (!dashboardAuthEnabled(config)) {
+          sendError(response, 503, "后台登录尚未在服务器配置");
+          return;
+        }
+        const body = await readJsonBody(request);
+        if (
+          !verifyDashboardCredentials(
+            config,
+            body.username,
+            body.password,
+          )
+        ) {
+          sendError(response, 401, "账号或密码错误");
+          return;
+        }
+        const token = createDashboardSession(config);
+        sendJson(
+          response,
+          200,
+          {
+            success: true,
+            username: config.dashboardAdminUsername,
+          },
+          {
+            "set-cookie": dashboardSessionCookieHeader(
+              config,
+              request,
+              token,
+            ),
+          },
+        );
+        return;
+      }
+      if (
+        request.method === "POST" &&
+        requestUrl.pathname === "/api/auth/logout"
+      ) {
+        sendJson(
+          response,
+          200,
+          { success: true },
+          {
+            "set-cookie":
+              clearDashboardSessionCookieHeader(request),
+          },
+        );
+        return;
+      }
+      if (
+        requestUrl.pathname.startsWith("/api/") &&
+        requestUrl.pathname !== "/api/download-sources" &&
+        !requireAdmin(request, response, config)
+      ) {
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/dashboard") {
@@ -784,6 +948,47 @@ export async function startDashboardServer(
             listSyncRuns(database, requestUrl),
           ),
         );
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/logs") {
+        sendJson(
+          response,
+          200,
+          withDatabase(config.dbPath, (database) =>
+            listTaskLogs(database, requestUrl),
+          ),
+        );
+        return;
+      }
+      if (
+        request.method === "GET" &&
+        requestUrl.pathname === "/api/admin/api-keys"
+      ) {
+        if (
+          dashboardAuthEnabled(config) &&
+          !request.dashboardSession
+        ) {
+          sendError(response, 403, "仅后台登录会话可以查看明文 Key");
+          return;
+        }
+        sendJson(response, 200, {
+          items: [
+            {
+              id: "xianyu",
+              name: "闲鱼服务 API Key",
+              description: "用于账号读取、素材同步和商品发布",
+              value: config.xianyuApiKey,
+              configured: Boolean(config.xianyuApiKey),
+            },
+            {
+              id: "download",
+              name: "下载源只读 API Key",
+              description: "用于调用 /api/download-sources",
+              value: config.downloadReadApiKey,
+              configured: Boolean(config.downloadReadApiKey),
+            },
+          ],
+        });
         return;
       }
       if (
@@ -1132,6 +1337,53 @@ export async function startDashboardServer(
         sendJson(response, 200, {
           success: true,
           ...result,
+        });
+        return;
+      }
+
+      const gameSyncMatch = requestUrl.pathname.match(
+        /^\/api\/games\/(\d+)\/sync$/,
+      );
+      if (request.method === "POST" && gameSyncMatch) {
+        if (
+          !requireKey(
+            request,
+            response,
+            config.xianyuApiKey,
+            "X-API-Key",
+          )
+        ) {
+          return;
+        }
+        const gameId = Number(gameSyncMatch[1]);
+        const exists = withDatabase(config.dbPath, (database) =>
+          database
+            .prepare("SELECT 1 FROM games WHERE id = ?")
+            .get(gameId),
+        );
+        if (!exists) {
+          sendError(response, 404, "没有找到该游戏");
+          return;
+        }
+        const state = runtimeState();
+        if (state.active || state.sync?.active) {
+          sendError(response, 409, "采集或同步任务正在运行");
+          return;
+        }
+        if (!handlers.triggerSync) {
+          sendError(response, 503, "闲鱼同步服务尚未启用");
+          return;
+        }
+        const accepted = handlers.triggerSync(
+          "manual-game",
+          "all",
+          { gameIds: [gameId] },
+        );
+        sendJson(response, 202, {
+          success: true,
+          gameId,
+          message: `游戏 ${gameId} 同步任务已启动`,
+          ...accepted,
         });
         return;
       }

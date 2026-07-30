@@ -1,0 +1,112 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 216 33% 97%;
+    --foreground: 219 39% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 219 39% 14%;
+    --primary: 222 100% 59%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 218 40% 94%;
+    --secondary-foreground: 219 39% 18%;
+    --muted: 216 30% 95%;
+    --muted-foreground: 217 16% 47%;
+    --accent: 216 100% 96%;
+    --accent-foreground: 222 78% 40%;
+    --destructive: 354 76% 54%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 216 26% 89%;
+    --input: 216 26% 85%;
+    --ring: 222 100% 59%;
+    --radius: 0.75rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    overflow-x: hidden;
+    font-family:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", sans-serif;
+  }
+
+  #root {
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .font-display {
+    font-family: "Arial Narrow", "DIN Alternate", "PingFang SC", sans-serif;
+    font-stretch: condensed;
+  }
+
+  .font-data {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+
+  .g520-progress {
+    appearance: none;
+    border: 0;
+    background: hsl(var(--muted));
+  }
+
+  .g520-progress::-webkit-progress-bar {
+    background: hsl(var(--muted));
+    border-radius: 999px;
+  }
+
+  .g520-progress::-webkit-progress-value {
+    background: hsl(var(--primary));
+    border-radius: 999px;
+    transition: width 240ms ease;
+  }
+
+  .g520-progress::-moz-progress-bar {
+    background: hsl(var(--primary));
+    border-radius: 999px;
+  }
+
+  .login-grid {
+    background-image:
+      linear-gradient(hsl(217 28% 90% / 0.55) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(217 28% 90% / 0.55) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  .sync-rail::before {
+    content: "";
+    position: absolute;
+    left: 2.5rem;
+    right: 2.5rem;
+    top: 1.25rem;
+    height: 1px;
+    background: hsl(var(--border));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

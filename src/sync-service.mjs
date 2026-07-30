@@ -95,47 +95,6 @@ function matchNewPublishedItems(
   return matches;
 }
 
-function safetyStopReason(outcomes, isCanary) {
-  const failures = outcomes.filter(
-    (outcome) => outcome.status === "failed",
-  );
-  if (failures.length === 0) return null;
-  if (isCanary) {
-    return `探针商品发布失败：${failures[0].errorMessage ?? "未知错误"}`;
-  }
-
-  const errors = failures.map((outcome) =>
-    String(outcome.errorMessage ?? ""),
-  );
-  const pageFailures = errors.filter((message) =>
-    message.includes("页面未跳转"),
-  ).length;
-  const imageFailures = errors.filter((message) =>
-    message.includes("没有成功上传任何图片"),
-  ).length;
-  const accountFailures = errors.filter(
-    (message) =>
-      message.includes("Cookie无效") ||
-      message.includes("不是发布页面"),
-  ).length;
-
-  if (accountFailures > 0) {
-    return "检测到账号登录页或 Cookie 异常，已停止后续批次";
-  }
-  if (pageFailures >= 3) {
-    return `同一批次有 ${pageFailures} 条停留在发布页，已停止后续批次`;
-  }
-  if (imageFailures >= 3) {
-    return `同一批次有 ${imageFailures} 条图片上传失败，已停止后续批次`;
-  }
-  if (failures.length * 2 >= outcomes.length) {
-    return `当前批次失败率达到 ${Math.round(
-      (failures.length / outcomes.length) * 100,
-    )}%，已停止后续批次`;
-  }
-  return null;
-}
-
 export class XianyuSyncService {
   constructor(config, client = null, dependencies = {}) {
     this.config = config;
@@ -172,6 +131,7 @@ export class XianyuSyncService {
   async run({
     trigger = "manual",
     mode = "all",
+    gameIds = null,
     control = null,
     onProgress = () => {},
   } = {}) {
@@ -219,7 +179,6 @@ export class XianyuSyncService {
     let processedCount = 0;
     let candidates = [];
     let knownAccountItems = null;
-    let stoppedForSafety = null;
     const listingCache = new Map();
     const listingFor = (candidate) => {
       if (!listingCache.has(candidate.id)) {
@@ -311,6 +270,16 @@ export class XianyuSyncService {
         100_000,
         mode,
       );
+      if (Array.isArray(gameIds) && gameIds.length > 0) {
+        const requestedGameIds = new Set(
+          gameIds
+            .map((gameId) => Number(gameId))
+            .filter(Number.isInteger),
+        );
+        candidates = candidates.filter((candidate) =>
+          requestedGameIds.has(candidate.id),
+        );
+      }
       database.updateSyncRun(runId, {
         selected_count: candidates.length,
       });
@@ -330,6 +299,16 @@ export class XianyuSyncService {
           accountId,
           mode,
           selectedCount: 0,
+          materialSkipped: 0,
+          materialFailed: 0,
+          materialProcessedCount: 0,
+          publishSelectedCount: 0,
+          publishProcessedCount: 0,
+          publishSubmitted: 0,
+          publishSuccess: 0,
+          publishFailed: 0,
+          cardBound: 0,
+          cardBindFailed: 0,
           batchCount: 0,
           status: "success",
         };
@@ -398,10 +377,7 @@ export class XianyuSyncService {
         }
       };
 
-      const publishEntries = async (
-        entries,
-        { isCanary = false } = {},
-      ) => {
+      const publishEntries = async (entries) => {
         const firstCandidate = entries[0].candidate;
         await control?.checkpoint();
         if (knownAccountItems === null) {
@@ -435,7 +411,44 @@ export class XianyuSyncService {
             requestId,
           });
         } catch (submissionError) {
-          if (Number(submissionError.status) >= 400) {
+          const statusCode = Number(submissionError.status);
+          if ([400, 409, 422].includes(statusCode)) {
+            const failedAt = nowIso();
+            latestBatchId = requestId;
+            for (const entry of entries) {
+              database.markPublicationSubmitted(
+                entry.candidate.id,
+                accountId,
+                entry.materialId,
+                requestId,
+                failedAt,
+              );
+              database.markPublicationResult({
+                gameId: entry.candidate.id,
+                accountId,
+                status: "failed",
+                errorMessage: submissionError.message,
+                updatedAt: failedAt,
+              });
+            }
+            totals.publish_failed += entries.length;
+            totals.publish_processed_count += entries.length;
+            processedCount += entries.length;
+            database.updateSyncRun(runId, {
+              ...totals,
+              processed_count: processedCount,
+              batch_id: requestId,
+              current_game_id: null,
+              current_title: null,
+            });
+            reportProgress({
+              total: candidates.length,
+              completed: processedCount,
+              phase: "processing",
+            });
+            return {};
+          }
+          if (statusCode >= 400) {
             throw submissionError;
           }
           try {
@@ -573,7 +586,6 @@ export class XianyuSyncService {
         let batchFailed = 0;
         let batchUnknown = 0;
         const successfulItems = [];
-        const outcomes = [];
         const completedAt = nowIso();
         for (const entry of entries) {
           const item = statusByMaterial.get(entry.materialId);
@@ -613,11 +625,6 @@ export class XianyuSyncService {
             itemUrl,
             errorMessage,
             updatedAt: completedAt,
-          });
-          outcomes.push({
-            entry,
-            status: itemStatus,
-            errorMessage,
           });
           if (itemStatus === "success" && itemId) {
             successfulItems.push({
@@ -678,16 +685,13 @@ export class XianyuSyncService {
           };
         }
 
-        return {
-          stopReason: safetyStopReason(outcomes, isCanary),
-        };
+        return {};
       };
 
       const publishQueue = [];
-      let canaryPending = true;
       for (
         let candidateIndex = 0;
-        !stoppedForSafety && candidateIndex < candidates.length;
+        candidateIndex < candidates.length;
         candidateIndex += materialSyncConcurrency
       ) {
         await control?.checkpoint();
@@ -806,37 +810,16 @@ export class XianyuSyncService {
               : "material-completed",
         });
 
-        let publishIndex = 0;
-        if (canaryPending && publishQueue.length > 0) {
-          const canaryResult = await publishEntries(
-            publishQueue.slice(0, 1),
-            { isCanary: true },
-          );
-          if (canaryResult.terminalResult) {
-            return canaryResult.terminalResult;
-          }
-          stoppedForSafety = canaryResult.stopReason;
-          canaryPending = false;
-          publishIndex = 1;
-        }
-
-        if (
-          !stoppedForSafety &&
-          publishIndex < publishQueue.length
-        ) {
-          const publicationResult = await publishEntries(
-            publishQueue.slice(publishIndex),
-          );
+        if (publishQueue.length > 0) {
+          const publicationResult = await publishEntries(publishQueue);
           if (publicationResult.terminalResult) {
             return publicationResult.terminalResult;
           }
-          stoppedForSafety = publicationResult.stopReason;
         }
         publishQueue.length = 0;
       }
 
       const finalStatus =
-        stoppedForSafety ||
         totals.material_failed > 0 ||
         totals.publish_failed > 0 ||
         totals.card_bind_failed > 0
@@ -851,12 +834,10 @@ export class XianyuSyncService {
         current_game_id: null,
         current_title: null,
         error_summary:
-          stoppedForSafety ||
           totals.material_failed > 0 ||
           totals.publish_failed > 0 ||
           totals.card_bind_failed > 0
             ? [
-                stoppedForSafety,
                 totals.material_failed > 0
                   ? `${totals.material_failed} 个素材同步失败`
                   : null,
@@ -875,7 +856,7 @@ export class XianyuSyncService {
       reportProgress({
         total: candidates.length,
         completed: processedCount,
-        phase: stoppedForSafety ? "halted" : "completed",
+        phase: "completed",
       });
       return {
         runId,
@@ -895,7 +876,6 @@ export class XianyuSyncService {
         batchCount: totals.batch_count,
         batchId: latestBatchId,
         status: finalStatus,
-        safetyStopReason: stoppedForSafety,
       };
     } catch (error) {
       if (submittedPublication) {

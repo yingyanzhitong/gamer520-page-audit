@@ -6,10 +6,13 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 COPY --chown=pwuser:pwuser . .
-RUN mkdir -p /app/data && chown -R pwuser:pwuser /app/data
+RUN npm run build \
+    && npm prune --omit=dev \
+    && mkdir -p /app/data \
+    && chown -R pwuser:pwuser /app/data
 
 USER pwuser
 

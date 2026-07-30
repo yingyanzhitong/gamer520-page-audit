@@ -228,6 +228,22 @@ class ProbeFailureClient extends FakeXianyuClient {
   }
 }
 
+class RejectedBatchClient extends FakeXianyuClient {
+  async publishBatch(payload) {
+    if (this.publishCalls.length === 0) {
+      this.publishCalls.push(payload);
+      this.events.push({
+        type: "publish",
+        count: payload.materialIds.length,
+      });
+      const error = new Error("当前批次参数不符合发布要求");
+      error.status = 422;
+      throw error;
+    }
+    return super.publishBatch(payload);
+  }
+}
+
 class MisreportedFailureClient extends FakeXianyuClient {
   async getBatchStatus(batchId) {
     const success = await super.getBatchStatus(batchId);
@@ -310,9 +326,9 @@ test("每导入 20 个素材后立即发布并保持最多 4 个并行", async (
       onProgress: (progress) => progressEvents.push(progress),
     });
     assert.equal(sync.selectedCount, 21);
-    assert.equal(sync.batchCount, 3);
+    assert.equal(sync.batchCount, 2);
     assert.equal(client.upsertCalls.length, 21);
-    assert.equal(client.publishCalls.length, 3);
+    assert.equal(client.publishCalls.length, 2);
     assert.equal(client.cardBindCalls.length, 21);
     assert.equal(client.maxActiveUpserts, 4);
     assert.ok(client.upsertCalls.every((items) => items.length === 1));
@@ -320,7 +336,7 @@ test("每导入 20 个素材后立即发布并保持最多 4 个并行", async (
       client.publishCalls.map(
         (payload) => payload.materialIds.length,
       ),
-      [1, 19, 1],
+      [20, 1],
     );
     assert.ok(
       client.events
@@ -328,8 +344,7 @@ test("每导入 20 个素材后立即发布并保持最多 4 个并行", async (
         .every((event) => event.type === "material"),
     );
     assert.deepEqual(client.events.slice(20), [
-      { type: "publish", count: 1 },
-      { type: "publish", count: 19 },
+      { type: "publish", count: 20 },
       { type: "material", count: 1 },
       { type: "publish", count: 1 },
     ]);
@@ -396,14 +411,14 @@ test("每导入 20 个素材后立即发布并保持最多 4 个并行", async (
     assert.equal(storedRun.material_processed_count, 21);
     assert.equal(storedRun.publish_selected_count, 21);
     assert.equal(storedRun.publish_processed_count, 21);
-    assert.equal(storedRun.batch_count, 3);
+    assert.equal(storedRun.batch_count, 2);
     assert.equal(storedRun.requested_limit, 20);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("探针商品失败后停止发布且不再导入后续 20 条", async () => {
+test("发布失败后跳过当前商品并继续后续批次", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-canary-test-"),
   );
@@ -427,12 +442,14 @@ test("探针商品失败后停止发布且不再导入后续 20 条", async () =
     const sync = await service.run({ trigger: "test" });
     assert.equal(sync.selectedCount, 25);
     assert.equal(sync.status, "partial");
-    assert.equal(sync.publishSubmitted, 1);
-    assert.equal(sync.publishFailed, 1);
-    assert.equal(client.upsertCalls.length, 20);
-    assert.equal(client.publishCalls.length, 1);
-    assert.equal(client.publishCalls[0].materialIds.length, 1);
-    assert.match(sync.safetyStopReason, /探针商品发布失败/);
+    assert.equal(sync.publishSubmitted, 25);
+    assert.equal(sync.publishFailed, 25);
+    assert.equal(client.upsertCalls.length, 25);
+    assert.equal(client.publishCalls.length, 2);
+    assert.deepEqual(
+      client.publishCalls.map((call) => call.materialIds.length),
+      [20, 5],
+    );
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const storedRun = checkedDatabase.queryOne(
@@ -448,10 +465,45 @@ test("探针商品失败后停止发布且不再导入后续 20 条", async () =
     );
     checkedDatabase.close();
     assert.equal(storedRun.status, "partial");
-    assert.equal(storedRun.material_processed_count, 20);
-    assert.equal(storedRun.publish_selected_count, 20);
-    assert.equal(storedRun.publish_processed_count, 1);
-    assert.match(storedRun.error_summary, /探针商品发布失败/);
+    assert.equal(storedRun.material_processed_count, 25);
+    assert.equal(storedRun.publish_selected_count, 25);
+    assert.equal(storedRun.publish_processed_count, 25);
+    assert.match(storedRun.error_summary, /25 个商品发布失败/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("批量发布明确返回参数错误时跳过当前批并继续下一批", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-rejected-batch-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-07-28T00:00:00.000Z";
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    for (let id = 1; id <= 25; id += 1) {
+      const discovered = game(id);
+      database.upsertDiscoveredGames([discovered], timestamp);
+      database.saveGameSuccess(discovered, result(id), timestamp);
+    }
+    database.setXianyuAccountId("account-a", timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new RejectedBatchClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const sync = await service.run({ trigger: "test" });
+    assert.equal(sync.status, "partial");
+    assert.equal(sync.publishFailed, 20);
+    assert.equal(sync.publishSuccess, 5);
+    assert.equal(sync.publishProcessedCount, 25);
+    assert.deepEqual(
+      client.publishCalls.map((call) => call.materialIds.length),
+      [20, 5],
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -532,11 +584,11 @@ test("单个素材失败不会阻止其他商品进入尾批发布", async () =>
     assert.equal(sync.status, "partial");
     assert.equal(sync.materialFailed, 1);
     assert.equal(sync.publishSuccess, 4);
-    assert.equal(sync.batchCount, 2);
-    assert.equal(client.publishCalls.length, 2);
+    assert.equal(sync.batchCount, 1);
+    assert.equal(client.publishCalls.length, 1);
     assert.deepEqual(
       client.publishCalls.map((call) => call.materialIds.length),
-      [1, 3],
+      [4],
     );
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
@@ -625,10 +677,10 @@ test("自定义模板用于素材、封面和卡券标题，修改后不重复�
       trigger: "test",
       mode: "updated",
     });
-    assert.equal(updated.selectedCount, 1);
+    assert.equal(updated.selectedCount, 0);
     assert.equal(updated.publishSubmitted, 0);
     assert.equal(client.publishCalls.length, 1);
-    assert.equal(client.upsertCalls.at(-1)[0].title, "秒发 游戏 88");
+    assert.equal(client.upsertCalls.length, 1);
     const verifiedDatabase = new CrawlerDatabase(databasePath);
     try {
       assert.equal(
@@ -714,7 +766,7 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
   }
 });
 
-test("卡券关联失败只重试卡券，不重复发布商品", async () => {
+test("已有商品编号时跳过素材同步和卡券重试", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-card-retry-test-"),
   );
@@ -748,10 +800,11 @@ test("卡券关联失败只重试卡券，不重复发布商品", async () => {
       mode: "pending",
     });
     assert.equal(retried.status, "success");
+    assert.equal(retried.selectedCount, 0);
     assert.equal(retried.publishSubmitted, 0);
-    assert.equal(retried.cardBound, 1);
+    assert.equal(retried.cardBound, 0);
     assert.equal(client.publishCalls.length, 1);
-    assert.equal(client.cardBindCalls.length, 2);
+    assert.equal(client.cardBindCalls.length, 1);
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const publication = checkedDatabase.queryOne(
@@ -764,13 +817,13 @@ test("卡券关联失败只重试卡券，不重复发布商品", async () => {
     checkedDatabase.close();
     assert.equal(publication.status, "success");
     assert.equal(publication.card_id, 6);
-    assert.equal(publication.card_bind_status, "success");
+    assert.equal(publication.card_bind_status, "failed");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("已发布商品更新只更新素材，切换账号后才重新发布", async () => {
+test("已有商品编号后更新内容或切换账号都不再同步", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-update-test-"),
   );
@@ -815,12 +868,10 @@ test("已发布商品更新只更新素材，切换账号后才重新发布", as
     updatedDatabase.close();
 
     const updated = await service.run({ trigger: "test", limit: 20 });
+    assert.equal(updated.selectedCount, 0);
     assert.equal(updated.publishSubmitted, 0);
     assert.equal(client.publishCalls.length, 1);
-    assert.match(
-      client.upsertCalls.at(-1)[0].description,
-      /^更新后的简介\n\n支持网盘：百度/,
-    );
+    assert.equal(client.upsertCalls.length, 1);
 
     const pricedDatabase = new CrawlerDatabase(databasePath);
     pricedDatabase.setGameSalePrice(
@@ -831,9 +882,10 @@ test("已发布商品更新只更新素材，切换账号后才重新发布", as
     pricedDatabase.close();
 
     const priced = await service.run({ trigger: "test", limit: 20 });
+    assert.equal(priced.selectedCount, 0);
     assert.equal(priced.publishSubmitted, 0);
     assert.equal(client.publishCalls.length, 1);
-    assert.equal(client.upsertCalls.at(-1)[0].price, 8.8);
+    assert.equal(client.upsertCalls.length, 1);
 
     const switchedDatabase = new CrawlerDatabase(databasePath);
     switchedDatabase.setXianyuAccountId(
@@ -843,9 +895,9 @@ test("已发布商品更新只更新素材，切换账号后才重新发布", as
     switchedDatabase.close();
 
     const switched = await service.run({ trigger: "test", limit: 20 });
-    assert.equal(switched.publishSuccess, 1);
-    assert.equal(client.publishCalls.length, 2);
-    assert.equal(client.publishCalls.at(-1).accountId, "account-b");
+    assert.equal(switched.selectedCount, 0);
+    assert.equal(switched.publishSuccess, 0);
+    assert.equal(client.publishCalls.length, 1);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -879,7 +931,7 @@ test("未发布和已更新同步范围只处理对应商品", async () => {
       trigger: "test",
       mode: "all",
     });
-    assert.equal(repeatedAll.selectedCount, 1);
+    assert.equal(repeatedAll.selectedCount, 0);
     assert.equal(repeatedAll.publishSubmitted, 0);
     assert.equal(client.publishCalls.length, 1);
 
@@ -916,13 +968,43 @@ test("未发布和已更新同步范围只处理对应商品", async () => {
       mode: "updated",
     });
     assert.equal(updated.mode, "updated");
-    assert.equal(updated.selectedCount, 1);
+    assert.equal(updated.selectedCount, 0);
     assert.equal(updated.publishSubmitted, 0);
-    assert.equal(
-      client.upsertCalls.at(-1)[0].external_id,
-      String(firstGame.id),
-    );
     assert.equal(client.publishCalls.length, 2);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("单游戏同步只处理指定游戏 ID", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-single-game-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-07-28T00:00:00.000Z";
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    for (const id of [701, 702]) {
+      const discovered = game(id);
+      database.upsertDiscoveredGames([discovered], timestamp);
+      database.saveGameSuccess(discovered, result(id), timestamp);
+    }
+    database.setXianyuAccountId("account-a", timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new FakeXianyuClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const sync = await service.run({
+      trigger: "test-single",
+      gameIds: [702],
+    });
+    assert.equal(sync.selectedCount, 1);
+    assert.equal(sync.publishSuccess, 1);
+    assert.equal(client.upsertCalls.length, 1);
+    assert.equal(client.upsertCalls[0][0].external_id, "702");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

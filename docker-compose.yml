@@ -2,7 +2,7 @@ services:
   crawler:
     build:
       context: .
-    image: ${IMAGE_NAME:-gamer520-crawler}:${IMAGE_TAG:-1.10.2}
+    image: ${IMAGE_NAME:-gamer520-crawler}:${IMAGE_TAG:-2.0.0}
     init: true
     ipc: host
     restart: unless-stopped
@@ -28,6 +28,10 @@ services:
       NODE_OPTIONS: ${NODE_OPTIONS:---disable-warning=ExperimentalWarning}
       DASHBOARD_HOST: ${DASHBOARD_HOST:-0.0.0.0}
       DASHBOARD_PORT: ${DASHBOARD_PORT:-3000}
+      DASHBOARD_ADMIN_USERNAME: ${DASHBOARD_ADMIN_USERNAME:-admin}
+      DASHBOARD_ADMIN_PASSWORD: ${DASHBOARD_ADMIN_PASSWORD:-}
+      DASHBOARD_SESSION_SECRET: ${DASHBOARD_SESSION_SECRET:-}
+      DASHBOARD_SESSION_TTL_SECONDS: ${DASHBOARD_SESSION_TTL_SECONDS:-43200}
       XIANYU_BASE_URL: ${XIANYU_BASE_URL:-https://xianyu.xyyamsz.cn}
       XIANYU_API_KEY: ${XIANYU_API_KEY:-}
       GAMER520_READ_API_KEY: ${GAMER520_READ_API_KEY:-}

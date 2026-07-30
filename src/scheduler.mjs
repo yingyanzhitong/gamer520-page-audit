@@ -139,13 +139,21 @@ function triggerCrawl(reason) {
       if (deferredSync && !stopping) {
         const deferred = deferredSync;
         deferredSync = null;
-        void triggerSync(deferred.reason, deferred.mode);
+        void triggerSync(
+          deferred.reason,
+          deferred.mode,
+          deferred.options,
+        );
       }
     });
   return activeRun;
 }
 
-function triggerSync(reason, mode = schedulerSettings.syncMode) {
+function triggerSync(
+  reason,
+  mode = schedulerSettings.syncMode,
+  options = {},
+) {
   if (
     stopping ||
     (reason.startsWith("schedule") && !schedulerSettings.syncEnabled)
@@ -160,7 +168,11 @@ function triggerSync(reason, mode = schedulerSettings.syncMode) {
     return activeSync;
   }
   if (activeRun) {
-    deferredSync = { reason: `${reason}-deferred`, mode };
+    deferredSync = {
+      reason: `${reason}-deferred`,
+      mode,
+      options,
+    };
     log("sync_deferred", {
       reason,
       message: "采集任务正在运行，闲鱼同步将在采集结束后补跑",
@@ -181,6 +193,7 @@ function triggerSync(reason, mode = schedulerSettings.syncMode) {
     .run({
       trigger: reason,
       mode,
+      gameIds: options.gameIds ?? null,
       control,
       onProgress: (progress) => {
         syncProgress = progress;
@@ -364,9 +377,13 @@ dashboard = await startDashboardServer(config, scheduleRuntime, {
     void triggerCrawl(reason);
     return { active: true, mode: "full" };
   },
-  triggerSync: (reason, mode) => {
-    void triggerSync(reason, mode);
-    return { active: true, mode };
+  triggerSync: (reason, mode, options = {}) => {
+    void triggerSync(reason, mode, options);
+    return {
+      active: true,
+      mode,
+      gameIds: options.gameIds ?? null,
+    };
   },
   controlTask,
 });

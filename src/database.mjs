@@ -1148,6 +1148,9 @@ export class CrawlerDatabase {
           AND EXISTS (
             SELECT 1 FROM downloads WHERE downloads.game_id = games.id
           )
+          AND games.xianyu_item_id IS NULL
+          AND material.material_id IS NULL
+          AND publication.item_id IS NULL
           AND COALESCE(publication.status, 'pending') NOT IN ('publishing', 'unknown')
         ORDER BY
           CASE WHEN publication.status = 'failed' THEN 0 ELSE 1 END,
