@@ -253,7 +253,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
             cronSchedule: settings.syncCronSchedule,
             cronTimezone: settings.cronTimezone,
             materialConcurrency: settings.materialConcurrency,
-            publishBatchSize: 20,
+            publishBatchSize: settings.publishBatchSize,
             nextRun: "2026-07-29T16:15:00.000Z",
             mode: settings.syncMode,
           },
@@ -341,6 +341,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /已发布数据/);
     assert.match(appSource, /查看日志/);
     assert.match(appSource, /已有跳过/);
+    assert.match(appSource, /每批发布商品数/);
     assert.match(appSource, /Gamer520 API Key/);
     assert.match(appSource, /更换 Key/);
 
@@ -731,6 +732,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
             enabled: true,
             mode: "updated",
             material_concurrency: 6,
+            publish_batch_size: 8,
           },
         }),
       },
@@ -741,6 +743,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(savedSchedule.syncCronSchedule, "15 */8 * * *");
     assert.equal(savedSchedule.syncMode, "updated");
     assert.equal(savedSchedule.materialConcurrency, 6);
+    assert.equal(savedSchedule.publishBatchSize, 8);
     assert.equal(savedSchedule.publishConcurrency, undefined);
 
     const crawl = await fetch(`${baseUrl}/api/crawl/run`, {

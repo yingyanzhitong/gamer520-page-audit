@@ -135,6 +135,7 @@ export class XianyuSyncService {
     gameIds = null,
     control = null,
     materialConcurrency = materialSyncConcurrency,
+    publishBatchSize: configuredPublishBatchSize = publishBatchSize,
     onProgress = () => {},
   } = {}) {
     if (!syncModes.has(mode)) {
@@ -147,6 +148,14 @@ export class XianyuSyncService {
     const resolvedMaterialConcurrency = Math.min(
       12,
       Math.max(1, Number.parseInt(materialConcurrency, 10) || materialSyncConcurrency),
+    );
+    const resolvedPublishBatchSize = Math.min(
+      publishBatchSize,
+      Math.max(
+        1,
+        Number.parseInt(configuredPublishBatchSize, 10) ||
+          publishBatchSize,
+      ),
     );
     const accountId = settings.account_id;
     if (!accountId) {
@@ -161,7 +170,7 @@ export class XianyuSyncService {
       trigger,
       accountId,
       mode,
-      publishBatchSize,
+      resolvedPublishBatchSize,
       startedAt,
     );
     const recordTaskLog = ({
@@ -363,7 +372,7 @@ export class XianyuSyncService {
         accountId,
         materialConcurrency: resolvedMaterialConcurrency,
         publishMode: "batch",
-        publishBatchSize,
+        publishBatchSize: resolvedPublishBatchSize,
         publishLogIntervalSeconds: publishBatchLogIntervalMs / 1_000,
         requestedGameIds: Array.isArray(gameIds) ? gameIds : null,
       },
@@ -1087,6 +1096,23 @@ export class XianyuSyncService {
       };
 
       const publishQueue = [];
+      let materialPipelineFinished = false;
+      let wakePublisher = null;
+      const notifyPublisher = () => {
+        if (!wakePublisher) return;
+        const resolve = wakePublisher;
+        wakePublisher = null;
+        resolve();
+      };
+      const waitForPublishQueue = async () => {
+        if (publishQueue.length > 0 || materialPipelineFinished) return;
+        await new Promise((resolve) => {
+          wakePublisher = resolve;
+          if (publishQueue.length > 0 || materialPipelineFinished) {
+            notifyPublisher();
+          }
+        });
+      };
       const processMaterialOutcome = async (outcome) => {
         const { candidate, existingMaterialId, result, error } = outcome;
         if (existingMaterialId) {
@@ -1095,6 +1121,7 @@ export class XianyuSyncService {
             candidate,
             materialId: existingMaterialId,
           });
+          notifyPublisher();
           return;
         }
 
@@ -1188,55 +1215,100 @@ export class XianyuSyncService {
 
         totals.publish_selected_count += 1;
         publishQueue.push({ candidate, materialId });
+        notifyPublisher();
       };
 
-      for (
-        let candidateIndex = 0;
-        candidateIndex < candidates.length;
-        candidateIndex += resolvedMaterialConcurrency
-      ) {
-        await control?.checkpoint();
-        const materialCandidates = candidates.slice(
-          candidateIndex,
-          candidateIndex + resolvedMaterialConcurrency,
-        );
-        const materialOutcomes = await Promise.all(
-          materialCandidates.map(async (candidate) => {
-            await control?.checkpoint();
-            const outcome = await syncMaterial(candidate);
-            await control?.checkpoint();
-            return outcome;
-          }),
-        );
-        for (const outcome of materialOutcomes) {
+      let nextMaterialCandidate = 0;
+      const materialWorker = async () => {
+        while (true) {
+          await control?.checkpoint();
+          if (nextMaterialCandidate >= candidates.length) return;
+          const candidateIndex = nextMaterialCandidate;
+          nextMaterialCandidate += 1;
+          const candidate = candidates[candidateIndex];
+          const outcome = await syncMaterial(candidate);
+          await control?.checkpoint();
           await processMaterialOutcome(outcome);
-          while (publishQueue.length >= publishBatchSize) {
-            const entries = publishQueue.splice(0, publishBatchSize);
-            const publicationResult = await publishEntries(entries);
-            if (publicationResult.terminalResult) {
-              return publicationResult.terminalResult;
-            }
+          database.updateSyncRun(runId, {
+            ...totals,
+            processed_count: processedCount,
+            current_game_id: null,
+            current_title: null,
+          });
+          reportProgress({
+            completed: processedCount,
+            phase: "material",
+          });
+        }
+      };
+      const materialPipeline = (async () => {
+        recordTaskLog({
+          stage: "material",
+          action: "pipeline-start",
+          message: `素材导入线程已启动，并行数 ${resolvedMaterialConcurrency}`,
+          details: { concurrency: resolvedMaterialConcurrency },
+        });
+        try {
+          const workers = Array.from(
+            {
+              length: Math.min(
+                resolvedMaterialConcurrency,
+                candidates.length,
+              ),
+            },
+            () => materialWorker(),
+          );
+          const results = await Promise.allSettled(workers);
+          const failedWorker = results.find(
+            (result) => result.status === "rejected",
+          );
+          if (failedWorker) throw failedWorker.reason;
+        } finally {
+          materialPipelineFinished = true;
+          notifyPublisher();
+        }
+      })();
+      const publishPipeline = (async () => {
+        recordTaskLog({
+          stage: "publish",
+          action: "pipeline-start",
+          message: `商品发布线程已启动，每批最多 ${resolvedPublishBatchSize} 件，不等待队列填满`,
+          details: { batchSize: resolvedPublishBatchSize },
+        });
+        while (true) {
+          await control?.checkpoint();
+          await waitForPublishQueue();
+          await control?.checkpoint();
+          if (
+            publishQueue.length === 0 &&
+            materialPipelineFinished
+          ) {
+            return null;
+          }
+          const entries = publishQueue.splice(
+            0,
+            resolvedPublishBatchSize,
+          );
+          if (entries.length === 0) continue;
+          const publicationResult = await publishEntries(entries);
+          if (publicationResult.terminalResult) {
+            return publicationResult.terminalResult;
           }
         }
-        database.updateSyncRun(runId, {
-          ...totals,
-          processed_count: processedCount,
-          current_game_id: null,
-          current_title: null,
-        });
-        reportProgress({
-          completed: processedCount,
-          phase: publishQueue.length > 0 ? "material" : "processing",
-        });
+      })();
+      const [materialPipelineResult, publishPipelineResult] =
+        await Promise.allSettled([
+          materialPipeline,
+          publishPipeline,
+        ]);
+      if (materialPipelineResult.status === "rejected") {
+        throw materialPipelineResult.reason;
       }
-
-      if (publishQueue.length > 0) {
-        const publicationResult = await publishEntries(
-          publishQueue.splice(0, publishQueue.length),
-        );
-        if (publicationResult.terminalResult) {
-          return publicationResult.terminalResult;
-        }
+      if (publishPipelineResult.status === "rejected") {
+        throw publishPipelineResult.reason;
+      }
+      if (publishPipelineResult.value) {
+        return publishPipelineResult.value;
       }
       const finalStatus =
         totals.material_failed > 0 ||

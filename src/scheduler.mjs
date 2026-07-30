@@ -47,6 +47,7 @@ function settingsFromRow(row) {
     syncMode: row.sync_mode ?? "all",
     crawlConcurrency: Number(row.crawl_concurrency),
     materialConcurrency: Number(row.material_concurrency),
+    publishBatchSize: Number(row.publish_batch_size),
     publishConcurrency: Number(row.publish_concurrency),
     updatedAt: row.updated_at,
   };
@@ -56,6 +57,16 @@ function concurrencyValue(value, label) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 12) {
     const error = new Error(`${label}必须是 1 到 12 之间的整数`);
+    error.statusCode = 422;
+    throw error;
+  }
+  return parsed;
+}
+
+function publishBatchSizeValue(value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 20) {
+    const error = new Error("每批发布商品数必须是 1 到 20 之间的整数");
     error.statusCode = 422;
     throw error;
   }
@@ -77,6 +88,11 @@ function normalizeScheduleSettings(input) {
     materialConcurrency: concurrencyValue(
       input.materialConcurrency,
       "素材导入并行数",
+    ),
+    publishBatchSize: publishBatchSizeValue(
+      input.publishBatchSize ??
+        schedulerSettings?.publishBatchSize ??
+        publishBatchSize,
     ),
     publishConcurrency: concurrencyValue(
       input.publishConcurrency ??
@@ -229,6 +245,7 @@ function triggerSync(
       gameIds: options.gameIds ?? null,
       control,
       materialConcurrency: schedulerSettings.materialConcurrency,
+      publishBatchSize: schedulerSettings.publishBatchSize,
       onProgress: (progress) => {
         syncProgress = progress;
       },
@@ -324,7 +341,7 @@ function updateScheduleSettings(input) {
     syncMode: schedulerSettings.syncMode,
     crawlConcurrency: schedulerSettings.crawlConcurrency,
     materialConcurrency: schedulerSettings.materialConcurrency,
-    publishBatchSize,
+    publishBatchSize: schedulerSettings.publishBatchSize,
   });
   return scheduleRuntime();
 }
@@ -432,7 +449,7 @@ function scheduleRuntime() {
       cronTimezone: schedulerSettings.cronTimezone,
       nextRun: syncJob?.nextRun()?.toISOString() ?? null,
       materialConcurrency: schedulerSettings.materialConcurrency,
-      publishBatchSize,
+      publishBatchSize: schedulerSettings.publishBatchSize,
       mode: schedulerSettings.syncMode,
       progress: syncProgress,
     },
@@ -458,6 +475,7 @@ schedulerSettings = settingsFromRow(
       syncMode: "all",
       crawlConcurrency: config.detailConcurrency,
       materialConcurrency: materialSyncConcurrency,
+      publishBatchSize,
       publishConcurrency: 4,
     },
     nowIso(),

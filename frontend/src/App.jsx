@@ -1069,6 +1069,9 @@ function TasksPage({ notify }) {
             material_concurrency: Number(
               schedule.sync.materialConcurrency,
             ),
+            publish_batch_size: Number(
+              schedule.sync.publishBatchSize,
+            ),
           },
         }),
       });
@@ -1239,12 +1242,26 @@ function TasksPage({ notify }) {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>商品发布方式</Label>
-                        <div className="flex h-10 items-center rounded-md border bg-muted/40 px-3 text-sm">
-                          每批最多 {schedule?.sync?.publishBatchSize ?? 20} 件，逐批执行
-                        </div>
+                        <Label>每批发布商品数</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          max="20"
+                          value={
+                            schedule?.sync?.publishBatchSize ?? 20
+                          }
+                          onChange={(event) =>
+                            updateSchedule(
+                              ["sync", "publishBatchSize"],
+                              event.target.value,
+                            )
+                          }
+                        />
                       </div>
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      素材导入和发布独立运行；发布线程发现可发布素材后立即提交，每批最多 1–20 件。
+                    </p>
                   </>
                 ) : null}
               </div>

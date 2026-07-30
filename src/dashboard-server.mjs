@@ -1373,6 +1373,7 @@ export async function startDashboardServer(
           syncEnabled: body.sync?.enabled,
           syncMode: syncMode(body.sync?.mode),
           materialConcurrency: body.sync?.material_concurrency,
+          publishBatchSize: body.sync?.publish_batch_size,
         });
         sendJson(response, 200, {
           success: true,

@@ -282,7 +282,7 @@ function config(databasePath, overrides = {}) {
   };
 }
 
-test("素材按页面配置并行导入，商品固定每 20 件批量发布", async () => {
+test("素材导入和商品发布独立运行，单批数量可配置", async () => {
   assert.equal(publishBatchSize, 20);
   assert.equal(publishBatchLogIntervalMs, 60_000);
   const directory = fs.mkdtempSync(
@@ -335,20 +335,38 @@ test("素材按页面配置并行导入，商品固定每 20 件批量发布", a
     const sync = await service.run({
       trigger: "test",
       materialConcurrency: 5,
+      publishBatchSize: 7,
       onProgress: (progress) => progressEvents.push(progress),
     });
     assert.equal(sync.selectedCount, 21);
-    assert.equal(sync.batchCount, 2);
+    assert.equal(sync.batchCount, client.publishCalls.length);
     assert.equal(client.upsertCalls.length, 21);
-    assert.equal(client.publishCalls.length, 2);
+    assert.ok(client.publishCalls.length >= 3);
     assert.equal(client.cardBindCalls.length, 21);
     assert.equal(client.maxActiveUpserts, 5);
     assert.ok(client.upsertCalls.every((items) => items.length === 1));
-    assert.deepEqual(
-      client.publishCalls.map(
-        (payload) => payload.materialIds.length,
+    assert.equal(
+      client.publishCalls.reduce(
+        (total, payload) => total + payload.materialIds.length,
+        0,
       ),
-      [20, 1],
+      21,
+    );
+    assert.ok(
+      client.publishCalls.every(
+        (payload) =>
+          payload.materialIds.length >= 1 &&
+          payload.materialIds.length <= 7,
+      ),
+    );
+    const firstPublishEvent = client.events.findIndex(
+      (event) => event.type === "publish",
+    );
+    assert.ok(firstPublishEvent >= 0);
+    assert.ok(
+      client.events
+        .slice(firstPublishEvent + 1)
+        .some((event) => event.type === "material"),
     );
     assert.ok(
       client.cardBindCalls.every(
@@ -419,8 +437,8 @@ test("素材按页面配置并行导入，商品固定每 20 件批量发布", a
     assert.equal(storedRun.material_processed_count, 21);
     assert.equal(storedRun.publish_selected_count, 21);
     assert.equal(storedRun.publish_processed_count, 21);
-    assert.equal(storedRun.batch_count, 2);
-    assert.equal(storedRun.requested_limit, 20);
+    assert.equal(storedRun.batch_count, client.publishCalls.length);
+    assert.equal(storedRun.requested_limit, 7);
     assert.ok(operationLogs.length > 21);
     assert.ok(
       operationLogs.some(
@@ -514,10 +532,18 @@ test("批量发布失败后跳过本批并继续处理后续批次", async () =>
     assert.equal(sync.publishSubmitted, 25);
     assert.equal(sync.publishFailed, 25);
     assert.equal(client.upsertCalls.length, 25);
-    assert.equal(client.publishCalls.length, 2);
-    assert.deepEqual(
-      client.publishCalls.map((call) => call.materialIds.length),
-      [20, 5],
+    assert.ok(client.publishCalls.length >= 2);
+    assert.equal(
+      client.publishCalls.reduce(
+        (total, call) => total + call.materialIds.length,
+        0,
+      ),
+      25,
+    );
+    assert.ok(
+      client.publishCalls.every(
+        (call) => call.materialIds.length <= 20,
+      ),
     );
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
@@ -565,13 +591,18 @@ test("批量发布参数错误时跳过当前批次并继续下一批", async ()
   const service = new XianyuSyncService(config(databasePath), client);
   try {
     const sync = await service.run({ trigger: "test" });
+    const rejectedBatchSize =
+      client.publishCalls[0].materialIds.length;
     assert.equal(sync.status, "partial");
-    assert.equal(sync.publishFailed, 20);
-    assert.equal(sync.publishSuccess, 5);
+    assert.equal(sync.publishFailed, rejectedBatchSize);
+    assert.equal(sync.publishSuccess, 25 - rejectedBatchSize);
     assert.equal(sync.publishProcessedCount, 25);
-    assert.deepEqual(
-      client.publishCalls.map((call) => call.materialIds.length),
-      [20, 5],
+    assert.equal(
+      client.publishCalls.reduce(
+        (total, call) => total + call.materialIds.length,
+        0,
+      ),
+      25,
     );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -624,7 +655,7 @@ test("批量发布缺少商品编号时标记为待确认并停止后续批次",
   }
 });
 
-test("单个素材失败不会阻止其他商品进入尾批发布", async () => {
+test("单个素材失败不会阻止其他商品进入发布线程", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-material-failure-test-"),
   );
@@ -653,11 +684,13 @@ test("单个素材失败不会阻止其他商品进入尾批发布", async () =>
     assert.equal(sync.status, "partial");
     assert.equal(sync.materialFailed, 1);
     assert.equal(sync.publishSuccess, 4);
-    assert.equal(sync.batchCount, 1);
-    assert.equal(client.publishCalls.length, 1);
-    assert.deepEqual(
-      client.publishCalls.map((call) => call.materialIds.length),
-      [4],
+    assert.equal(sync.batchCount, client.publishCalls.length);
+    assert.equal(
+      client.publishCalls.reduce(
+        (total, call) => total + call.materialIds.length,
+        0,
+      ),
+      4,
     );
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
@@ -846,7 +879,7 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
   }
 });
 
-test("已有素材跳过上传但加入同一发布批次且不虚增发布进度", async () => {
+test("已有素材跳过上传但进入发布线程且不虚增发布进度", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-scope-progress-test-"),
   );
@@ -902,8 +935,12 @@ test("已有素材跳过上传但加入同一发布批次且不虚增发布进�
     });
     assert.equal(sync.selectedCount, 2);
     assert.equal(client.upsertCalls.length, 1);
-    assert.equal(client.publishCalls.length, 1);
-    assert.deepEqual(client.publishCalls[0].materialIds, [7100, 1]);
+    assert.deepEqual(
+      client.publishCalls.flatMap((call) => call.materialIds).sort(
+        (left, right) => left - right,
+      ),
+      [1, 7100],
+    );
     assert.deepEqual(cachedGameIds, [72]);
     const initialProgress = progressEvents.find(
       (progress) =>
