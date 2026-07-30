@@ -684,9 +684,10 @@ export class XianyuSyncService {
       };
 
       const publishQueue = [];
+      let canaryPending = true;
       for (
         let candidateIndex = 0;
-        candidateIndex < candidates.length;
+        !stoppedForSafety && candidateIndex < candidates.length;
         candidateIndex += materialSyncConcurrency
       ) {
         await control?.checkpoint();
@@ -779,50 +780,59 @@ export class XianyuSyncService {
           completed: processedCount,
           phase: "processing",
         });
-      }
 
-      totals.publish_selected_count = publishQueue.length;
-      database.updateSyncRun(runId, {
-        ...totals,
-        processed_count: processedCount,
-        current_game_id: null,
-        current_title: null,
-      });
-      reportProgress({
-        total: candidates.length,
-        completed: processedCount,
-        phase:
-          publishQueue.length > 0 ? "publishing" : "material-completed",
-      });
-
-      let publishIndex = 0;
-      if (publishQueue.length > 0) {
-        const canaryResult = await publishEntries(
-          publishQueue.slice(0, 1),
-          { isCanary: true },
-        );
-        if (canaryResult.terminalResult) {
-          return canaryResult.terminalResult;
+        const materialEnd =
+          candidateIndex + materialCandidates.length;
+        if (
+          materialEnd < candidates.length &&
+          materialEnd % publishBatchSize !== 0
+        ) {
+          continue;
         }
-        stoppedForSafety = canaryResult.stopReason;
-        publishIndex = 1;
-      }
 
-      for (
-        ;
-        !stoppedForSafety && publishIndex < publishQueue.length;
-        publishIndex += publishBatchSize
-      ) {
-        const publicationResult = await publishEntries(
-          publishQueue.slice(
-            publishIndex,
-            publishIndex + publishBatchSize,
-          ),
-        );
-        if (publicationResult.terminalResult) {
-          return publicationResult.terminalResult;
+        totals.publish_selected_count += publishQueue.length;
+        database.updateSyncRun(runId, {
+          ...totals,
+          processed_count: processedCount,
+          current_game_id: null,
+          current_title: null,
+        });
+        reportProgress({
+          total: candidates.length,
+          completed: processedCount,
+          phase:
+            publishQueue.length > 0
+              ? "publishing"
+              : "material-completed",
+        });
+
+        let publishIndex = 0;
+        if (canaryPending && publishQueue.length > 0) {
+          const canaryResult = await publishEntries(
+            publishQueue.slice(0, 1),
+            { isCanary: true },
+          );
+          if (canaryResult.terminalResult) {
+            return canaryResult.terminalResult;
+          }
+          stoppedForSafety = canaryResult.stopReason;
+          canaryPending = false;
+          publishIndex = 1;
         }
-        stoppedForSafety = publicationResult.stopReason;
+
+        if (
+          !stoppedForSafety &&
+          publishIndex < publishQueue.length
+        ) {
+          const publicationResult = await publishEntries(
+            publishQueue.slice(publishIndex),
+          );
+          if (publicationResult.terminalResult) {
+            return publicationResult.terminalResult;
+          }
+          stoppedForSafety = publicationResult.stopReason;
+        }
+        publishQueue.length = 0;
       }
 
       const finalStatus =

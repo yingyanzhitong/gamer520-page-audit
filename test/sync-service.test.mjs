@@ -257,7 +257,7 @@ function config(databasePath) {
   };
 }
 
-test("素材最多 4 个并行并按 20 件批量发布", async () => {
+test("每导入 20 个素材后立即发布并保持最多 4 个并行", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-limit-test-"),
   );
@@ -310,9 +310,9 @@ test("素材最多 4 个并行并按 20 件批量发布", async () => {
       onProgress: (progress) => progressEvents.push(progress),
     });
     assert.equal(sync.selectedCount, 21);
-    assert.equal(sync.batchCount, 2);
+    assert.equal(sync.batchCount, 3);
     assert.equal(client.upsertCalls.length, 21);
-    assert.equal(client.publishCalls.length, 2);
+    assert.equal(client.publishCalls.length, 3);
     assert.equal(client.cardBindCalls.length, 21);
     assert.equal(client.maxActiveUpserts, 4);
     assert.ok(client.upsertCalls.every((items) => items.length === 1));
@@ -320,14 +320,19 @@ test("素材最多 4 个并行并按 20 件批量发布", async () => {
       client.publishCalls.map(
         (payload) => payload.materialIds.length,
       ),
-      [1, 20],
+      [1, 19, 1],
     );
     assert.ok(
       client.events
-        .slice(0, 21)
+        .slice(0, 20)
         .every((event) => event.type === "material"),
     );
-    assert.equal(client.events[21].type, "publish");
+    assert.deepEqual(client.events.slice(20), [
+      { type: "publish", count: 1 },
+      { type: "publish", count: 19 },
+      { type: "material", count: 1 },
+      { type: "publish", count: 1 },
+    ]);
     assert.ok(
       client.cardBindCalls.every(
         (payload) =>
@@ -391,14 +396,14 @@ test("素材最多 4 个并行并按 20 件批量发布", async () => {
     assert.equal(storedRun.material_processed_count, 21);
     assert.equal(storedRun.publish_selected_count, 21);
     assert.equal(storedRun.publish_processed_count, 21);
-    assert.equal(storedRun.batch_count, 2);
+    assert.equal(storedRun.batch_count, 3);
     assert.equal(storedRun.requested_limit, 20);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("探针商品失败后停止后续批次", async () => {
+test("探针商品失败后停止发布且不再导入后续 20 条", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-canary-test-"),
   );
@@ -406,7 +411,7 @@ test("探针商品失败后停止后续批次", async () => {
   const timestamp = "2026-07-28T00:00:00.000Z";
   const database = new CrawlerDatabase(databasePath);
   try {
-    for (let id = 1; id <= 5; id += 1) {
+    for (let id = 1; id <= 25; id += 1) {
       const discovered = game(id);
       database.upsertDiscoveredGames([discovered], timestamp);
       database.saveGameSuccess(discovered, result(id), timestamp);
@@ -420,10 +425,11 @@ test("探针商品失败后停止后续批次", async () => {
   const service = new XianyuSyncService(config(databasePath), client);
   try {
     const sync = await service.run({ trigger: "test" });
+    assert.equal(sync.selectedCount, 25);
     assert.equal(sync.status, "partial");
     assert.equal(sync.publishSubmitted, 1);
     assert.equal(sync.publishFailed, 1);
-    assert.equal(client.upsertCalls.length, 5);
+    assert.equal(client.upsertCalls.length, 20);
     assert.equal(client.publishCalls.length, 1);
     assert.equal(client.publishCalls[0].materialIds.length, 1);
     assert.match(sync.safetyStopReason, /探针商品发布失败/);
@@ -432,6 +438,7 @@ test("探针商品失败后停止后续批次", async () => {
     const storedRun = checkedDatabase.queryOne(
       `SELECT
          status,
+         material_processed_count,
          publish_selected_count,
          publish_processed_count,
          error_summary
@@ -441,7 +448,8 @@ test("探针商品失败后停止后续批次", async () => {
     );
     checkedDatabase.close();
     assert.equal(storedRun.status, "partial");
-    assert.equal(storedRun.publish_selected_count, 5);
+    assert.equal(storedRun.material_processed_count, 20);
+    assert.equal(storedRun.publish_selected_count, 20);
     assert.equal(storedRun.publish_processed_count, 1);
     assert.match(storedRun.error_summary, /探针商品发布失败/);
   } finally {
