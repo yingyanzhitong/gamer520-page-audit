@@ -1123,6 +1123,48 @@ export class CrawlerDatabase {
       .run(...entries.map(([, value]) => value), runId);
   }
 
+  countSyncScope(accountId, mode = "all", gameIds = null) {
+    const normalizedMode = new Set([
+      "all",
+      "pending",
+      "updated",
+    ]).has(mode)
+      ? mode
+      : "all";
+    const conditions = [VALID_GAME_DATA_CONDITION];
+    const parameters = [accountId];
+    if (normalizedMode === "pending") {
+      conditions.push(
+        "games.xianyu_item_id IS NULL",
+        "publication.item_id IS NULL",
+      );
+    } else if (normalizedMode === "updated") {
+      conditions.push("games.last_change_type = 'updated'");
+    }
+    const requestedGameIds = Array.isArray(gameIds)
+      ? gameIds
+          .map((gameId) => Number(gameId))
+          .filter(Number.isInteger)
+      : [];
+    if (requestedGameIds.length > 0) {
+      conditions.push(
+        `games.id IN (${requestedGameIds.map(() => "?").join(", ")})`,
+      );
+      parameters.push(...requestedGameIds);
+    }
+    const row = this.database
+      .prepare(`
+        SELECT COUNT(*) AS total
+        FROM games
+        LEFT JOIN xianyu_publications AS publication
+          ON publication.game_id = games.id
+         AND publication.account_id = ?
+        WHERE ${conditions.join("\n          AND ")}
+      `)
+      .get(...parameters);
+    return Number(row.total ?? 0);
+  }
+
   listSyncCandidates(accountId, limit, mode = "all") {
     const settings = this.getXianyuSyncSettings();
     const rows = this.database

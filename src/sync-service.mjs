@@ -178,6 +178,8 @@ export class XianyuSyncService {
     let latestBatchId = null;
     let processedCount = 0;
     let candidates = [];
+    let scopeTotal = 0;
+    let scopeSkipped = 0;
     let knownAccountItems = null;
     const listingCache = new Map();
     const listingFor = (candidate) => {
@@ -199,17 +201,19 @@ export class XianyuSyncService {
           runId,
           accountId,
           mode,
-          total: 0,
-          completed: processedCount,
-          materialTotal: candidates.length,
-          materialCompleted: totals.material_processed_count,
-          materialSkipped: totals.material_skipped,
-          publishTotal: totals.publish_selected_count,
-          publishCompleted: totals.publish_processed_count,
           currentGameId: null,
           currentTitle: null,
           phase: "preparing",
           ...progress,
+          total: scopeTotal,
+          completed: scopeSkipped + processedCount,
+          materialTotal: scopeTotal,
+          materialCompleted:
+            scopeSkipped + totals.material_processed_count,
+          materialSkipped: totals.material_skipped,
+          publishTotal: scopeTotal,
+          publishCompleted: scopeSkipped + processedCount,
+          scopeSkipped,
         });
       } catch {
         // 页面进度回调不能影响同步任务本身。
@@ -279,6 +283,15 @@ export class XianyuSyncService {
           requestedGameIds.has(candidate.id),
         );
       }
+      scopeTotal = database.countSyncScope(
+        accountId,
+        mode,
+        gameIds,
+      );
+      scopeSkipped = Math.max(
+        0,
+        scopeTotal - candidates.length,
+      );
       database.updateSyncRun(runId, {
         selected_count: candidates.length,
       });

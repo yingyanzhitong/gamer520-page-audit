@@ -751,6 +751,14 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
     assert.equal(sync.publishSubmitted, 1);
     assert.equal(client.publishCalls[0].materialIds.length, 1);
     assert.equal(progressEvents.at(-1).materialSkipped, 1);
+    const publishingProgress = progressEvents.find(
+      (progress) =>
+        progress.phase === "publishing" &&
+        progress.publishCompleted === 1,
+    );
+    assert.equal(publishingProgress.publishTotal, 2);
+    assert.equal(progressEvents.at(-1).publishTotal, 2);
+    assert.equal(progressEvents.at(-1).publishCompleted, 2);
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const rows = checkedDatabase.queryAll(
@@ -761,6 +769,62 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
       rows.map((row) => row.status),
       ["synced", "skipped"],
     );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("同步进度将已有素材记录计入已处理与本轮总量", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-scope-progress-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-07-28T00:00:00.000Z";
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    for (let id = 71; id <= 72; id += 1) {
+      const discovered = game(id);
+      database.upsertDiscoveredGames([discovered], timestamp);
+      database.saveGameSuccess(
+        discovered,
+        result(discovered.id),
+        timestamp,
+      );
+    }
+    database.markMaterialSynced(
+      71,
+      7100,
+      "existing-material-hash",
+      timestamp,
+    );
+    database.setXianyuAccountId("account-a", timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new FakeXianyuClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  const progressEvents = [];
+  try {
+    const sync = await service.run({
+      trigger: "test",
+      mode: "pending",
+      onProgress: (progress) => progressEvents.push(progress),
+    });
+    assert.equal(sync.selectedCount, 1);
+    assert.equal(client.upsertCalls.length, 1);
+    const initialProgress = progressEvents.find(
+      (progress) =>
+        progress.phase === "preparing" &&
+        progress.total === 2,
+    );
+    assert.equal(initialProgress.completed, 1);
+    assert.equal(initialProgress.materialCompleted, 1);
+    assert.equal(initialProgress.publishCompleted, 1);
+    assert.equal(initialProgress.scopeSkipped, 1);
+    assert.equal(progressEvents.at(-1).completed, 2);
+    assert.equal(progressEvents.at(-1).materialCompleted, 2);
+    assert.equal(progressEvents.at(-1).publishCompleted, 2);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
