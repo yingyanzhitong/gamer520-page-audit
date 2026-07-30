@@ -24,6 +24,27 @@ function normalizeHashValue(value) {
   return typeof value === "string" ? value.trim() : (value ?? null);
 }
 
+export const VALID_GAME_DATA_CONDITION = `
+  games.content_hash IS NOT NULL
+  AND games.title IS NOT NULL
+  AND length(trim(games.title)) > 0
+  AND games.description IS NOT NULL
+  AND length(trim(games.description)) > 0
+  AND (
+    trim(games.image_url) LIKE 'http://%'
+    OR trim(games.image_url) LIKE 'https://%'
+  )
+  AND EXISTS (
+    SELECT 1
+    FROM downloads
+    WHERE downloads.game_id = games.id
+      AND (
+        trim(downloads.url) LIKE 'http://%'
+        OR trim(downloads.url) LIKE 'https://%'
+      )
+  )
+`;
+
 export function computeGameContentHash(game, downloads = []) {
   const canonicalDownloads = downloads
     .map((download) => ({
@@ -1104,8 +1125,6 @@ export class CrawlerDatabase {
 
   listSyncCandidates(accountId, limit, mode = "all") {
     const settings = this.getXianyuSyncSettings();
-    const requiresSourceImage =
-      settings.image_template.includes("{image_url}");
     const rows = this.database
       .prepare(`
         SELECT
@@ -1133,27 +1152,7 @@ export class CrawlerDatabase {
         LEFT JOIN xianyu_publications AS publication
           ON publication.game_id = games.id
          AND publication.account_id = ?
-        WHERE games.content_hash IS NOT NULL
-          AND games.title IS NOT NULL
-          AND length(trim(games.title)) > 0
-          AND games.description IS NOT NULL
-          AND length(trim(games.description)) > 0
-          AND (
-            ? = 0
-            OR (
-              games.image_url IS NOT NULL
-              AND length(trim(games.image_url)) > 0
-            )
-          )
-          AND EXISTS (
-            SELECT 1
-            FROM downloads
-            WHERE downloads.game_id = games.id
-              AND (
-                trim(downloads.url) LIKE 'http://%'
-                OR trim(downloads.url) LIKE 'https://%'
-              )
-          )
+        WHERE ${VALID_GAME_DATA_CONDITION}
           AND games.xianyu_item_id IS NULL
           AND material.material_id IS NULL
           AND publication.item_id IS NULL
@@ -1164,7 +1163,7 @@ export class CrawlerDatabase {
           CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
           games.hot_rank ASC
       `)
-      .all(accountId, requiresSourceImage ? 1 : 0);
+      .all(accountId);
     const downloadStatement = this.database.prepare(
       `SELECT *
        FROM downloads
@@ -1224,56 +1223,6 @@ export class CrawlerDatabase {
         return true;
       })
       .slice(0, limit);
-  }
-
-  recordMissingImageSyncErrors(updatedAt) {
-    if (
-      !this.getXianyuSyncSettings().image_template.includes(
-        "{image_url}",
-      )
-    ) {
-      return 0;
-    }
-    const rows = this.database
-      .prepare(`
-        SELECT games.id
-        FROM games
-        WHERE games.content_hash IS NOT NULL
-          AND games.title IS NOT NULL
-          AND length(trim(games.title)) > 0
-          AND games.description IS NOT NULL
-          AND length(trim(games.description)) > 0
-          AND (
-            games.image_url IS NULL
-            OR length(trim(games.image_url)) = 0
-          )
-          AND EXISTS (
-            SELECT 1
-            FROM downloads
-            WHERE downloads.game_id = games.id
-              AND (
-                trim(downloads.url) LIKE 'http://%'
-                OR trim(downloads.url) LIKE 'https://%'
-              )
-          )
-      `)
-      .all();
-    const statement = this.database.prepare(`
-      INSERT INTO xianyu_material_sync (
-        game_id,
-        status,
-        last_error,
-        updated_at
-      ) VALUES (?, 'failed', 'games.image_url 缺失，已跳过且未使用替代图片', ?)
-      ON CONFLICT(game_id) DO UPDATE SET
-        status = 'failed',
-        last_error = excluded.last_error,
-        updated_at = excluded.updated_at
-    `);
-    transaction(this.database, () => {
-      for (const row of rows) statement.run(row.id, updatedAt);
-    });
-    return rows.length;
   }
 
   markMaterialSynced(gameId, materialId, contentHash, syncedAt) {

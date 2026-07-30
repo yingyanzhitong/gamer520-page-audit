@@ -278,6 +278,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     );
     assert.equal(summary.totals.games, 1);
     assert.equal(summary.totals.downloads, 1);
+    assert.equal(summary.totals.validGames, 1);
+    assert.equal(summary.totals.eligibleGames, 1);
     assert.equal(summary.latestRun.status, "success");
     assert.equal(summary.latestRun.detailSkipped, 2);
     assert.equal(summary.scheduler.cronTimezone, "Asia/Shanghai");
@@ -312,6 +314,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /导入素材库/);
     assert.match(appSource, /发布商品/);
     assert.match(appSource, /图片链接/);
+    assert.match(appSource, /总游戏数据/);
+    assert.match(appSource, /有效游戏数据/);
+    assert.match(appSource, /已同步素材库数据/);
+    assert.match(appSource, /已发布数据/);
 
     const games = await fetch(
       `${baseUrl}/api/games?query=118842&status=success`,

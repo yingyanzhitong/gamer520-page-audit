@@ -29,7 +29,6 @@ import {
   Search,
   Settings2,
   ShieldCheck,
-  TimerReset,
   Truck,
   UserRound,
   X,
@@ -535,30 +534,29 @@ function DashboardPage({ notify }) {
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           icon={Gamepad2}
-          label="游戏数据"
+          label="总游戏数据"
           value={data?.totals?.games}
-          note={`${formatNumber(data?.totals?.eligibleGames)} 条具备下载资源`}
+          note="当前数据库全部游戏记录"
+        />
+        <StatCard
+          icon={ShieldCheck}
+          label="有效游戏数据"
+          value={data?.totals?.validGames}
+          note="图片与有效下载链接完整"
         />
         <StatCard
           icon={Database}
-          label="素材库"
+          label="已同步素材库数据"
           value={data?.totals?.materialSynced}
           note="同名或已有素材自动跳过"
           tone="slate"
         />
         <StatCard
           icon={PackageCheck}
-          label="发布成功"
+          label="已发布数据"
           value={data?.totals?.publishedGames}
           note="商品编号已回写 Gamer520"
           tone="green"
-        />
-        <StatCard
-          icon={TimerReset}
-          label="需要关注"
-          value={data?.totals?.publishAttention}
-          note="失败会跳过，未知结果需确认"
-          tone="amber"
         />
       </div>
       <div className="mt-5">

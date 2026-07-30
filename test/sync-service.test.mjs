@@ -1010,7 +1010,7 @@ test("单游戏同步只处理指定游戏 ID", async () => {
   }
 });
 
-test("缺少 games.image_url 的商品不会进入同步队列", async () => {
+test("缺少 games.image_url 时即使使用固定模板也不会进入同步队列", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-image-test-"),
   );
@@ -1046,8 +1046,8 @@ test("缺少 games.image_url 的商品不会进入同步队列", async () => {
       discovered.id,
     );
     checkedDatabase.close();
-    assert.equal(material.status, "failed");
-    assert.match(material.last_error, /image_url 缺失/);
+    assert.equal(material.status, "pending");
+    assert.equal(material.last_error, null);
 
     const configuredDatabase = new CrawlerDatabase(databasePath);
     configuredDatabase.setXianyuSettings(
@@ -1066,11 +1066,9 @@ test("缺少 games.image_url 的商品不会进入同步队列", async () => {
       trigger: "test",
       mode: "all",
     });
-    assert.equal(configuredSync.selectedCount, 1);
-    assert.equal(configuredSync.publishSuccess, 1);
-    assert.deepEqual(client.upsertCalls[0][0].images, [
-      "https://cdn.example/static-cover.jpg",
-    ]);
+    assert.equal(configuredSync.selectedCount, 0);
+    assert.equal(configuredSync.publishSuccess, 0);
+    assert.equal(client.upsertCalls.length, 0);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

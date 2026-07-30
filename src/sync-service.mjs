@@ -264,7 +264,6 @@ export class XianyuSyncService {
       await control?.checkpoint();
       await this.validateAccount(accountId);
       await control?.checkpoint();
-      database.recordMissingImageSyncErrors(nowIso());
       candidates = database.listSyncCandidates(
         accountId,
         100_000,

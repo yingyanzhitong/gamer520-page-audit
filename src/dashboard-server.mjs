@@ -5,7 +5,10 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
-import { CrawlerDatabase } from "./database.mjs";
+import {
+  CrawlerDatabase,
+  VALID_GAME_DATA_CONDITION,
+} from "./database.mjs";
 import {
   clearDashboardSessionCookieHeader,
   createDashboardSession,
@@ -296,9 +299,8 @@ function dashboardPayload(database, config, runtimeState) {
         SUM(CASE WHEN scrape_status = 'failed' THEN 1 ELSE 0 END) AS failed_games,
         SUM(CASE WHEN description IS NOT NULL AND description != '' THEN 1 ELSE 0 END) AS described_games,
         (SELECT COUNT(*) FROM downloads) AS downloads,
-        SUM(CASE WHEN EXISTS (
-          SELECT 1 FROM downloads WHERE downloads.game_id = games.id
-        ) THEN 1 ELSE 0 END) AS eligible_games,
+        SUM(CASE WHEN ${VALID_GAME_DATA_CONDITION}
+          THEN 1 ELSE 0 END) AS valid_games,
         (SELECT COUNT(*) FROM xianyu_material_sync WHERE status = 'synced') AS material_synced,
         (SELECT COUNT(*) FROM xianyu_publications WHERE status = 'success') AS published_games,
         (SELECT COUNT(*) FROM xianyu_publications WHERE status IN ('failed', 'unknown')) AS publish_attention
@@ -367,7 +369,8 @@ function dashboardPayload(database, config, runtimeState) {
       failedGames: totals.failed_games ?? 0,
       describedGames: totals.described_games ?? 0,
       downloads: totals.downloads,
-      eligibleGames: totals.eligible_games ?? 0,
+      validGames: totals.valid_games ?? 0,
+      eligibleGames: totals.valid_games ?? 0,
       materialSynced: totals.material_synced ?? 0,
       publishedGames: totals.published_games ?? 0,
       publishAttention: totals.publish_attention ?? 0,

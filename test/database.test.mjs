@@ -574,6 +574,7 @@ test("闲鱼同步候选只保留有效 HTTP 下载资源", () => {
       [120001, "有效资源", "https://pan.example/valid"],
       [120002, "空下载地址", ""],
       [120003, "非网页协议", "ftp://pan.example/file"],
+      [120004, "无有效图片", "https://pan.example/no-image"],
     ];
     for (const [id, title, url] of cases) {
       const discovered = discovery(id, title, id - 120000);
@@ -584,6 +585,9 @@ test("闲鱼同步候选只保留有效 HTTP 下载资源", () => {
         timestamp,
       );
     }
+    database.database
+      .prepare("UPDATE games SET image_url = NULL WHERE id = ?")
+      .run(120004);
     database.setXianyuAccountId("account-a", timestamp);
 
     const candidates = database.listSyncCandidates(
