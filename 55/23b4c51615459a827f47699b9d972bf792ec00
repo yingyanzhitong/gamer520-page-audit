@@ -1,0 +1,52 @@
+deploy/.env.example
+  s_bfd82453425369::t_1515c8035c7cb1 2
+CHANGELOG.md
+  s_bfd82453425369::t_1515c8035c7cb1 3-8
+package.json
+  s_bfd82453425369::t_1515c8035c7cb1 3
+src/dashboard-server.mjs
+  s_bfd82453425369::t_f74f89c2f21997 9-12,302-303,372-373
+deploy/docker-compose.yml
+  s_bfd82453425369::t_1515c8035c7cb1 3
+frontend/src/App.jsx
+  s_bfd82453425369::t_a1981b194ac9fb 537,539,542-547,549,556
+docker-compose.yml
+  s_bfd82453425369::t_1515c8035c7cb1 5
+src/database.mjs
+  s_bfd82453425369::t_bdcce3ddfef503 1155,1166
+  s_bfd82453425369::t_e60197f450d587 27-47
+test/database.test.mjs
+  s_bfd82453425369::t_2f0f1f2e204619 577,588-590
+README.md
+  s_bfd82453425369::t_1515c8035c7cb1 3,129
+test/dashboard.test.mjs
+  s_bfd82453425369::t_71eeb0d3b53d5d 281-282,317-320
+test/sync-service.test.mjs
+  s_bfd82453425369::t_cedde4ae64e216 1049-1050
+  s_bfd82453425369::t_2f0f1f2e204619 1013,1069-1071
+public/assets/index-CEln915U.js
+  s_bfd82453425369::t_27860784f4cd0c 8-9,49
+public/index.html
+  s_bfd82453425369::t_79df6c4f2ee001 12
+package-lock.json
+  s_bfd82453425369::t_d8be557fd5b069 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "5523b4c51615459a827f47699b9d972bf792ec00",
+  "prompts": {},
+  "logical_commit_id": "5523b4c51615459a827f47699b9d972bf792ec00",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 70,
+      "total_deletions": 107
+    }
+  }
+}
