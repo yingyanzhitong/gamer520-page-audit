@@ -3,9 +3,10 @@ import test from "node:test";
 
 import { TaskControl } from "../src/task-control.mjs";
 
-test("任务在安全检查点中断并可继续执行", async () => {
+test("任务可立即进入暂停状态并在恢复后继续执行", async () => {
   const control = new TaskControl();
-  control.interrupt();
+  assert.equal(control.pause(), true);
+  assert.equal(control.pause(), false);
 
   let continued = false;
   const waiting = control.checkpoint().then(() => {

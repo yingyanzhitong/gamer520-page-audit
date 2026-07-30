@@ -188,6 +188,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       cronSchedule: "0 3 * * *",
       cronTimezone: "Asia/Shanghai",
       runOnStart: true,
+      concurrency: 3,
       nextRun: "2026-07-28T19:00:00.000Z",
       updatedAt: "2026-07-28T00:00:00.000Z",
       sync: {
@@ -197,6 +198,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         cronSchedule: "0 */6 * * *",
         cronTimezone: "Asia/Shanghai",
         nextRun: "2026-07-28T18:00:00.000Z",
+        materialConcurrency: 4,
+        publishConcurrency: 4,
         mode: "all",
         progress: {
           runId: syncRunId,
@@ -241,6 +244,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           enabled: settings.crawlEnabled,
           cronSchedule: settings.crawlCronSchedule,
           cronTimezone: settings.cronTimezone,
+          concurrency: settings.crawlConcurrency,
           nextRun: "2026-07-29T20:30:00.000Z",
           sync: {
             active: false,
@@ -248,6 +252,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
             enabled: settings.syncEnabled,
             cronSchedule: settings.syncCronSchedule,
             cronTimezone: settings.cronTimezone,
+            materialConcurrency: settings.materialConcurrency,
+            publishConcurrency: settings.publishConcurrency,
             nextRun: "2026-07-29T16:15:00.000Z",
             mode: settings.syncMode,
           },
@@ -270,11 +276,12 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         taskControl = { task, action };
         return {
           active: task === "crawl",
-          interrupted: action === "interrupt",
+          interrupted: action === "pause" || action === "interrupt",
           sync: {
             active: task === "sync",
             interrupted:
-              task === "sync" && action === "interrupt",
+              task === "sync" &&
+              (action === "pause" || action === "interrupt"),
             mode: "all",
           },
         };
@@ -299,8 +306,11 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       `${baseUrl}/api/settings/schedule`,
     ).then((response) => response.json());
     assert.equal(schedule.crawl.cronSchedule, "0 3 * * *");
+    assert.equal(schedule.crawl.concurrency, 3);
     assert.equal(schedule.sync.enabled, true);
     assert.equal(schedule.sync.mode, "all");
+    assert.equal(schedule.sync.materialConcurrency, 4);
+    assert.equal(schedule.sync.publishConcurrency, 4);
     assert.equal(schedule.sync.progress.completed, 4);
     assert.equal(schedule.sync.progress.materialSkipped, 2);
     assert.equal(schedule.sync.progress.materialCompleted, 4);
@@ -714,19 +724,25 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           crawl: {
             cron_schedule: "30 4 * * *",
             enabled: false,
+            concurrency: 5,
           },
           sync: {
             cron_schedule: "15 */8 * * *",
             enabled: true,
             mode: "updated",
+            material_concurrency: 6,
+            publish_concurrency: 2,
           },
         }),
       },
     ).then((response) => response.json());
     assert.equal(updatedSchedule.success, true);
     assert.equal(savedSchedule.crawlEnabled, false);
+    assert.equal(savedSchedule.crawlConcurrency, 5);
     assert.equal(savedSchedule.syncCronSchedule, "15 */8 * * *");
     assert.equal(savedSchedule.syncMode, "updated");
+    assert.equal(savedSchedule.materialConcurrency, 6);
+    assert.equal(savedSchedule.publishConcurrency, 2);
 
     const crawl = await fetch(`${baseUrl}/api/crawl/run`, {
       method: "POST",
@@ -774,7 +790,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     });
 
     const interruptedSync = await fetch(
-      `${baseUrl}/api/tasks/sync/interrupt`,
+      `${baseUrl}/api/tasks/sync/pause`,
       {
         method: "POST",
         headers: {
@@ -788,7 +804,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(interruptedSync.scheduler.sync.interrupted, true);
     assert.deepEqual(taskControl, {
       task: "sync",
-      action: "interrupt",
+      action: "pause",
     });
 
     const writeResponse = await fetch(`${baseUrl}/api/games`, {

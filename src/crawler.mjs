@@ -34,8 +34,10 @@ async function runWithRetry(operation, config, control = null) {
   for (let attempt = 1; attempt <= config.maxRetries + 1; attempt += 1) {
     try {
       await control?.checkpoint();
+      const value = await operation(attempt);
+      await control?.checkpoint();
       return {
-        value: await operation(attempt),
+        value,
         attemptCount: attempt,
       };
     } catch (error) {

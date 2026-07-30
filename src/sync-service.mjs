@@ -17,10 +17,21 @@ export const publishHeartbeatMs = 60_000;
 export const materialSyncConcurrency = 4;
 export const publishConcurrency = 4;
 
-function createConcurrencyLimiter(limit) {
+function createConcurrencyLimiter(limit, control = null) {
   let activeCount = 0;
+  let resumeScheduled = false;
   const queue = [];
   const runNext = () => {
+    if (control?.interrupted) {
+      if (!resumeScheduled) {
+        resumeScheduled = true;
+        void control.checkpoint().then(() => {
+          resumeScheduled = false;
+          runNext();
+        });
+      }
+      return;
+    }
     while (activeCount < limit && queue.length > 0) {
       const { task, resolve, reject } = queue.shift();
       activeCount += 1;
@@ -103,6 +114,8 @@ export class XianyuSyncService {
     mode = "all",
     gameIds = null,
     control = null,
+    materialConcurrency = materialSyncConcurrency,
+    publishConcurrency: requestedPublishConcurrency = publishConcurrency,
     onProgress = () => {},
   } = {}) {
     if (!syncModes.has(mode)) {
@@ -112,6 +125,17 @@ export class XianyuSyncService {
     }
     const database = new CrawlerDatabase(this.config.dbPath);
     const settings = database.getXianyuSyncSettings();
+    const resolvedMaterialConcurrency = Math.min(
+      12,
+      Math.max(1, Number.parseInt(materialConcurrency, 10) || materialSyncConcurrency),
+    );
+    const resolvedPublishConcurrency = Math.min(
+      12,
+      Math.max(
+        1,
+        Number.parseInt(requestedPublishConcurrency, 10) || publishConcurrency,
+      ),
+    );
     const accountId = settings.account_id;
     if (!accountId) {
       database.close();
@@ -253,6 +277,7 @@ export class XianyuSyncService {
           itemIds: [String(itemId)],
           itemTitle: listingFor(candidate).title,
         });
+        await control?.checkpoint();
         if (Number(result.fail_count ?? 0) > 0) {
           throw new Error(`卡券关联失败：${result.fail_count} 条未成功`);
         }
@@ -303,8 +328,8 @@ export class XianyuSyncService {
         trigger,
         mode,
         accountId,
-        materialConcurrency: materialSyncConcurrency,
-        publishConcurrency,
+        materialConcurrency: resolvedMaterialConcurrency,
+        publishConcurrency: resolvedPublishConcurrency,
         publishMode: "single",
         publishHeartbeatSeconds: publishHeartbeatMs / 1_000,
         requestedGameIds: Array.isArray(gameIds) ? gameIds : null,
@@ -318,6 +343,7 @@ export class XianyuSyncService {
         message: `正在验证发布账号 ${accountId}`,
       });
       const account = await this.validateAccount(accountId);
+      await control?.checkpoint();
       recordTaskLog({
         level: "success",
         stage: "account",
@@ -420,6 +446,7 @@ export class XianyuSyncService {
             cacheDirectory: this.config.coverCacheDir,
             publicBaseUrl: this.config.publicBaseUrl,
           });
+          await control?.checkpoint();
           coverUrl = cachedCover.publicUrl;
           recordTaskLog({
             gameId: candidate.id,
@@ -537,6 +564,7 @@ export class XianyuSyncService {
               },
             });
             const results = await this.client.upsertMaterials([payload]);
+            await control?.checkpoint();
             const result = results.find(
               (item) =>
                 String(item.external_id) === String(candidate.id),
@@ -694,6 +722,8 @@ export class XianyuSyncService {
             postage: itemData.postage,
             condition: itemData.condition,
           });
+          clearInterval(heartbeatTimer);
+          await control?.checkpoint();
           itemId = itemIdFromResult(result);
           itemUrl =
             result.item_url ??
@@ -787,10 +817,12 @@ export class XianyuSyncService {
         return itemStatus;
       };
       const materialLimiter = createConcurrencyLimiter(
-        materialSyncConcurrency,
+        resolvedMaterialConcurrency,
+        control,
       );
       const publishLimiter = createConcurrencyLimiter(
-        publishConcurrency,
+        resolvedPublishConcurrency,
+        control,
       );
       const publishJobs = [];
 
@@ -812,6 +844,7 @@ export class XianyuSyncService {
       const handleCandidate = async (candidate) => {
         await control?.checkpoint();
         const outcome = await syncMaterial(candidate);
+        await control?.checkpoint();
         const {
           existingMaterialId,
           result,

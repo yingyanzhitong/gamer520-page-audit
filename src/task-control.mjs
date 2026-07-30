@@ -6,6 +6,10 @@ export class TaskControl {
     return this.#interrupted;
   }
 
+  pause() {
+    return this.interrupt();
+  }
+
   interrupt() {
     if (this.#interrupted) return false;
     this.#interrupted = true;

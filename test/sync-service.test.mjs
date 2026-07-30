@@ -9,6 +9,7 @@ import {
   publishHeartbeatMs,
   XianyuSyncService,
 } from "../src/sync-service.mjs";
+import { TaskControl } from "../src/task-control.mjs";
 
 function game(
   id,
@@ -302,7 +303,7 @@ function config(databasePath, overrides = {}) {
   };
 }
 
-test("素材导入和单商品发布分别保持 4 个并行并形成流水线", async () => {
+test("素材导入和单商品发布使用页面配置的并行数形成流水线", async () => {
   assert.equal(publishHeartbeatMs, 60_000);
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-limit-test-"),
@@ -356,6 +357,8 @@ test("素材导入和单商品发布分别保持 4 个并行并形成流水线",
   try {
     const sync = await service.run({
       trigger: "test",
+      materialConcurrency: 5,
+      publishConcurrency: 3,
       onProgress: (progress) => progressEvents.push(progress),
     });
     assert.equal(sync.selectedCount, 21);
@@ -363,8 +366,8 @@ test("素材导入和单商品发布分别保持 4 个并行并形成流水线",
     assert.equal(client.upsertCalls.length, 21);
     assert.equal(client.publishCalls.length, 21);
     assert.equal(client.cardBindCalls.length, 21);
-    assert.equal(client.maxActiveUpserts, 4);
-    assert.equal(client.maxActivePublishes, 4);
+    assert.equal(client.maxActiveUpserts, 5);
+    assert.equal(client.maxActivePublishes, 3);
     assert.equal(client.pipelineOverlapObserved, true);
     assert.ok(client.upsertCalls.every((items) => items.length === 1));
     assert.ok(
@@ -457,6 +460,56 @@ test("素材导入和单商品发布分别保持 4 个并行并形成流水线",
       operationLogs.at(-1).action,
       "finished",
     );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("暂停后并发队列立即停止领取新商品", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-pause-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const database = new CrawlerDatabase(databasePath);
+  const timestamp = "2026-07-30T00:00:00.000Z";
+  try {
+    for (let id = 1; id <= 3; id += 1) {
+      const discovered = game(id);
+      database.upsertDiscoveredGames([discovered], timestamp);
+      database.saveGameSuccess(
+        discovered,
+        result(id, undefined, discovered.imageUrl),
+        timestamp,
+      );
+    }
+    database.setXianyuSettings("account-a", 1, timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new TrackingXianyuClient();
+  const control = new TaskControl();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const running = service.run({
+      trigger: "test",
+      control,
+      materialConcurrency: 1,
+      publishConcurrency: 1,
+    });
+    while (client.activeUpserts === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    control.pause();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(control.interrupted, true);
+    assert.equal(client.upsertCalls.length, 1);
+    assert.equal(client.publishCalls.length, 0);
+
+    control.resume();
+    const sync = await running;
+    assert.equal(sync.publishSuccess, 3);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

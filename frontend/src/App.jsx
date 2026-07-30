@@ -1060,11 +1060,18 @@ function TasksPage({ notify }) {
           crawl: {
             enabled: schedule.crawl.enabled,
             cron_schedule: schedule.crawl.cronSchedule,
+            concurrency: Number(schedule.crawl.concurrency),
           },
           sync: {
             enabled: schedule.sync.enabled,
             cron_schedule: schedule.sync.cronSchedule,
             mode: schedule.sync.mode,
+            material_concurrency: Number(
+              schedule.sync.materialConcurrency,
+            ),
+            publish_concurrency: Number(
+              schedule.sync.publishConcurrency,
+            ),
           },
         }),
       });
@@ -1099,8 +1106,8 @@ function TasksPage({ notify }) {
         body: jsonBody({}),
       });
       notify(
-        action === "interrupt"
-          ? "中断请求已提交，任务将在安全点暂停"
+        action === "pause"
+          ? "任务已立即暂停"
           : "任务已恢复执行",
       );
       await load();
@@ -1184,17 +1191,75 @@ function TasksPage({ notify }) {
                     updateSchedule([kind, "cronSchedule"], event.target.value)
                   }
                 />
+                {kind === "crawl" ? (
+                  <div className="space-y-2">
+                    <Label>详情采集并行数</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="12"
+                      value={schedule?.crawl?.concurrency ?? 3}
+                      onChange={(event) =>
+                        updateSchedule(
+                          ["crawl", "concurrency"],
+                          event.target.value,
+                        )
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      可配置 1–12，调高会增加目标站点访问压力。
+                    </p>
+                  </div>
+                ) : null}
                 {kind === "sync" ? (
-                  <Select
-                    value={schedule?.sync?.mode ?? "pending"}
-                    onChange={(event) =>
-                      updateSchedule(["sync", "mode"], event.target.value)
-                    }
-                  >
-                    <option value="pending">未发布商品</option>
-                    <option value="all">全部待处理商品</option>
-                    <option value="updated">已更新商品</option>
-                  </Select>
+                  <>
+                    <Select
+                      value={schedule?.sync?.mode ?? "pending"}
+                      onChange={(event) =>
+                        updateSchedule(["sync", "mode"], event.target.value)
+                      }
+                    >
+                      <option value="pending">未发布商品</option>
+                      <option value="all">全部待处理商品</option>
+                      <option value="updated">已更新商品</option>
+                    </Select>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>素材导入并行数</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          max="12"
+                          value={
+                            schedule?.sync?.materialConcurrency ?? 4
+                          }
+                          onChange={(event) =>
+                            updateSchedule(
+                              ["sync", "materialConcurrency"],
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>商品发布并行数</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          max="12"
+                          value={
+                            schedule?.sync?.publishConcurrency ?? 4
+                          }
+                          onChange={(event) =>
+                            updateSchedule(
+                              ["sync", "publishConcurrency"],
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  </>
                 ) : null}
               </div>
             ))}
@@ -1237,7 +1302,7 @@ function TasksPage({ notify }) {
                 onClick={() =>
                   control(
                     schedule?.sync?.active ? "sync" : "crawl",
-                    "interrupt",
+                    "pause",
                   )
                 }
                 disabled={
@@ -1246,14 +1311,14 @@ function TasksPage({ notify }) {
                     !schedule?.sync?.active)
                 }
               >
-                {controlAction === "interrupt" ? (
+                {controlAction === "pause" ? (
                   <LoaderCircle className="h-4 w-4 animate-spin" />
                 ) : (
                   <Pause className="h-4 w-4" />
                 )}
-                {controlAction === "interrupt"
-                  ? "正在中断"
-                  : "中断当前任务"}
+                {controlAction === "pause"
+                  ? "正在暂停"
+                  : "暂停当前任务"}
               </Button>
               <Button
                 variant="secondary"

@@ -1325,6 +1325,7 @@ export async function startDashboardServer(
             nextRun: state.nextRun ?? null,
             active: Boolean(state.active),
             interrupted: Boolean(state.interrupted),
+            concurrency: Number(state.concurrency ?? 3),
           },
           sync: {
             enabled: Boolean(state.sync?.enabled),
@@ -1333,6 +1334,12 @@ export async function startDashboardServer(
             nextRun: state.sync?.nextRun ?? null,
             active: Boolean(state.sync?.active),
             interrupted: Boolean(state.sync?.interrupted),
+            materialConcurrency: Number(
+              state.sync?.materialConcurrency ?? 4,
+            ),
+            publishConcurrency: Number(
+              state.sync?.publishConcurrency ?? 4,
+            ),
             progress: state.sync?.progress ?? null,
           },
         });
@@ -1361,9 +1368,12 @@ export async function startDashboardServer(
           cronTimezone: body.cron_timezone,
           crawlCronSchedule: body.crawl?.cron_schedule,
           crawlEnabled: body.crawl?.enabled,
+          crawlConcurrency: body.crawl?.concurrency,
           syncCronSchedule: body.sync?.cron_schedule,
           syncEnabled: body.sync?.enabled,
           syncMode: syncMode(body.sync?.mode),
+          materialConcurrency: body.sync?.material_concurrency,
+          publishConcurrency: body.sync?.publish_concurrency,
         });
         sendJson(response, 200, {
           success: true,
@@ -1516,7 +1526,7 @@ export async function startDashboardServer(
         return;
       }
       const taskControlMatch = requestUrl.pathname.match(
-        /^\/api\/tasks\/(crawl|sync)\/(interrupt|resume)$/,
+        /^\/api\/tasks\/(crawl|sync)\/(pause|interrupt|resume)$/,
       );
       if (request.method === "POST" && taskControlMatch) {
         if (

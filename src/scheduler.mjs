@@ -45,8 +45,21 @@ function settingsFromRow(row) {
     syncCronSchedule: row.sync_cron_schedule,
     syncEnabled: Boolean(row.sync_enabled),
     syncMode: row.sync_mode ?? "all",
+    crawlConcurrency: Number(row.crawl_concurrency),
+    materialConcurrency: Number(row.material_concurrency),
+    publishConcurrency: Number(row.publish_concurrency),
     updatedAt: row.updated_at,
   };
+}
+
+function concurrencyValue(value, label) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 12) {
+    const error = new Error(`${label}必须是 1 到 12 之间的整数`);
+    error.statusCode = 422;
+    throw error;
+  }
+  return parsed;
 }
 
 function normalizeScheduleSettings(input) {
@@ -57,6 +70,18 @@ function normalizeScheduleSettings(input) {
     syncCronSchedule: String(input.syncCronSchedule ?? "").trim(),
     syncEnabled: input.syncEnabled,
     syncMode: String(input.syncMode ?? "").trim(),
+    crawlConcurrency: concurrencyValue(
+      input.crawlConcurrency,
+      "采集并行数",
+    ),
+    materialConcurrency: concurrencyValue(
+      input.materialConcurrency,
+      "素材导入并行数",
+    ),
+    publishConcurrency: concurrencyValue(
+      input.publishConcurrency,
+      "商品发布并行数",
+    ),
   };
   if (
     !normalized.cronTimezone ||
@@ -126,7 +151,13 @@ function triggerCrawl(reason) {
 
   crawlControl = new TaskControl();
   const control = crawlControl;
-  activeRun = runCrawl({ trigger: reason, control })
+  activeRun = runCrawl({
+    trigger: reason,
+    control,
+    overrides: {
+      detailConcurrency: schedulerSettings.crawlConcurrency,
+    },
+  })
     .catch((error) => {
       log("scheduled_crawl_failed", {
         reason,
@@ -195,6 +226,8 @@ function triggerSync(
       mode,
       gameIds: options.gameIds ?? null,
       control,
+      materialConcurrency: schedulerSettings.materialConcurrency,
+      publishConcurrency: schedulerSettings.publishConcurrency,
       onProgress: (progress) => {
         syncProgress = progress;
       },
@@ -288,6 +321,9 @@ function updateScheduleSettings(input) {
     syncCronSchedule: schedulerSettings.syncCronSchedule,
     syncEnabled: schedulerSettings.syncEnabled,
     syncMode: schedulerSettings.syncMode,
+    crawlConcurrency: schedulerSettings.crawlConcurrency,
+    materialConcurrency: schedulerSettings.materialConcurrency,
+    publishConcurrency: schedulerSettings.publishConcurrency,
   });
   return scheduleRuntime();
 }
@@ -329,8 +365,8 @@ function controlTask(task, action) {
     error.statusCode = 409;
     throw error;
   }
-  if (action === "interrupt") {
-    control.interrupt();
+  if (action === "pause" || action === "interrupt") {
+    control.pause();
   } else if (action === "resume") {
     control.resume();
   } else {
@@ -355,12 +391,15 @@ function controlTask(task, action) {
       database.recordTaskLog({
         taskType: task,
         runId,
-        level: action === "interrupt" ? "warning" : "success",
+        level:
+          action === "pause" || action === "interrupt"
+            ? "warning"
+            : "success",
         stage: "control",
-        action,
+        action: action === "interrupt" ? "pause" : action,
         message:
-          action === "interrupt"
-            ? "管理员已请求中断任务，任务将在安全检查点暂停"
+          action === "pause" || action === "interrupt"
+            ? "管理员已立即暂停任务，停止领取新的处理步骤"
             : "管理员已恢复任务执行",
         details: { interrupted: control.interrupted },
         createdAt: nowIso(),
@@ -380,6 +419,7 @@ function scheduleRuntime() {
     cronSchedule: schedulerSettings.crawlCronSchedule,
     cronTimezone: schedulerSettings.cronTimezone,
     runOnStart: config.runOnStart,
+    concurrency: schedulerSettings.crawlConcurrency,
     nextRun: crawlJob?.nextRun()?.toISOString() ?? null,
     updatedAt: schedulerSettings.updatedAt,
     sync: {
@@ -390,8 +430,8 @@ function scheduleRuntime() {
       cronSchedule: schedulerSettings.syncCronSchedule,
       cronTimezone: schedulerSettings.cronTimezone,
       nextRun: syncJob?.nextRun()?.toISOString() ?? null,
-      materialConcurrency: materialSyncConcurrency,
-      publishConcurrency,
+      materialConcurrency: schedulerSettings.materialConcurrency,
+      publishConcurrency: schedulerSettings.publishConcurrency,
       mode: schedulerSettings.syncMode,
       progress: syncProgress,
     },
@@ -415,6 +455,9 @@ schedulerSettings = settingsFromRow(
       syncCronSchedule: config.syncCronSchedule,
       syncEnabled: config.syncEnabled,
       syncMode: "all",
+      crawlConcurrency: config.detailConcurrency,
+      materialConcurrency: materialSyncConcurrency,
+      publishConcurrency,
     },
     nowIso(),
   ),
