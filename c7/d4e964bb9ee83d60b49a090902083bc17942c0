@@ -1,0 +1,57 @@
+docker-compose.yml
+  s_bfd82453425369::t_5a7a0b9c00e466 34-36
+  s_bfd82453425369::t_904ffd0024bae1 5
+test/sync-service.test.mjs
+  s_bfd82453425369::t_05092f50ab36ae 211,396-399,401-492,497
+  s_bfd82453425369::t_f11611526c522d 212,214-243,246
+  s_bfd82453425369::t_9a4351598f27b8 64,122-136,147-150,152-156,254-256,323,527-532
+  s_bfd82453425369::t_8693bea85dcac8 213
+  s_bfd82453425369::t_70c992c70626c4 400
+src/xianyu-client.mjs
+  s_bfd82453425369::t_734bda74173196 105-121
+src/config.mjs
+  s_bfd82453425369::t_5a7a0b9c00e466 21-24,75,112-123,162-165,190-191
+src/cover-cache.mjs
+  s_bfd82453425369::t_5a7a0b9c00e466 1-115
+test/cover-cache.test.mjs
+  s_bfd82453425369::t_29c7569df4416c 1-67
+src/dashboard-server.mjs
+  s_bfd82453425369::t_0b39e30a28ec67 698-718,736-746
+public/app.js
+  s_bfd82453425369::t_42a07c77038cf0 92
+src/sync-service.mjs
+  s_bfd82453425369::t_a59f393afdb341 347,367-377
+  s_bfd82453425369::t_cbfd199906bbf3 844
+  s_bfd82453425369::t_47c167cee4f64d 221-222,259-262
+  s_bfd82453425369::t_f20839e1ae9333 3,36-138,140,142-143
+  s_bfd82453425369::t_74057636af2478 401-404,407-410,492-500,535-543,547-571,574,576,578-607,612-614,616-620,622,625,658-683
+  s_bfd82453425369::t_796e7544f345e2 798-810,812-813,822-825,829,849,868,888
+  s_bfd82453425369::t_71a7722c9d282c 263
+package.json
+  s_bfd82453425369::t_904ffd0024bae1 3
+CHANGELOG.md
+  s_bfd82453425369::t_904ffd0024bae1 3-10
+README.md
+  s_bfd82453425369::t_ba3295d17fa37e 86-88,125
+package-lock.json
+  s_bfd82453425369::t_5e9ee603dbd459 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "c7d4e964bb9ee83d60b49a090902083bc17942c0",
+  "prompts": {},
+  "logical_commit_id": "c7d4e964bb9ee83d60b49a090902083bc17942c0",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 705,
+      "total_deletions": 70
+    }
+  }
+}
