@@ -84,7 +84,7 @@ const syncModeLabels = {
 
 const syncPhaseLabels = {
   preparing: "准备队列",
-  material: "同步素材",
+  material: "导入素材库",
   "material-completed": "素材阶段完成",
   publishing: "发布商品",
   "binding-card": "关联卡券 #6",
@@ -654,11 +654,11 @@ function renderSyncRun(run) {
       `${run.accountId ?? "—"} / ${syncModeLabels[run.syncMode] ?? "全部商品"} / ${run.processedCount ?? 0} / ${run.selectedCount} 条`,
     ],
     [
-      "素材",
+      "导入素材库",
       `进度 ${run.materialProcessedCount ?? 0}/${run.selectedCount} · 新增 ${run.materialCreated} · 更新 ${run.materialUpdated} · 跳过 ${run.materialSkipped} · 失败 ${run.materialFailed ?? 0}`,
     ],
     [
-      "发布",
+      "发布商品",
       `进度 ${run.publishProcessedCount ?? 0}/${run.publishSelectedCount ?? 0} · 提交 ${run.publishSubmitted} · 成功 ${run.publishSuccess} · 失败 ${run.publishFailed}`,
     ],
     [

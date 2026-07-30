@@ -304,6 +304,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /syncPublishProgressCount/);
     assert.match(pageSource, /id="sync-material-progress-track"/);
     assert.match(pageSource, /id="sync-publish-progress-track"/);
+    assert.match(pageSource, /导入素材库进度/);
+    assert.match(pageSource, /发布商品进度/);
     for (const status of [
       "none",
       "material",
