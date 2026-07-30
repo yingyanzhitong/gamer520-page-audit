@@ -1,0 +1,32 @@
+test/xianyu-client.test.mjs
+  s_bfd82453425369::t_dfc6c29035b9fd 1-31
+package.json
+  s_bfd82453425369::t_dfc6c29035b9fd 3
+CHANGELOG.md
+  s_bfd82453425369::t_dfc6c29035b9fd 3-7
+docker-compose.yml
+  s_bfd82453425369::t_dfc6c29035b9fd 5
+src/xianyu-client.mjs
+  s_bfd82453425369::t_dfc6c29035b9fd 110
+package-lock.json
+  s_bfd82453425369::t_3b4a201d1deed7 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1d8de57d985e7af519b1adf22ee103e6e34464ac",
+  "prompts": {},
+  "logical_commit_id": "1d8de57d985e7af519b1adf22ee103e6e34464ac",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 39,
+      "total_deletions": 3
+    }
+  }
+}
