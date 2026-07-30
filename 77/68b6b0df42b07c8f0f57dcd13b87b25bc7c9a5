@@ -1,0 +1,32 @@
+deploy/docker-compose.yml
+  s_bfd82453425369::t_df74ad229050d4 3
+docker-compose.yml
+  s_bfd82453425369::t_df74ad229050d4 5
+package.json
+  s_bfd82453425369::t_df74ad229050d4 3
+deploy/.env.example
+  s_bfd82453425369::t_df74ad229050d4 2
+CHANGELOG.md
+  s_bfd82453425369::t_df74ad229050d4 3-6
+package-lock.json
+  s_bfd82453425369::t_f1454c0000d643 3,9,46-68,72-74,78,1227-1238,1245-1255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "7768b6b0df42b07c8f0f57dcd13b87b25bc7c9a5",
+  "prompts": {},
+  "logical_commit_id": "7768b6b0df42b07c8f0f57dcd13b87b25bc7c9a5",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 8,
+      "total_deletions": 4
+    }
+  }
+}
