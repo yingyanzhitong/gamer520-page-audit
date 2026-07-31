@@ -1022,6 +1022,237 @@ function TaskProgress({ schedule, crawlRun, onViewLogs }) {
   );
 }
 
+function SelectedGamesDialog({ open, onOpenChange, notify, onStarted }) {
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState({ items: [], total: 0, pageCount: 1 });
+  const [selectedGameIds, setSelectedGameIds] = useState(() => new Set());
+  const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const parameters = new URLSearchParams({
+        page: String(page),
+        pageSize: "20",
+        query,
+        validOnly: "true",
+      });
+      setData(await api(`/api/games?${parameters}`));
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [page, query, notify]);
+
+  useEffect(() => {
+    if (open) void load();
+  }, [open, load]);
+
+  const currentPageGameIds = useMemo(
+    () => data.items.map((game) => game.id),
+    [data.items],
+  );
+  const selectedCurrentPageCount = currentPageGameIds.filter((gameId) =>
+    selectedGameIds.has(gameId),
+  ).length;
+  const isCurrentPageSelected =
+    currentPageGameIds.length > 0 &&
+    selectedCurrentPageCount === currentPageGameIds.length;
+
+  function toggleGameSelection(gameId, checked) {
+    setSelectedGameIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(gameId);
+      else next.delete(gameId);
+      return next;
+    });
+  }
+
+  function toggleCurrentPageSelection(checked) {
+    setSelectedGameIds((current) => {
+      const next = new Set(current);
+      for (const gameId of currentPageGameIds) {
+        if (checked) next.add(gameId);
+        else next.delete(gameId);
+      }
+      return next;
+    });
+  }
+
+  function closeDialog() {
+    setSelectedGameIds(new Set());
+    setQuery("");
+    setPage(1);
+    onOpenChange(false);
+  }
+
+  async function syncSelectedGames() {
+    const gameIds = [...selectedGameIds];
+    if (!gameIds.length) return;
+    setSyncing(true);
+    try {
+      const result = await api("/api/games/sync-selected", {
+        method: "POST",
+        body: jsonBody({ gameIds }),
+      });
+      notify(result.message ?? `已启动 ${gameIds.length} 个有效游戏的同步任务`);
+      closeDialog();
+      await onStarted();
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) onOpenChange(true);
+        else closeDialog();
+      }}
+    >
+      <DialogContent className="max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>选择有效游戏同步</DialogTitle>
+          <DialogDescription>
+            仅显示同时具备有效图片链接和下载资源的游戏，可跨页累计选择。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              placeholder="搜索游戏名称或游戏 ID"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(1);
+              }}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge tone="success">已选 {selectedGameIds.size} 个</Badge>
+            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+              刷新
+            </Button>
+          </div>
+        </div>
+        <div className="overflow-hidden rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-12 text-center">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 align-middle accent-primary"
+                    aria-label="选择本页所有有效游戏"
+                    checked={isCurrentPageSelected}
+                    disabled={!currentPageGameIds.length}
+                    onChange={(event) =>
+                      toggleCurrentPageSelection(event.target.checked)
+                    }
+                  />
+                </TableHead>
+                <TableHead>游戏</TableHead>
+                <TableHead>下载源</TableHead>
+                <TableHead>售价</TableHead>
+                <TableHead>来源更新</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.items.map((game) => (
+                <TableRow key={game.id}>
+                  <TableCell className="w-12 text-center">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 align-middle accent-primary"
+                      aria-label={`选择游戏 ${game.title}`}
+                      checked={selectedGameIds.has(game.id)}
+                      onChange={(event) =>
+                        toggleGameSelection(game.id, event.target.checked)
+                      }
+                    />
+                  </TableCell>
+                  <TableCell className="max-w-md">
+                    <p className="line-clamp-2 font-medium">{game.title}</p>
+                    <p className="font-data mt-1 text-[10px] text-muted-foreground">
+                      ID {game.id}
+                    </p>
+                  </TableCell>
+                  <TableCell>{game.downloadCount} 个</TableCell>
+                  <TableCell>¥ {game.effectivePrice}</TableCell>
+                  <TableCell>{formatDate(game.sourceUpdatedAt)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {!loading && !data.items.length ? (
+            <div className="p-6">
+              <EmptyState
+                title="没有匹配的有效游戏"
+                description="可调整关键词，或先运行采集任务补齐图片和下载资源。"
+              />
+            </div>
+          ) : null}
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="font-data text-xs text-muted-foreground">
+            共 {formatNumber(data.total)} 个有效游戏 · 第 {data.page ?? page} / {data.pageCount ?? 1} 页
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {selectedGameIds.size ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedGameIds(new Set())}
+              >
+                清空选择
+              </Button>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((current) => current - 1)}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              上一页
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page >= data.pageCount || loading}
+              onClick={() => setPage((current) => current + 1)}
+            >
+              下一页
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              size="sm"
+              disabled={!selectedGameIds.size || syncing}
+              onClick={syncSelectedGames}
+            >
+              {syncing ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
+              同步所选 {selectedGameIds.size} 个
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function TasksPage({ notify }) {
   const [schedule, setSchedule] = useState(null);
   const [runs, setRuns] = useState([]);
@@ -1029,6 +1260,7 @@ function TasksPage({ notify }) {
   const [saving, setSaving] = useState(false);
   const [logTask, setLogTask] = useState(null);
   const [controlAction, setControlAction] = useState(null);
+  const [selectedGamesOpen, setSelectedGamesOpen] = useState(false);
 
   const load = useCallback(async () => {
     const [nextSchedule, nextRuns, nextLogs] = await Promise.all([
@@ -1280,11 +1512,11 @@ function TasksPage({ notify }) {
           <CardHeader>
             <CardTitle>手动操作</CardTitle>
             <CardDescription>
-              暂停后可以恢复；终止会真正结束当前任务且不能恢复。发布失败会记录后跳过，结果未知时停止避免重复。
+              可选择范围或自选有效游戏启动同步。暂停后可以恢复；终止会真正结束当前任务且不能恢复。
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Button variant="outline" onClick={() => runTask("sync", "all")}>
                 全部商品
               </Button>
@@ -1299,6 +1531,10 @@ function TasksPage({ notify }) {
                 onClick={() => runTask("sync", "updated")}
               >
                 已更新商品
+              </Button>
+              <Button onClick={() => setSelectedGamesOpen(true)}>
+                <Check className="h-4 w-4" />
+                自选有效游戏
               </Button>
             </div>
             <Separator />
@@ -1469,6 +1705,12 @@ function TasksPage({ notify }) {
           )}
         </CardContent>
       </Card>
+      <SelectedGamesDialog
+        open={selectedGamesOpen}
+        onOpenChange={setSelectedGamesOpen}
+        notify={notify}
+        onStarted={load}
+      />
       <TaskLogDialog
         task={logTask}
         open={Boolean(logTask)}
@@ -1829,8 +2071,6 @@ function GamesPage({ notify }) {
   const [page, setPage] = useState(1);
   const [data, setData] = useState({ items: [], total: 0, pageCount: 1 });
   const [detailId, setDetailId] = useState(null);
-  const [selectedGameIds, setSelectedGameIds] = useState(() => new Set());
-  const [syncingSelected, setSyncingSelected] = useState(false);
   const [syncingGameId, setSyncingGameId] = useState(null);
 
   const load = useCallback(async () => {
@@ -1847,41 +2087,6 @@ function GamesPage({ notify }) {
     void load();
   }, [load]);
 
-  const validGames = useMemo(
-    () => data.items.filter((game) => game.isValid),
-    [data.items],
-  );
-  const validGameIds = useMemo(
-    () => validGames.map((game) => game.id),
-    [validGames],
-  );
-  const selectedCurrentPageCount = validGameIds.filter((gameId) =>
-    selectedGameIds.has(gameId),
-  ).length;
-  const isCurrentPageSelected =
-    validGameIds.length > 0 &&
-    selectedCurrentPageCount === validGameIds.length;
-
-  function toggleGameSelection(gameId, checked) {
-    setSelectedGameIds((current) => {
-      const next = new Set(current);
-      if (checked) next.add(gameId);
-      else next.delete(gameId);
-      return next;
-    });
-  }
-
-  function toggleCurrentPageSelection(checked) {
-    setSelectedGameIds((current) => {
-      const next = new Set(current);
-      for (const gameId of validGameIds) {
-        if (checked) next.add(gameId);
-        else next.delete(gameId);
-      }
-      return next;
-    });
-  }
-
   async function syncGame(gameId) {
     setSyncingGameId(gameId);
     try {
@@ -1894,25 +2099,6 @@ function GamesPage({ notify }) {
       notify(errorMessage(caught), "error");
     } finally {
       setSyncingGameId(null);
-    }
-  }
-
-  async function syncSelectedGames() {
-    const gameIds = [...selectedGameIds];
-    if (!gameIds.length) return;
-    setSyncingSelected(true);
-    try {
-      const result = await api("/api/games/sync-selected", {
-        method: "POST",
-        body: jsonBody({ gameIds }),
-      });
-      setSelectedGameIds(new Set());
-      notify(result.message ?? `已启动 ${gameIds.length} 个有效游戏的同步任务`);
-      await load();
-    } catch (caught) {
-      notify(errorMessage(caught), "error");
-    } finally {
-      setSyncingSelected(false);
     }
   }
 
@@ -1967,55 +2153,6 @@ function GamesPage({ notify }) {
           </div>
         </CardContent>
       </Card>
-      <Card className="mt-5 border-primary/30 bg-primary/[0.03]">
-        <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <Badge tone="success">仅有效游戏可选</Badge>
-              <span className="font-data text-sm font-semibold">
-                已选择 {selectedGameIds.size} 个
-              </span>
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              有效游戏需同时具备图片链接和至少一个下载资源；可跨页选择后统一同步。
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!validGameIds.length}
-              onClick={() =>
-                toggleCurrentPageSelection(!isCurrentPageSelected)
-              }
-            >
-              <Check className="h-4 w-4" />
-              {isCurrentPageSelected ? "取消本页选择" : "选择本页有效游戏"}
-            </Button>
-            {selectedGameIds.size ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setSelectedGameIds(new Set())}
-              >
-                清空选择
-              </Button>
-            ) : null}
-            <Button
-              size="sm"
-              disabled={!selectedGameIds.size || syncingSelected}
-              onClick={syncSelectedGames}
-            >
-              {syncingSelected ? (
-                <LoaderCircle className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-              同步所选 {selectedGameIds.size} 个
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
       <Card className="mt-5">
         <CardHeader className="flex-row items-center justify-between">
           <div>
@@ -2033,18 +2170,6 @@ function GamesPage({ notify }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-12 text-center">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 align-middle accent-primary"
-                    aria-label="选择本页所有有效游戏"
-                    checked={isCurrentPageSelected}
-                    disabled={!validGameIds.length}
-                    onChange={(event) =>
-                      toggleCurrentPageSelection(event.target.checked)
-                    }
-                  />
-                </TableHead>
                 <TableHead>游戏</TableHead>
                 <TableHead>资源</TableHead>
                 <TableHead>售价</TableHead>
@@ -2057,23 +2182,6 @@ function GamesPage({ notify }) {
             <TableBody>
               {data.items.map((game) => (
                 <TableRow key={game.id}>
-                  <TableCell className="w-12 text-center">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 align-middle accent-primary"
-                      aria-label={`选择游戏 ${game.title}`}
-                      checked={selectedGameIds.has(game.id)}
-                      disabled={!game.isValid}
-                      title={
-                        game.isValid
-                          ? "选择此有效游戏"
-                          : "缺少有效图片或下载资源，不能同步"
-                      }
-                      onChange={(event) =>
-                        toggleGameSelection(game.id, event.target.checked)
-                      }
-                    />
-                  </TableCell>
                   <TableCell className="max-w-md">
                     <button
                       className="block max-w-full text-left"

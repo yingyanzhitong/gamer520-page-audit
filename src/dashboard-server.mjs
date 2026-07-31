@@ -451,6 +451,7 @@ function listGames(database, requestUrl) {
     : "all";
   const requestedXianyuStatus =
     requestUrl.searchParams.get("xianyuStatus") ?? "all";
+  const validOnly = requestUrl.searchParams.get("validOnly") === "true";
   const xianyuStatus = new Set([
     "none",
     "material",
@@ -493,6 +494,9 @@ function listGames(database, requestUrl) {
   if (xianyuStatus !== "all") {
     conditions.push(`(${xianyuStatusExpression}) = ?`);
     parameters.push(xianyuStatus);
+  }
+  if (validOnly) {
+    conditions.push(`(${VALID_GAME_DATA_CONDITION})`);
   }
 
   const whereClause =

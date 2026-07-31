@@ -367,6 +367,13 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(games.items[0].xianyuItemId, "1067769058126");
     assert.equal(games.items[0].isValid, true);
 
+    const validGames = await fetch(
+      `${baseUrl}/api/games?validOnly=true`,
+    ).then((response) => response.json());
+    assert.equal(validGames.total, 1);
+    assert.equal(validGames.items[0].id, 118842);
+    assert.equal(validGames.items[0].isValid, true);
+
     const updatedPublishedGames = await fetch(
       `${baseUrl}/api/games?status=updated&xianyuStatus=material_update`,
     ).then((response) => response.json());
