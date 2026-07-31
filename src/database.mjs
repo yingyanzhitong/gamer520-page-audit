@@ -185,6 +185,7 @@ export class CrawlerDatabase {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         account_id TEXT,
         default_price REAL NOT NULL DEFAULT 1,
+        default_stock INTEGER NOT NULL DEFAULT 999,
         title_template TEXT,
         description_template TEXT,
         image_template TEXT,
@@ -308,7 +309,7 @@ export class CrawlerDatabase {
     this.#backfillContentHashes();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 12;");
+    this.database.exec("PRAGMA user_version = 13;");
   }
 
   #migrateSchema() {
@@ -372,6 +373,11 @@ export class CrawlerDatabase {
     if (!xianyuSettingsColumns.has("default_price")) {
       this.database.exec(
         "ALTER TABLE xianyu_sync_settings ADD COLUMN default_price REAL NOT NULL DEFAULT 1",
+      );
+    }
+    if (!xianyuSettingsColumns.has("default_stock")) {
+      this.database.exec(
+        "ALTER TABLE xianyu_sync_settings ADD COLUMN default_stock INTEGER NOT NULL DEFAULT 999",
       );
     }
     const xianyuTemplateAdditions = [
@@ -1060,6 +1066,7 @@ export class CrawlerDatabase {
           `SELECT
              account_id,
              default_price,
+             default_stock,
              title_template,
              description_template,
              image_template,
@@ -1071,6 +1078,7 @@ export class CrawlerDatabase {
     return {
       account_id: row?.account_id ?? null,
       default_price: Number(row?.default_price ?? 1),
+      default_stock: Number(row?.default_stock ?? 999),
       title_template:
         row?.title_template ?? DEFAULT_XIANYU_TEMPLATES.titleTemplate,
       description_template:
@@ -1087,9 +1095,13 @@ export class CrawlerDatabase {
     defaultPrice,
     updatedAt,
     templates = null,
+    defaultStock = null,
   ) {
     transaction(this.database, () => {
       const previous = this.getXianyuSyncSettings();
+      const resolvedDefaultStock = Number(
+        defaultStock ?? previous.default_stock ?? 999,
+      );
       const normalizedTemplates = normalizeXianyuTemplates(
         templates ?? {
           titleTemplate: previous.title_template,
@@ -1103,14 +1115,16 @@ export class CrawlerDatabase {
             id,
             account_id,
             default_price,
+            default_stock,
             title_template,
             description_template,
             image_template,
             updated_at
-          ) VALUES (1, ?, ?, ?, ?, ?, ?)
+          ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             account_id = excluded.account_id,
             default_price = excluded.default_price,
+            default_stock = excluded.default_stock,
             title_template = excluded.title_template,
             description_template = excluded.description_template,
             image_template = excluded.image_template,
@@ -1119,6 +1133,7 @@ export class CrawlerDatabase {
         .run(
           accountId,
           defaultPrice,
+          resolvedDefaultStock,
           normalizedTemplates.titleTemplate,
           normalizedTemplates.descriptionTemplate,
           normalizedTemplates.imageTemplate,
@@ -1133,6 +1148,15 @@ export class CrawlerDatabase {
             WHERE game_id IN (
               SELECT id FROM games WHERE sale_price IS NULL
             )
+          `)
+          .run(updatedAt);
+      }
+      if (Number(previous.default_stock) !== resolvedDefaultStock) {
+        this.database
+          .prepare(`
+            UPDATE xianyu_material_sync
+            SET status = 'pending',
+                updated_at = ?
           `)
           .run(updatedAt);
       }
@@ -1159,6 +1183,8 @@ export class CrawlerDatabase {
       accountId,
       Number(settings.default_price ?? 1),
       updatedAt,
+      null,
+      Number(settings.default_stock ?? 999),
     );
   }
 
@@ -1459,6 +1485,7 @@ export class CrawlerDatabase {
             JSON.stringify({
               contentHash: row.content_hash,
               effectivePrice: Number(row.effective_price).toFixed(2),
+              defaultStock: Number(settings.default_stock ?? 999),
               titleTemplate: settings.title_template,
               descriptionTemplate: settings.description_template,
               imageTemplate: settings.image_template,

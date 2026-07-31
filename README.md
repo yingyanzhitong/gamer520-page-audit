@@ -127,7 +127,7 @@ Linux 容器中正式支持 `PLAYWRIGHT_CHANNEL=chromium`。
 
 ## 闲鱼同步与接口
 
-商品配置页从服务端加载闲鱼账号并保存一个真实 `account_id`；账号、默认售价和商品模板会持久化到 SQLite，刷新页面和服务重启后仍然保留。闲鱼 API Key 在独立的密钥管理页输入，服务端验证后保存，浏览器刷新时只接收脱敏值。模板支持 `{id}`、`{title}`、`{description}`、`{image_url}`、`{cloud_drives}`、`{price}`、`{resource_code}`、`{archive_password}` 和 `{detail_page_url}`；默认标题为 `【秒发】{title}`，默认图片为 `{image_url}`。页面使用数据库内真实有效游戏和同源缓存图片实时预览渲染结果。
+商品配置页从服务端加载闲鱼账号并保存一个真实 `account_id`；账号、默认售价、默认库存和商品模板会持久化到 SQLite，刷新页面和服务重启后仍然保留。默认库存为 `999`，可设置为 `1–999999` 的整数，会在素材同步时传给闲鱼；库存变更会把已有素材标记为待更新，但不会重新上架已发布商品。闲鱼 API Key 在独立的密钥管理页输入，服务端验证后保存，浏览器刷新时只接收脱敏值。模板支持 `{id}`、`{title}`、`{description}`、`{image_url}`、`{cloud_drives}`、`{price}`、`{resource_code}`、`{archive_password}` 和 `{detail_page_url}`；默认标题为 `【秒发】{title}`，默认图片为 `{image_url}`。页面使用数据库内真实有效游戏和同源缓存图片实时预览渲染结果。
 
 手动同步可选择 `all`（全部有效商品）、`pending`（未发布商品）或 `updated`（内容标记为更新且尚无商品/素材记录），定时同步也会保存其中一种范围。同步数据池与看板“有效游戏数据”复用同一条件：标题、简介、有效 `http/https` 图片链接及至少一个有效 `http/https` 下载地址完整；没有下载记录、空地址、非网页协议资源或缺少图片的记录会在任务创建前过滤。素材导入和商品发布是两条独立异步流水线：素材导入并行数可在任务页面配置为 `1–12`，发布线程发现已有可发布素材后立即提交批量发布，不等待队列凑满；每批发布商品数可在页面配置为 `1–20`，单批实际数量取当前已就绪数量与配置上限的较小值，批次之间仍按顺序确认结果。页面分别展示素材和发布的分段进度：本轮成功为绿色、已有数据跳过为黄色、失败为红色，并以本轮有效游戏总量为分母。已有闲鱼商品编号或已有发布编号的游戏在候选阶段直接跳过；已有本地素材编号且内容未变化的游戏只跳过素材上传，并复用该素材进入发布线程；内容哈希变化时仍会更新素材库。远程素材库存在同名标题时仍跳过，不重复创建或发布。封面从模板结果下载，经过重试、图片解码和 JPEG 标准化后保存到持久卷。批次状态默认每 10 秒查询，状态变化或持续等待满 1 分钟时写入日志；明确失败会跳过当前批并继续下一批，结果未知则停止后续批次以避免重复发布。发布成功后使用返回的闲鱼商品编号关联卡券 ID `6`，并把商品编号和链接写回对应 `games` 记录；卡券关联失败只重试关联，不会重复发布商品。
 
@@ -142,7 +142,7 @@ curl -H 'X-API-Key: <闲鱼用户API Key>' \
 curl -X PUT \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: <闲鱼用户API Key>' \
-  -d '{"account_id":"账号ID","default_price":1,"title_template":"【秒发】{title}","description_template":"{description}\n\n支持网盘：{cloud_drives}","image_template":"{image_url}"}' \
+  -d '{"account_id":"账号ID","default_price":1,"default_stock":999,"title_template":"【秒发】{title}","description_template":"{description}\n\n支持网盘：{cloud_drives}","image_template":"{image_url}"}' \
   http://127.0.0.1:13520/api/settings/xianyu
 
 # 保存采集和同步调度

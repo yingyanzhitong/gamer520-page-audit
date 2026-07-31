@@ -1759,6 +1759,7 @@ function ProductConfigPage({ notify }) {
         body: jsonBody({
           account_id: settings.accountId,
           default_price: Number(settings.defaultPrice),
+          default_stock: Number(settings.defaultStock),
           title_template: settings.titleTemplate,
           description_template: settings.descriptionTemplate,
           image_template: settings.imageTemplate,
@@ -1805,7 +1806,7 @@ function ProductConfigPage({ notify }) {
       <PageHeading
         eyebrow="Listing rules"
         title="商品配置"
-        description="配置发布账号、默认价格和素材模板。已有商品编号或已有素材的游戏会跳过。"
+        description="配置发布账号、默认售价、库存和素材模板。已有商品编号或已有素材的游戏会跳过。"
         actions={
           <>
             <Button variant="outline" onClick={loadAccounts}>
@@ -1828,7 +1829,7 @@ function ProductConfigPage({ notify }) {
             <CardDescription>占位符会在同步素材时替换。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2">
                 <Label>发布账号 account_id</Label>
                 <Select
@@ -1862,6 +1863,19 @@ function ProductConfigPage({ notify }) {
                   value={settings?.defaultPrice ?? 1}
                   onChange={(event) =>
                     update("defaultPrice", event.target.value)
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>默认库存</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="999999"
+                  step="1"
+                  value={settings?.defaultStock ?? 999}
+                  onChange={(event) =>
+                    update("defaultStock", event.target.value)
                   }
                 />
               </div>
@@ -1932,7 +1946,10 @@ function ProductConfigPage({ notify }) {
                 )}
               </div>
               <div className="p-5">
-                <Badge tone="success">¥ {settings?.defaultPrice ?? 1}</Badge>
+                <div className="flex flex-wrap gap-2">
+                  <Badge tone="success">¥ {settings?.defaultPrice ?? 1}</Badge>
+                  <Badge tone="info">库存 {settings?.defaultStock ?? 999}</Badge>
+                </div>
                 <h3 className="mt-3 text-lg font-semibold">
                   {preview?.title ?? "等待配置"}
                 </h3>

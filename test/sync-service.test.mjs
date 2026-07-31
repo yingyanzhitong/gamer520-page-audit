@@ -345,6 +345,7 @@ test("素材导入和商品发布独立运行，单批数量可配置", async ()
     assert.equal(client.cardBindCalls.length, 21);
     assert.equal(client.maxActiveUpserts, 5);
     assert.ok(client.upsertCalls.every((items) => items.length === 1));
+    assert.ok(client.upsertCalls.every((items) => items[0].stock === 999));
     assert.equal(
       client.publishCalls.reduce(
         (total, payload) => total + payload.materialIds.length,
@@ -794,6 +795,7 @@ test("自定义模板用于素材、封面和卡券标题，修改后不重复�
           "{description}\n网盘 {cloud_drives}\n售价 {price}",
         imageTemplate: "https://cdn.example/games/{id}.jpg",
       },
+      88,
     );
   } finally {
     database.close();
@@ -812,6 +814,7 @@ test("自定义模板用于素材、封面和卡券标题，修改后不重复�
     assert.deepEqual(client.upsertCalls[0][0].images, [
       "https://cdn.example/games/88.jpg",
     ]);
+    assert.equal(client.upsertCalls[0][0].stock, 88);
     assert.equal(
       client.cardBindCalls[0].itemTitle,
       "现货 游戏 88 #88",

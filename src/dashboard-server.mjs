@@ -198,6 +198,16 @@ function salePrice(value, { allowNull = false } = {}) {
   return Math.round(parsed * 100) / 100;
 }
 
+function stockQuantity(value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 999_999) {
+    const error = new Error("库存必须是 1 到 999999 的整数");
+    error.statusCode = 422;
+    throw error;
+  }
+  return parsed;
+}
+
 function syncMode(value, fallback = "all") {
   const normalized = String(value ?? fallback).trim();
   if (!new Set(["all", "pending", "updated"]).has(normalized)) {
@@ -377,6 +387,7 @@ function dashboardPayload(database, config, runtimeState) {
         `SELECT
            account_id,
            default_price,
+           default_stock,
            title_template,
            description_template,
            image_template,
@@ -387,6 +398,7 @@ function dashboardPayload(database, config, runtimeState) {
       .get() ?? {
         account_id: null,
         default_price: 1,
+        default_stock: 999,
         updated_at: null,
       };
   const latestSyncRun = database
@@ -415,6 +427,7 @@ function dashboardPayload(database, config, runtimeState) {
     xianyu: {
       accountId: syncSettings.account_id,
       defaultPrice: Number(syncSettings.default_price ?? 1),
+      defaultStock: Number(syncSettings.default_stock ?? 999),
       titleTemplate:
         syncSettings.title_template ??
         DEFAULT_XIANYU_TEMPLATES.titleTemplate,
@@ -1279,6 +1292,7 @@ export async function startDashboardServer(
               `SELECT
                  account_id,
                  default_price,
+                 default_stock,
                  title_template,
                  description_template,
                  image_template,
@@ -1310,6 +1324,7 @@ export async function startDashboardServer(
         sendJson(response, 200, {
           accountId: settings?.account_id ?? null,
           defaultPrice: Number(settings?.default_price ?? 1),
+          defaultStock: Number(settings?.default_stock ?? 999),
           titleTemplate:
             settings?.title_template ??
             DEFAULT_XIANYU_TEMPLATES.titleTemplate,
@@ -1457,8 +1472,12 @@ export async function startDashboardServer(
         const account = await handlers.validateXianyuAccount(accountId);
         const database = new CrawlerDatabase(config.dbPath);
         let templates;
+        let defaultStock;
         try {
           const current = database.getXianyuSyncSettings();
+          defaultStock = stockQuantity(
+            body.default_stock ?? current.default_stock,
+          );
           templates = validateXianyuTemplates({
             titleTemplate:
               body.title_template ?? current.title_template,
@@ -1473,6 +1492,7 @@ export async function startDashboardServer(
             defaultPrice,
             new Date().toISOString(),
             templates,
+            defaultStock,
           );
         } finally {
           database.close();
@@ -1481,6 +1501,7 @@ export async function startDashboardServer(
           success: true,
           accountId,
           defaultPrice,
+          defaultStock,
           ...templates,
           account,
         });

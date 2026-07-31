@@ -533,6 +533,7 @@ export class XianyuSyncService {
           title: listing.title,
           description: listing.description,
           price: Number(candidate.effective_price),
+          stock: Number(settings.default_stock ?? 999),
           images: [coverUrl],
           category: "虚拟商品",
           deliveryMethod: "express",
@@ -576,6 +577,7 @@ export class XianyuSyncService {
           details: {
             title: listing.title,
             price: Number(candidate.effective_price),
+            stock: Number(settings.default_stock ?? 999),
             imageUrl: listing.imageUrl,
           },
         });
@@ -585,6 +587,7 @@ export class XianyuSyncService {
           title: listing.title,
           description: listing.description,
           price: Number(candidate.effective_price),
+          stock: Number(settings.default_stock ?? 999),
           images: [],
           category: "虚拟商品",
           delivery_method: "express",
@@ -611,6 +614,7 @@ export class XianyuSyncService {
               details: {
                 title: payload.title,
                 price: payload.price,
+                stock: payload.stock,
                 imageCount: payload.images.length,
               },
             });
