@@ -1,0 +1,43 @@
+frontend/src/App.jsx
+  s_bfd82453425369::t_8f84bdc42bada6 1832-1834,1850-1884,1886,1893-1911,1914-1915,1970-2018,2036-2047,2060-2076,2088-2093,2128-2142
+package.json
+  s_bfd82453425369::t_c3e5ce15050143 3
+test/dashboard.test.mjs
+  s_bfd82453425369::t_fef695aacaafbc 311,383-384
+  s_bfd82453425369::t_e511e4bd929e1d 137-150,368,400,811-831,835-851
+  s_bfd82453425369::t_7ca36e247acb0a 564-569
+CHANGELOG.md
+  s_bfd82453425369::t_c3e5ce15050143 3-9
+src/dashboard-server.mjs
+  s_bfd82453425369::t_802db4dbdb46fb 1547,1550-1603,1733,1735-1741,1744,1746-1749
+  s_bfd82453425369::t_5fab46d0f17af2 113,211-229,517,553
+  s_bfd82453425369::t_bc8638ce8ca578 1546
+  s_bfd82453425369::t_c311067ccc2d62 1548-1549
+public/assets/index-C2aQb9l2.css
+  s_bfd82453425369::t_743454552ddff9 1
+public/assets/index-C7SK1gLF.js
+  s_bfd82453425369::t_fae70a9b50f4cd 1,3,6,8-10,14,26-27,30-31,34-35,38-39,42-44,46,49
+public/index.html
+  s_bfd82453425369::t_214a3944dd11f2 12-13
+package-lock.json
+  s_bfd82453425369::t_ea809b9022cdad 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1fdb527eb2994fbb80274685c342c9f881e61790",
+  "prompts": {},
+  "logical_commit_id": "1fdb527eb2994fbb80274685c342c9f881e61790",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 323,
+      "total_deletions": 10
+    }
+  }
+}
