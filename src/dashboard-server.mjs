@@ -110,6 +110,7 @@ function mapGame(row) {
     xianyuStatus: row.xianyu_status ?? "none",
     publishedItemId: row.publication_item_id ?? null,
     publishedItemUrl: row.publication_item_url ?? null,
+    isValid: Boolean(row.is_valid),
     updatedAt: row.updated_at,
     downloadCount: row.download_count ?? 0,
   };
@@ -205,6 +206,25 @@ function syncMode(value, fallback = "all") {
     throw error;
   }
   return normalized;
+}
+
+function selectedGameIds(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    const error = new Error("请至少选择一个游戏");
+    error.statusCode = 422;
+    throw error;
+  }
+  const ids = new Set();
+  for (const valueItem of value) {
+    const gameId = Number(valueItem);
+    if (!Number.isSafeInteger(gameId) || gameId <= 0) {
+      const error = new Error("游戏 ID 必须是正整数");
+      error.statusCode = 422;
+      throw error;
+    }
+    ids.add(gameId);
+  }
+  return [...ids];
 }
 
 function sendJson(response, status, payload, headers = {}) {
@@ -494,6 +514,7 @@ function listGames(database, requestUrl) {
           1
         ) AS effective_price,
         (SELECT COUNT(*) FROM downloads WHERE game_id = games.id) AS download_count,
+        CASE WHEN ${VALID_GAME_DATA_CONDITION} THEN 1 ELSE 0 END AS is_valid,
         (${xianyuStatusExpression}) AS xianyu_status,
         material.status AS material_sync_status,
         publication.status AS publication_status,
@@ -529,6 +550,7 @@ function gameDetail(database, gameId) {
           1
         ) AS effective_price,
         (SELECT COUNT(*) FROM downloads WHERE game_id = games.id) AS download_count,
+        CASE WHEN ${VALID_GAME_DATA_CONDITION} THEN 1 ELSE 0 END AS is_valid,
         (${xianyuStatusExpression}) AS xianyu_status,
         material.status AS material_sync_status,
         publication.status AS publication_status,
@@ -1525,6 +1547,64 @@ export async function startDashboardServer(
         });
         return;
       }
+      if (
+        request.method === "POST" &&
+        requestUrl.pathname === "/api/games/sync-selected"
+      ) {
+        if (
+          !requireKey(
+            request,
+            response,
+            config.xianyuApiKey,
+            "X-API-Key",
+          )
+        ) {
+          return;
+        }
+        const body = await readJsonBody(request);
+        const gameIds = selectedGameIds(body.gameIds ?? body.game_ids);
+        const validIds = withDatabase(config.dbPath, (database) =>
+          database
+            .prepare(
+              `SELECT games.id
+               FROM games
+               WHERE games.id IN (${gameIds.map(() => "?").join(", ")})
+                 AND ${VALID_GAME_DATA_CONDITION}`,
+            )
+            .all(...gameIds)
+            .map((row) => row.id),
+        );
+        if (validIds.length !== gameIds.length) {
+          const validIdSet = new Set(validIds);
+          const invalidIds = gameIds.filter((gameId) => !validIdSet.has(gameId));
+          sendError(
+            response,
+            422,
+            `选中的游戏不存在或缺少有效图片、下载资源：${invalidIds.join(", ")}`,
+          );
+          return;
+        }
+        const state = runtimeState();
+        if (state.active || state.sync?.active) {
+          sendError(response, 409, "采集或同步任务正在运行");
+          return;
+        }
+        if (!handlers.triggerSync) {
+          sendError(response, 503, "闲鱼同步服务尚未启用");
+          return;
+        }
+        const accepted = handlers.triggerSync("manual-selected", "all", {
+          gameIds,
+        });
+        sendJson(response, 202, {
+          success: true,
+          selectedCount: gameIds.length,
+          gameIds,
+          message: `已启动 ${gameIds.length} 个有效游戏的同步任务`,
+          ...accepted,
+        });
+        return;
+      }
       const taskControlMatch = requestUrl.pathname.match(
         /^\/api\/tasks\/(crawl|sync)\/(pause|interrupt|resume|terminate)$/,
       );
@@ -1650,13 +1730,23 @@ export async function startDashboardServer(
           return;
         }
         const gameId = Number(gameSyncMatch[1]);
-        const exists = withDatabase(config.dbPath, (database) =>
+        const game = withDatabase(config.dbPath, (database) =>
           database
-            .prepare("SELECT 1 FROM games WHERE id = ?")
+            .prepare(
+              `SELECT
+                 games.id,
+                 CASE WHEN ${VALID_GAME_DATA_CONDITION} THEN 1 ELSE 0 END AS is_valid
+               FROM games
+               WHERE games.id = ?`,
+            )
             .get(gameId),
         );
-        if (!exists) {
+        if (!game) {
           sendError(response, 404, "没有找到该游戏");
+          return;
+        }
+        if (!game.is_valid) {
+          sendError(response, 422, "该游戏缺少有效图片或下载资源，不能同步");
           return;
         }
         const state = runtimeState();

@@ -134,6 +134,20 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     },
     "2026-07-28T00:01:30.000Z",
   );
+  database.upsertDiscoveredGames(
+    [
+      {
+        id: 118843,
+        sourceUrl: "https://www.gamer520.com/118843.html",
+        title: "缺少下载资源的游戏",
+        imageUrl: "https://images.example/118843.jpg",
+        hotPage: 1,
+        hotPosition: 2,
+        hotRank: 2,
+      },
+    ],
+    "2026-07-28T00:01:30.000Z",
+  );
   const syncRunId = database.startSyncRun(
     "test",
     "account-a",
@@ -294,7 +308,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     const summary = await fetch(`${baseUrl}/api/dashboard`).then(
       (response) => response.json(),
     );
-    assert.equal(summary.totals.games, 1);
+    assert.equal(summary.totals.games, 2);
     assert.equal(summary.totals.downloads, 1);
     assert.equal(summary.totals.validGames, 1);
     assert.equal(summary.totals.eligibleGames, 1);
@@ -351,6 +365,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(games.total, 1);
     assert.equal(games.items[0].title, "黄昏远征军");
     assert.equal(games.items[0].xianyuItemId, "1067769058126");
+    assert.equal(games.items[0].isValid, true);
 
     const updatedPublishedGames = await fetch(
       `${baseUrl}/api/games?status=updated&xianyuStatus=material_update`,
@@ -365,7 +380,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     const noXianyuStateGames = await fetch(
       `${baseUrl}/api/games?xianyuStatus=none`,
     ).then((response) => response.json());
-    assert.equal(noXianyuStateGames.total, 0);
+    assert.equal(noXianyuStateGames.total, 1);
+    assert.equal(noXianyuStateGames.items[0].isValid, false);
 
     const gamesByItem = await fetch(
       `${baseUrl}/api/games?query=1067769058126`,
@@ -381,6 +397,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       detail.game.imageUrl,
       "https://images.example/118842.jpg",
     );
+    assert.equal(detail.game.isValid, true);
     assert.equal(detail.downloads[0].extractionCode, "e15a");
 
     const legacyGet = await fetch(
@@ -544,8 +561,12 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     const noneGames = await fetch(
       `${baseUrl}/api/games?xianyuStatus=none`,
     ).then((response) => response.json());
-    assert.equal(noneGames.total, 1);
-    assert.equal(noneGames.items[0].xianyuStatus, "none");
+    assert.equal(noneGames.total, 2);
+    assert.ok(
+      noneGames.items.some(
+        (item) => item.id === game.id && item.xianyuStatus === "none",
+      ),
+    );
 
     const runs = await fetch(`${baseUrl}/api/runs?limit=12`).then(
       (response) => response.json(),
@@ -790,6 +811,44 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       mode: "all",
       options: { gameIds: [118842] },
     });
+
+    const selectedSync = await fetch(
+      `${baseUrl}/api/games/sync-selected`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({ gameIds: [118842, 118842] }),
+      },
+    );
+    assert.equal(selectedSync.status, 202);
+    const selectedPayload = await selectedSync.json();
+    assert.equal(selectedPayload.selectedCount, 1);
+    assert.deepEqual(selectedPayload.gameIds, [118842]);
+    assert.deepEqual(syncTrigger, {
+      trigger: "manual-selected",
+      mode: "all",
+      options: { gameIds: [118842] },
+    });
+
+    const invalidSelectedSync = await fetch(
+      `${baseUrl}/api/games/sync-selected`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({ gameIds: [118843] }),
+      },
+    );
+    assert.equal(invalidSelectedSync.status, 422);
+    assert.match(
+      (await invalidSelectedSync.json()).error,
+      /缺少有效图片、下载资源/,
+    );
 
     const interruptedSync = await fetch(
       `${baseUrl}/api/tasks/sync/pause`,

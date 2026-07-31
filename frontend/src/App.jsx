@@ -1829,6 +1829,9 @@ function GamesPage({ notify }) {
   const [page, setPage] = useState(1);
   const [data, setData] = useState({ items: [], total: 0, pageCount: 1 });
   const [detailId, setDetailId] = useState(null);
+  const [selectedGameIds, setSelectedGameIds] = useState(() => new Set());
+  const [syncingSelected, setSyncingSelected] = useState(false);
+  const [syncingGameId, setSyncingGameId] = useState(null);
 
   const load = useCallback(async () => {
     const parameters = new URLSearchParams({
@@ -1844,7 +1847,43 @@ function GamesPage({ notify }) {
     void load();
   }, [load]);
 
+  const validGames = useMemo(
+    () => data.items.filter((game) => game.isValid),
+    [data.items],
+  );
+  const validGameIds = useMemo(
+    () => validGames.map((game) => game.id),
+    [validGames],
+  );
+  const selectedCurrentPageCount = validGameIds.filter((gameId) =>
+    selectedGameIds.has(gameId),
+  ).length;
+  const isCurrentPageSelected =
+    validGameIds.length > 0 &&
+    selectedCurrentPageCount === validGameIds.length;
+
+  function toggleGameSelection(gameId, checked) {
+    setSelectedGameIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(gameId);
+      else next.delete(gameId);
+      return next;
+    });
+  }
+
+  function toggleCurrentPageSelection(checked) {
+    setSelectedGameIds((current) => {
+      const next = new Set(current);
+      for (const gameId of validGameIds) {
+        if (checked) next.add(gameId);
+        else next.delete(gameId);
+      }
+      return next;
+    });
+  }
+
   async function syncGame(gameId) {
+    setSyncingGameId(gameId);
     try {
       await api(`/api/games/${gameId}/sync`, {
         method: "POST",
@@ -1853,6 +1892,27 @@ function GamesPage({ notify }) {
       notify(`游戏 ${gameId} 同步已启动`);
     } catch (caught) {
       notify(errorMessage(caught), "error");
+    } finally {
+      setSyncingGameId(null);
+    }
+  }
+
+  async function syncSelectedGames() {
+    const gameIds = [...selectedGameIds];
+    if (!gameIds.length) return;
+    setSyncingSelected(true);
+    try {
+      const result = await api("/api/games/sync-selected", {
+        method: "POST",
+        body: jsonBody({ gameIds }),
+      });
+      setSelectedGameIds(new Set());
+      notify(result.message ?? `已启动 ${gameIds.length} 个有效游戏的同步任务`);
+      await load();
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    } finally {
+      setSyncingSelected(false);
     }
   }
 
@@ -1907,6 +1967,55 @@ function GamesPage({ notify }) {
           </div>
         </CardContent>
       </Card>
+      <Card className="mt-5 border-primary/30 bg-primary/[0.03]">
+        <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Badge tone="success">仅有效游戏可选</Badge>
+              <span className="font-data text-sm font-semibold">
+                已选择 {selectedGameIds.size} 个
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              有效游戏需同时具备图片链接和至少一个下载资源；可跨页选择后统一同步。
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!validGameIds.length}
+              onClick={() =>
+                toggleCurrentPageSelection(!isCurrentPageSelected)
+              }
+            >
+              <Check className="h-4 w-4" />
+              {isCurrentPageSelected ? "取消本页选择" : "选择本页有效游戏"}
+            </Button>
+            {selectedGameIds.size ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedGameIds(new Set())}
+              >
+                清空选择
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              disabled={!selectedGameIds.size || syncingSelected}
+              onClick={syncSelectedGames}
+            >
+              {syncingSelected ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              同步所选 {selectedGameIds.size} 个
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
       <Card className="mt-5">
         <CardHeader className="flex-row items-center justify-between">
           <div>
@@ -1924,6 +2033,18 @@ function GamesPage({ notify }) {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-12 text-center">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 align-middle accent-primary"
+                    aria-label="选择本页所有有效游戏"
+                    checked={isCurrentPageSelected}
+                    disabled={!validGameIds.length}
+                    onChange={(event) =>
+                      toggleCurrentPageSelection(event.target.checked)
+                    }
+                  />
+                </TableHead>
                 <TableHead>游戏</TableHead>
                 <TableHead>资源</TableHead>
                 <TableHead>售价</TableHead>
@@ -1936,6 +2057,23 @@ function GamesPage({ notify }) {
             <TableBody>
               {data.items.map((game) => (
                 <TableRow key={game.id}>
+                  <TableCell className="w-12 text-center">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 align-middle accent-primary"
+                      aria-label={`选择游戏 ${game.title}`}
+                      checked={selectedGameIds.has(game.id)}
+                      disabled={!game.isValid}
+                      title={
+                        game.isValid
+                          ? "选择此有效游戏"
+                          : "缺少有效图片或下载资源，不能同步"
+                      }
+                      onChange={(event) =>
+                        toggleGameSelection(game.id, event.target.checked)
+                      }
+                    />
+                  </TableCell>
                   <TableCell className="max-w-md">
                     <button
                       className="block max-w-full text-left"
@@ -1947,6 +2085,12 @@ function GamesPage({ notify }) {
                       <span className="font-data mt-1 block text-[10px] text-muted-foreground">
                         ID {game.id} · 热度 {game.hotRank ?? "—"}
                       </span>
+                      <Badge
+                        tone={game.isValid ? "success" : "warning"}
+                        className="mt-2"
+                      >
+                        {game.isValid ? "可同步" : "缺少图片或资源"}
+                      </Badge>
                     </button>
                   </TableCell>
                   <TableCell>{game.downloadCount} 个</TableCell>
@@ -1981,8 +2125,21 @@ function GamesPage({ notify }) {
                         <Eye className="h-3.5 w-3.5" />
                         详情
                       </Button>
-                      <Button size="sm" onClick={() => syncGame(game.id)}>
-                        <RefreshCw className="h-3.5 w-3.5" />
+                      <Button
+                        size="sm"
+                        disabled={!game.isValid || syncingGameId === game.id}
+                        title={
+                          game.isValid
+                            ? "同步此游戏"
+                            : "缺少有效图片或下载资源，不能同步"
+                        }
+                        onClick={() => syncGame(game.id)}
+                      >
+                        {syncingGameId === game.id ? (
+                          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        )}
                         同步
                       </Button>
                     </div>
