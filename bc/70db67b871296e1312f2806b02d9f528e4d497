@@ -1,0 +1,50 @@
+test/dashboard.test.mjs
+  s_bfd82453425369::t_2534c9a5e97564 654,665,673,742
+  s_bfd82453425369::t_accf6b6b90c861 701-717
+test/database.test.mjs
+  s_bfd82453425369::t_2534c9a5e97564 507
+README.md
+  s_bfd82453425369::t_accf6b6b90c861 130,145
+package.json
+  s_bfd82453425369::t_accf6b6b90c861 3
+test/sync-service.test.mjs
+  s_bfd82453425369::t_2534c9a5e97564 348,798,817
+CHANGELOG.md
+  s_bfd82453425369::t_accf6b6b90c861 3-8
+src/dashboard-server.mjs
+  s_bfd82453425369::t_2534c9a5e97564 1475,1478-1480
+  s_bfd82453425369::t_eed1cee4b54a78 201-210,390,401,430,1295,1327,1495,1504
+src/sync-service.mjs
+  s_bfd82453425369::t_9f1d02b84aa063 536,580,590,617
+frontend/src/App.jsx
+  s_bfd82453425369::t_243670c852a8c6 1762,1809,1832,1869-1881,1949-1952
+src/database.mjs
+  s_bfd82453425369::t_8357d15616b091 188,312,378-382,1069,1081,1098,1102-1104,1118,1123,1127,1136,1151-1159,1186-1187,1488
+public/assets/index-B1kAKrl5.css
+  s_bfd82453425369::t_6fe4a65fea5142 1
+public/assets/index-Dviv2CMW.js
+  s_bfd82453425369::t_a62131e9a55843 49
+public/index.html
+  s_bfd82453425369::t_57f69c2b4ffc79 12-13
+package-lock.json
+  s_bfd82453425369::t_882ca7fa12d596 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "bc70db67b871296e1312f2806b02d9f528e4d497",
+  "prompts": {},
+  "logical_commit_id": "bc70db67b871296e1312f2806b02d9f528e4d497",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 109,
+      "total_deletions": 10
+    }
+  }
+}
