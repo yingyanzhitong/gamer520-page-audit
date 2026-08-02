@@ -1381,6 +1381,7 @@ export async function startDashboardServer(
             publishBatchSize: Number(
               state.sync?.publishBatchSize ?? 20,
             ),
+            publishLimit: Number(state.sync?.publishLimit ?? 0),
             progress: state.sync?.progress ?? null,
           },
         });
@@ -1415,6 +1416,7 @@ export async function startDashboardServer(
           syncMode: syncMode(body.sync?.mode),
           materialConcurrency: body.sync?.material_concurrency,
           publishBatchSize: body.sync?.publish_batch_size,
+          publishLimit: body.sync?.publish_limit,
         });
         sendJson(response, 200, {
           success: true,

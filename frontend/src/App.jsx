@@ -1305,6 +1305,7 @@ function TasksPage({ notify }) {
             publish_batch_size: Number(
               schedule.sync.publishBatchSize,
             ),
+            publish_limit: Number(schedule.sync.publishLimit),
           },
         }),
       });
@@ -1458,7 +1459,7 @@ function TasksPage({ notify }) {
                       <option value="all">全部待处理商品</option>
                       <option value="updated">已更新商品</option>
                     </Select>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-3 sm:grid-cols-3">
                       <div className="space-y-2">
                         <Label>素材导入并行数</Label>
                         <Input
@@ -1493,9 +1494,24 @@ function TasksPage({ notify }) {
                           }
                         />
                       </div>
+                      <div className="space-y-2">
+                        <Label>单次定时发布上限</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          max="100000"
+                          value={schedule?.sync?.publishLimit ?? 0}
+                          onChange={(event) =>
+                            updateSchedule(
+                              ["sync", "publishLimit"],
+                              event.target.value,
+                            )
+                          }
+                        />
+                      </div>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      素材导入和发布独立运行；发布线程发现可发布素材后立即提交，每批最多 1–20 件。
+                      素材导入和发布独立运行；发布线程发现可发布素材后立即提交，每批最多 1–20 件。单次定时发布上限仅对定时任务生效，填 0 表示不限制。
                     </p>
                   </>
                 ) : null}

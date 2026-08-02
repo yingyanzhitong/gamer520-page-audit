@@ -467,6 +467,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         crawlConcurrency: 3,
         materialConcurrency: 4,
         publishBatchSize: 20,
+        publishLimit: 0,
         publishConcurrency: 4,
       },
       "2026-07-28T00:00:00.000Z",
@@ -477,6 +478,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(initial.crawl_concurrency, 3);
     assert.equal(initial.material_concurrency, 4);
     assert.equal(initial.publish_batch_size, 20);
+    assert.equal(initial.sync_publish_limit, 0);
     assert.equal(initial.publish_concurrency, 4);
 
     const updated = database.setSchedulerSettings(
@@ -490,6 +492,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         crawlConcurrency: 5,
         materialConcurrency: 6,
         publishBatchSize: 8,
+        publishLimit: 42,
         publishConcurrency: 2,
       },
       "2026-07-28T01:00:00.000Z",
@@ -501,10 +504,11 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.crawl_concurrency, 5);
     assert.equal(updated.material_concurrency, 6);
     assert.equal(updated.publish_batch_size, 8);
+    assert.equal(updated.sync_publish_limit, 42);
     assert.equal(updated.publish_concurrency, 2);
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      13,
+      14,
     );
   } finally {
     database.close();

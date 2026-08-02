@@ -48,6 +48,7 @@ function settingsFromRow(row) {
     crawlConcurrency: Number(row.crawl_concurrency),
     materialConcurrency: Number(row.material_concurrency),
     publishBatchSize: Number(row.publish_batch_size),
+    publishLimit: Number(row.sync_publish_limit ?? 0),
     publishConcurrency: Number(row.publish_concurrency),
     updatedAt: row.updated_at,
   };
@@ -67,6 +68,16 @@ function publishBatchSizeValue(value) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 20) {
     const error = new Error("每批发布商品数必须是 1 到 20 之间的整数");
+    error.statusCode = 422;
+    throw error;
+  }
+  return parsed;
+}
+
+function publishLimitValue(value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100_000) {
+    const error = new Error("单次定时发布上限必须是 0 到 100000 之间的整数");
     error.statusCode = 422;
     throw error;
   }
@@ -93,6 +104,9 @@ function normalizeScheduleSettings(input) {
       input.publishBatchSize ??
         schedulerSettings?.publishBatchSize ??
         publishBatchSize,
+    ),
+    publishLimit: publishLimitValue(
+      input.publishLimit ?? schedulerSettings?.publishLimit ?? 0,
     ),
     publishConcurrency: concurrencyValue(
       input.publishConcurrency ??
@@ -246,6 +260,9 @@ function triggerSync(
       control,
       materialConcurrency: schedulerSettings.materialConcurrency,
       publishBatchSize: schedulerSettings.publishBatchSize,
+      publishLimit: reason.startsWith("schedule")
+        ? schedulerSettings.publishLimit
+        : 0,
       onProgress: (progress) => {
         syncProgress = progress;
       },
@@ -342,6 +359,7 @@ function updateScheduleSettings(input) {
     crawlConcurrency: schedulerSettings.crawlConcurrency,
     materialConcurrency: schedulerSettings.materialConcurrency,
     publishBatchSize: schedulerSettings.publishBatchSize,
+    publishLimit: schedulerSettings.publishLimit,
   });
   return scheduleRuntime();
 }
@@ -465,6 +483,7 @@ function scheduleRuntime() {
       nextRun: syncJob?.nextRun()?.toISOString() ?? null,
       materialConcurrency: schedulerSettings.materialConcurrency,
       publishBatchSize: schedulerSettings.publishBatchSize,
+      publishLimit: schedulerSettings.publishLimit,
       mode: schedulerSettings.syncMode,
       progress: syncProgress,
     },
@@ -491,6 +510,7 @@ schedulerSettings = settingsFromRow(
       crawlConcurrency: config.detailConcurrency,
       materialConcurrency: materialSyncConcurrency,
       publishBatchSize,
+      publishLimit: 0,
       publishConcurrency: 4,
     },
     nowIso(),

@@ -203,6 +203,7 @@ export class CrawlerDatabase {
         crawl_concurrency INTEGER NOT NULL DEFAULT 3,
         material_concurrency INTEGER NOT NULL DEFAULT 4,
         publish_batch_size INTEGER NOT NULL DEFAULT 20,
+        sync_publish_limit INTEGER NOT NULL DEFAULT 0,
         publish_concurrency INTEGER NOT NULL DEFAULT 4,
         updated_at TEXT NOT NULL
       );
@@ -309,7 +310,7 @@ export class CrawlerDatabase {
     this.#backfillContentHashes();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 13;");
+    this.database.exec("PRAGMA user_version = 14;");
   }
 
   #migrateSchema() {
@@ -408,6 +409,7 @@ export class CrawlerDatabase {
       ["crawl_concurrency", "INTEGER NOT NULL DEFAULT 3"],
       ["material_concurrency", "INTEGER NOT NULL DEFAULT 4"],
       ["publish_batch_size", "INTEGER NOT NULL DEFAULT 20"],
+      ["sync_publish_limit", "INTEGER NOT NULL DEFAULT 0"],
       ["publish_concurrency", "INTEGER NOT NULL DEFAULT 4"],
     ];
     for (const [name, definition] of schedulerConcurrencyAdditions) {
@@ -1223,9 +1225,10 @@ export class CrawlerDatabase {
           crawl_concurrency,
           material_concurrency,
           publish_batch_size,
+          sync_publish_limit,
           publish_concurrency,
           updated_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         defaults.cronTimezone,
@@ -1237,6 +1240,7 @@ export class CrawlerDatabase {
         defaults.crawlConcurrency ?? 3,
         defaults.materialConcurrency ?? 4,
         defaults.publishBatchSize ?? 20,
+        defaults.publishLimit ?? 0,
         defaults.publishConcurrency ?? 4,
         updatedAt,
       );
@@ -1259,9 +1263,10 @@ export class CrawlerDatabase {
           crawl_concurrency,
           material_concurrency,
           publish_batch_size,
+          sync_publish_limit,
           publish_concurrency,
           updated_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           cron_timezone = excluded.cron_timezone,
           crawl_cron_schedule = excluded.crawl_cron_schedule,
@@ -1272,6 +1277,7 @@ export class CrawlerDatabase {
           crawl_concurrency = excluded.crawl_concurrency,
           material_concurrency = excluded.material_concurrency,
           publish_batch_size = excluded.publish_batch_size,
+          sync_publish_limit = excluded.sync_publish_limit,
           publish_concurrency = excluded.publish_concurrency,
           updated_at = excluded.updated_at
       `)
@@ -1285,6 +1291,7 @@ export class CrawlerDatabase {
         settings.crawlConcurrency,
         settings.materialConcurrency,
         settings.publishBatchSize,
+        settings.publishLimit ?? 0,
         settings.publishConcurrency,
         updatedAt,
       );

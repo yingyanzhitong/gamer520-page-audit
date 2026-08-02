@@ -457,6 +457,62 @@ test("素材导入和商品发布独立运行，单批数量可配置", async ()
   }
 });
 
+test("单次发布上限会限制本轮同步候选商品", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-publish-limit-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const database = new CrawlerDatabase(databasePath);
+  const timestamp = "2026-08-02T00:00:00.000Z";
+  try {
+    for (let id = 1; id <= 3; id += 1) {
+      const discovered = game(id);
+      database.upsertDiscoveredGames([discovered], timestamp);
+      database.saveGameSuccess(
+        discovered,
+        result(id, undefined, discovered.imageUrl),
+        timestamp,
+      );
+    }
+    database.setXianyuSettings("account-a", 1, timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new FakeXianyuClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const sync = await service.run({
+      trigger: "schedule",
+      materialConcurrency: 2,
+      publishBatchSize: 2,
+      publishLimit: 2,
+    });
+    assert.equal(sync.selectedCount, 2);
+    assert.equal(client.upsertCalls.flat().length, 2);
+    assert.equal(
+      client.publishCalls.reduce(
+        (total, payload) => total + payload.materialIds.length,
+        0,
+      ),
+      2,
+    );
+    const persisted = new CrawlerDatabase(databasePath);
+    try {
+      assert.equal(
+        persisted.queryOne(
+          "SELECT selected_count FROM xianyu_sync_runs ORDER BY id DESC LIMIT 1",
+        ).selected_count,
+        2,
+      );
+    } finally {
+      persisted.close();
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("暂停后并发队列立即停止领取新商品", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-pause-test-"),

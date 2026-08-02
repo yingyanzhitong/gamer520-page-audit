@@ -214,6 +214,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         nextRun: "2026-07-28T18:00:00.000Z",
         materialConcurrency: 4,
         publishBatchSize: 20,
+        publishLimit: 0,
         mode: "all",
         progress: {
           runId: syncRunId,
@@ -268,6 +269,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
             cronTimezone: settings.cronTimezone,
             materialConcurrency: settings.materialConcurrency,
             publishBatchSize: settings.publishBatchSize,
+            publishLimit: settings.publishLimit,
             nextRun: "2026-07-29T16:15:00.000Z",
             mode: settings.syncMode,
           },
@@ -325,6 +327,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(schedule.sync.mode, "all");
     assert.equal(schedule.sync.materialConcurrency, 4);
     assert.equal(schedule.sync.publishBatchSize, 20);
+    assert.equal(schedule.sync.publishLimit, 0);
     assert.equal(schedule.sync.progress.completed, 4);
     assert.equal(schedule.sync.progress.materialSkipped, 2);
     assert.equal(schedule.sync.progress.materialCompleted, 4);
@@ -782,6 +785,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
             mode: "updated",
             material_concurrency: 6,
             publish_batch_size: 8,
+            publish_limit: 42,
           },
         }),
       },
@@ -793,6 +797,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(savedSchedule.syncMode, "updated");
     assert.equal(savedSchedule.materialConcurrency, 6);
     assert.equal(savedSchedule.publishBatchSize, 8);
+    assert.equal(savedSchedule.publishLimit, 42);
     assert.equal(savedSchedule.publishConcurrency, undefined);
 
     const crawl = await fetch(`${baseUrl}/api/crawl/run`, {
