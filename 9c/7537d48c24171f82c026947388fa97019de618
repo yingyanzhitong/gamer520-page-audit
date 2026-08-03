@@ -1,0 +1,26 @@
+deploy/github-actions/deploy.sh
+  s_bfd82453425369::t_bbf34ad23dc18b 108
+CHANGELOG.md
+  s_bfd82453425369::t_bbf34ad23dc18b 3-6
+package.json
+  s_bfd82453425369::t_bbf34ad23dc18b 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "9c7537d48c24171f82c026947388fa97019de618",
+  "prompts": {},
+  "logical_commit_id": "9c7537d48c24171f82c026947388fa97019de618",
+  "sessions": {
+    "s_bfd82453425369": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f85cc-e34a-7ae1-8741-43c8bd58c2d6",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 6,
+      "total_deletions": 1
+    }
+  }
+}
