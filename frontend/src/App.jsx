@@ -1261,6 +1261,8 @@ function TasksPage({ notify }) {
   const [logTask, setLogTask] = useState(null);
   const [controlAction, setControlAction] = useState(null);
   const [selectedGamesOpen, setSelectedGamesOpen] = useState(false);
+  const scheduleDirtyRef = useRef(false);
+  const scheduleRevisionRef = useRef(0);
 
   const load = useCallback(async () => {
     const [nextSchedule, nextRuns, nextLogs] = await Promise.all([
@@ -1268,13 +1270,15 @@ function TasksPage({ notify }) {
       api("/api/runs?limit=50"),
       api("/api/logs?limit=80"),
     ]);
-    setSchedule(nextSchedule);
+    if (!scheduleDirtyRef.current) setSchedule(nextSchedule);
     setRuns(nextRuns);
     setLogs(nextLogs);
   }, []);
   usePolling(load);
 
   function updateSchedule(path, value) {
+    scheduleDirtyRef.current = true;
+    scheduleRevisionRef.current += 1;
     setSchedule((current) => {
       const next = structuredClone(current);
       if (path.length === 1) next[path[0]] = value;
@@ -1284,6 +1288,7 @@ function TasksPage({ notify }) {
   }
 
   async function saveSchedule() {
+    const savedRevision = scheduleRevisionRef.current;
     setSaving(true);
     try {
       await api("/api/settings/schedule", {
@@ -1309,6 +1314,9 @@ function TasksPage({ notify }) {
           },
         }),
       });
+      if (scheduleRevisionRef.current === savedRevision) {
+        scheduleDirtyRef.current = false;
+      }
       notify("定时任务配置已保存");
       await load();
     } catch (caught) {
