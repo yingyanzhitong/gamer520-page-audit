@@ -77,7 +77,7 @@ function publishBatchSizeValue(value) {
 function publishLimitValue(value) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100_000) {
-    const error = new Error("单次定时发布上限必须是 0 到 100000 之间的整数");
+    const error = new Error("单次定时发布成功上限必须是 0 到 100000 之间的整数");
     error.statusCode = 422;
     throw error;
   }

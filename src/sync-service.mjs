@@ -446,9 +446,6 @@ export class XianyuSyncService {
           requestedGameIds.has(candidate.id),
         );
       }
-      if (resolvedPublishLimit > 0) {
-        candidates = candidates.slice(0, resolvedPublishLimit);
-      }
       scopeProgress = database.getSyncScopeProgress(
         accountId,
         mode,
@@ -468,7 +465,7 @@ export class XianyuSyncService {
           existingMaterialCount: scopeProgress.materialCompleted,
           existingPublishedCount: scopeProgress.publishCompleted,
           existingPublishSkippedCount: scopeProgress.publishSkipped,
-          publishLimit: resolvedPublishLimit || null,
+          publishSuccessLimit: resolvedPublishLimit || null,
         },
       });
       reportProgress({
@@ -1339,6 +1336,22 @@ export class XianyuSyncService {
         });
         while (true) {
           await control?.checkpoint();
+          if (
+            resolvedPublishLimit > 0 &&
+            totals.publish_success >= resolvedPublishLimit
+          ) {
+            recordTaskLog({
+              level: "success",
+              stage: "publish",
+              action: "success-limit-reached",
+              message: `已达到单次定时发布成功上限 ${resolvedPublishLimit}，停止后续发布`,
+              details: {
+                successCount: totals.publish_success,
+                publishSuccessLimit: resolvedPublishLimit,
+              },
+            });
+            return null;
+          }
           await waitForPublishQueue();
           await control?.checkpoint();
           if (
@@ -1347,9 +1360,13 @@ export class XianyuSyncService {
           ) {
             return null;
           }
+          const remainingSuccesses =
+            resolvedPublishLimit > 0
+              ? resolvedPublishLimit - totals.publish_success
+              : resolvedPublishBatchSize;
           const entries = publishQueue.splice(
             0,
-            resolvedPublishBatchSize,
+            Math.min(resolvedPublishBatchSize, remainingSuccesses),
           );
           if (entries.length === 0) continue;
           const publicationResult = await publishEntries(entries);

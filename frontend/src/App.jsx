@@ -1503,7 +1503,7 @@ function TasksPage({ notify }) {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>单次定时发布上限</Label>
+                        <Label>单次定时发布成功上限</Label>
                         <Input
                           type="number"
                           min="0"
@@ -1519,7 +1519,7 @@ function TasksPage({ notify }) {
                       </div>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      素材导入和发布独立运行；发布线程发现可发布素材后立即提交，每批最多 1–20 件。单次定时发布上限仅对定时任务生效，填 0 表示不限制。
+                      素材导入和发布独立运行；发布线程发现可发布素材后立即提交，每批最多 1–20 件。单次定时发布成功上限仅对定时任务生效，只有已确认发布成功的商品计入上限；失败、跳过和待确认均不占额度，填 0 表示不限制。
                     </p>
                   </>
                 ) : null}

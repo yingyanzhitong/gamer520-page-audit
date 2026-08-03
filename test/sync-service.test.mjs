@@ -234,6 +234,44 @@ class ProbeFailureClient extends FakeXianyuClient {
   }
 }
 
+class PartialPublishFailureClient extends FakeXianyuClient {
+  async getBatchStatus(batchId) {
+    const call = this.publishCalls.find(
+      (item) => item.requestId === batchId,
+    );
+    const accountItems = this.accountItems.get(call.accountId) ?? [];
+    const items = call.materialIds.map((materialId) => {
+      if (materialId === 1) {
+        return {
+          account_id: call.accountId,
+          material_id: materialId,
+          status: "failed",
+          error_message: "测试发布失败",
+        };
+      }
+      const material = [...this.materials.values()].find(
+        (item) => item.materialId === materialId,
+      );
+      const itemId = `item-${call.accountId}-${materialId}`;
+      if (!accountItems.some((item) => item.item_id === itemId)) {
+        accountItems.push({
+          item_id: itemId,
+          item_title: material?.title ?? `商品 ${materialId}`,
+        });
+      }
+      return {
+        account_id: call.accountId,
+        material_id: materialId,
+        status: "success",
+        item_id: itemId,
+        item_url: `https://www.goofish.com/item?id=${materialId}`,
+      };
+    });
+    this.accountItems.set(call.accountId, accountItems);
+    return { done: true, items };
+  }
+}
+
 class RejectedBatchClient extends FakeXianyuClient {
   async publishBatch(payload) {
     if (this.publishCalls.length === 0) {
@@ -457,7 +495,7 @@ test("素材导入和商品发布独立运行，单批数量可配置", async ()
   }
 });
 
-test("单次发布上限会限制本轮同步候选商品", async () => {
+test("单次发布成功上限会在失败后继续尝试后续商品", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-publish-limit-test-"),
   );
@@ -465,7 +503,7 @@ test("单次发布上限会限制本轮同步候选商品", async () => {
   const database = new CrawlerDatabase(databasePath);
   const timestamp = "2026-08-02T00:00:00.000Z";
   try {
-    for (let id = 1; id <= 3; id += 1) {
+    for (let id = 1; id <= 5; id += 1) {
       const discovered = game(id);
       database.upsertDiscoveredGames([discovered], timestamp);
       database.saveGameSuccess(
@@ -479,31 +517,52 @@ test("单次发布上限会限制本轮同步候选商品", async () => {
     database.close();
   }
 
-  const client = new FakeXianyuClient();
+  const client = new PartialPublishFailureClient();
   const service = new XianyuSyncService(config(databasePath), client);
   try {
     const sync = await service.run({
       trigger: "schedule",
-      materialConcurrency: 2,
+      materialConcurrency: 1,
       publishBatchSize: 2,
       publishLimit: 2,
     });
-    assert.equal(sync.selectedCount, 2);
-    assert.equal(client.upsertCalls.flat().length, 2);
+    assert.equal(sync.selectedCount, 5);
+    assert.equal(sync.publishSuccess, 2);
+    assert.equal(sync.publishFailed, 1);
+    assert.equal(client.upsertCalls.flat().length, 5);
     assert.equal(
       client.publishCalls.reduce(
         (total, payload) => total + payload.materialIds.length,
         0,
       ),
-      2,
+      3,
+    );
+    assert.equal(
+      client.publishCalls
+        .flatMap((payload) => payload.materialIds)
+        .includes(4),
+      false,
     );
     const persisted = new CrawlerDatabase(databasePath);
     try {
-      assert.equal(
-        persisted.queryOne(
-          "SELECT selected_count FROM xianyu_sync_runs ORDER BY id DESC LIMIT 1",
-        ).selected_count,
-        2,
+      const storedRun = persisted.queryOne(
+        `SELECT selected_count, publish_success, publish_failed, publish_submitted
+         FROM xianyu_sync_runs
+         ORDER BY id DESC
+         LIMIT 1`,
+      );
+      assert.equal(storedRun.selected_count, 5);
+      assert.equal(storedRun.publish_success, 2);
+      assert.equal(storedRun.publish_failed, 1);
+      assert.equal(storedRun.publish_submitted, 3);
+      assert.ok(
+        persisted
+          .listTaskOperationLogs({
+            taskType: "sync",
+            runId: sync.runId,
+            limit: 100,
+          })
+          .some((item) => item.action === "success-limit-reached"),
       );
     } finally {
       persisted.close();
