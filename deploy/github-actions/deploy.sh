@@ -105,4 +105,5 @@ if [[ "${deployed_version}" != "${image_tag}" ]]; then
 fi
 curl -fsS http://127.0.0.1:13520/healthz >/dev/null
 curl -fsS https://gamer520.xyyamsz.cn/healthz >/dev/null
+docker image prune -a -f >/dev/null || echo "警告：未引用镜像清理失败" >&2
 echo "Gamer520 ${image_tag} 部署成功，备份：${backup_name}"
