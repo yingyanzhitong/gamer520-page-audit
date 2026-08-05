@@ -24,8 +24,10 @@ test("封面下载后转为 JPEG 并复用本地缓存", async () => {
     .png()
     .toBuffer();
   let requests = 0;
+  let receivedReferer = null;
   const server = http.createServer((request, response) => {
     requests += 1;
+    receivedReferer = request.headers.referer ?? null;
     response.writeHead(200, {
       "content-type": "image/png",
       "content-length": image.length,
@@ -41,6 +43,7 @@ test("封面下载后转为 JPEG 并复用本地缓存", async () => {
     const input = {
       gameId: 118842,
       imageUrl: `http://127.0.0.1:${port}/cover.png`,
+      referer: "https://www.gamer520.com/118842.html",
       cacheDirectory: directory,
       publicBaseUrl: "https://gamer520.example",
       attempts: 1,
@@ -56,6 +59,7 @@ test("封面下载后转为 JPEG 并复用本地缓存", async () => {
       /^https:\/\/gamer520\.example\/covers\/118842-[a-f0-9]{20}\.jpg$/,
     );
     assert.equal(requests, 1);
+    assert.equal(receivedReferer, input.referer);
     const metadata = await sharp(first.filePath).metadata();
     assert.equal(metadata.format, "jpeg");
     assert.equal(metadata.width, 32);

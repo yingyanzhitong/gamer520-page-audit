@@ -465,6 +465,10 @@ function listGames(database, requestUrl) {
     : "all";
   const requestedXianyuStatus =
     requestUrl.searchParams.get("xianyuStatus") ?? "all";
+  const requestedSort = requestUrl.searchParams.get("sort") ?? "hot";
+  const sort = new Set(["created", "updated", "hot"]).has(requestedSort)
+    ? requestedSort
+    : "hot";
   const validOnly = requestUrl.searchParams.get("validOnly") === "true";
   const xianyuStatus = new Set([
     "none",
@@ -514,6 +518,16 @@ function listGames(database, requestUrl) {
 
   const whereClause =
     conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const sortClause = {
+    created: "games.first_seen_at DESC, games.id DESC",
+    updated: "games.updated_at DESC, games.id DESC",
+    hot: `
+      CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
+      games.hot_rank ASC,
+      games.updated_at DESC,
+      games.id DESC
+    `,
+  }[sort];
   const total = database
     .prepare(`
       SELECT COUNT(DISTINCT games.id) AS count
@@ -539,10 +553,7 @@ function listGames(database, requestUrl) {
         publication.item_url AS publication_item_url
       ${joinedTables}
       ${whereClause}
-      ORDER BY
-        CASE WHEN hot_rank IS NULL THEN 1 ELSE 0 END,
-        hot_rank ASC,
-        updated_at DESC
+      ORDER BY ${sortClause}
       LIMIT ? OFFSET ?
     `)
     .all(...parameters, pageSize, (page - 1) * pageSize);
@@ -552,6 +563,7 @@ function listGames(database, requestUrl) {
     pageSize,
     total,
     pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    sort,
     items: rows.map(mapGame),
   };
 }
@@ -1088,19 +1100,30 @@ export async function startDashboardServer(
       if (request.method === "GET" && gameCoverMatch) {
         const game = withDatabase(config.dbPath, (database) =>
           database
-            .prepare("SELECT id, image_url FROM games WHERE id = ?")
+            .prepare("SELECT id, image_url, source_url FROM games WHERE id = ?")
             .get(Number(gameCoverMatch[1])),
         );
         if (!game?.image_url) {
           sendError(response, 404, "该游戏没有可用封面");
           return;
         }
-        const cached = await cacheCoverImage({
-          gameId: game.id,
-          imageUrl: game.image_url,
-          cacheDirectory: config.coverCacheDir,
-          publicBaseUrl: config.publicBaseUrl,
-        });
+        let cached;
+        try {
+          cached = await cacheCoverImage({
+            gameId: game.id,
+            imageUrl: game.image_url,
+            referer: game.source_url,
+            cacheDirectory: config.coverCacheDir,
+            publicBaseUrl: config.publicBaseUrl,
+          });
+        } catch (error) {
+          if (error.code === "COVER_NOT_FOUND") {
+            withDatabase(config.dbPath, (database) =>
+              database.markGameImageMissing(game.id, new Date().toISOString()),
+            );
+          }
+          throw error;
+        }
         response.writeHead(302, {
           location: new URL(cached.publicUrl).pathname,
           "cache-control": "no-store",

@@ -1035,6 +1035,73 @@ test("单个素材失败不会阻止其他商品进入发布线程", async () =>
   }
 });
 
+test("封面缓存携带来源 Referer，404 时标记游戏缺失", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-cover-not-found-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-07-28T00:00:00.000Z";
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    for (let id = 81; id <= 82; id += 1) {
+      const discovered = game(id);
+      database.upsertDiscoveredGames([discovered], timestamp);
+      database.saveGameSuccess(
+        discovered,
+        result(discovered.id),
+        timestamp,
+      );
+    }
+    database.setXianyuAccountId("account-a", timestamp);
+  } finally {
+    database.close();
+  }
+
+  const cacheCalls = [];
+  const service = new XianyuSyncService(
+    config(databasePath, { coverCacheEnabled: true }),
+    new FakeXianyuClient(),
+    {
+      cacheCover: async ({ gameId, referer }) => {
+        cacheCalls.push({ gameId, referer });
+        if (gameId === 81) {
+          const error = new Error("封面下载返回 HTTP 404");
+          error.code = "COVER_NOT_FOUND";
+          throw error;
+        }
+        return {
+          cached: false,
+          publicUrl: `https://gamer520.example/covers/${gameId}.jpg`,
+        };
+      },
+    },
+  );
+  try {
+    const sync = await service.run({ trigger: "test" });
+    assert.equal(sync.materialFailed, 1);
+    assert.equal(sync.publishSuccess, 1);
+    assert.deepEqual(cacheCalls, [
+      {
+        gameId: 81,
+        referer: "https://www.gamer520.com/81.html",
+      },
+      {
+        gameId: 82,
+        referer: "https://www.gamer520.com/82.html",
+      },
+    ]);
+    const checkedDatabase = new CrawlerDatabase(databasePath);
+    const gameStatus = checkedDatabase.queryOne(
+      "SELECT scrape_status, last_error FROM games WHERE id = 81",
+    );
+    checkedDatabase.close();
+    assert.equal(gameStatus.scrape_status, "missing");
+    assert.equal(gameStatus.last_error, "图片链接无法访问");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("自定义模板用于素材、封面和卡券标题，修改后不重复发布", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-template-test-"),

@@ -2037,10 +2037,10 @@ function GameDetail({ gameId, open, onOpenChange }) {
             </div>
             <a
               className="flex h-24 overflow-hidden rounded-md border bg-slate-50"
-              href={detail.game.imageUrl}
+              href={`/api/games/${gameId}/cover`}
               target="_blank"
               rel="noreferrer"
-              aria-label="在新标签页打开图片"
+              aria-label="在新标签页打开带来源页 Referer 的图片"
             >
               {imagePreviewFailed ? (
                 <span className="flex w-full items-center justify-center px-3 text-center text-xs text-muted-foreground">
@@ -2049,7 +2049,7 @@ function GameDetail({ gameId, open, onOpenChange }) {
               ) : (
                 <img
                   className="h-full w-full object-cover"
-                  src={detail.game.imageUrl}
+                  src={`/api/games/${gameId}/cover`}
                   alt={`${detail.game.title} 封面预览`}
                   onError={() => setImagePreviewFailed(true)}
                 />
@@ -2135,6 +2135,7 @@ function GamesPage({ notify }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const [xianyuStatus, setXianyuStatus] = useState("all");
+  const [sort, setSort] = useState("hot");
   const [page, setPage] = useState(1);
   const [data, setData] = useState({ items: [], total: 0, pageCount: 1 });
   const [detailId, setDetailId] = useState(null);
@@ -2148,9 +2149,10 @@ function GamesPage({ notify }) {
       query,
       status,
       xianyuStatus,
+      sort,
     });
     setData(await api(`/api/games?${parameters}`));
-  }, [page, query, status, xianyuStatus]);
+  }, [page, query, status, xianyuStatus, sort]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -2197,7 +2199,7 @@ function GamesPage({ notify }) {
       />
       <Card>
         <CardContent className="p-4">
-          <div className="grid gap-3 lg:grid-cols-[1fr_180px_180px]">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px_160px]">
             <div className="relative">
               <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
               <Input
@@ -2235,6 +2237,17 @@ function GamesPage({ notify }) {
               <option value="material">加入素材库</option>
               <option value="publishing">发布中</option>
               <option value="published">发布成功</option>
+            </Select>
+            <Select
+              value={sort}
+              onChange={(event) => {
+                setSort(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="hot">按热度排序</option>
+              <option value="created">按创建时间</option>
+              <option value="updated">按更新时间</option>
             </Select>
           </div>
         </CardContent>

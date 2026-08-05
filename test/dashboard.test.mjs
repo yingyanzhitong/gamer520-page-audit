@@ -364,6 +364,9 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /导入素材库/);
     assert.match(appSource, /发布成功/);
     assert.match(appSource, /同步闲鱼商品/);
+    assert.match(appSource, /按热度排序/);
+    assert.match(appSource, /按创建时间/);
+    assert.match(appSource, /按更新时间/);
     assert.doesNotMatch(appSource, /更新素材库/);
     assert.match(appSource, /缺失/);
     assert.doesNotMatch(appSource, /缺少图片或资源/);
@@ -625,6 +628,106 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         (item) => item.id === game.id && item.xianyuStatus === "none",
       ),
     );
+
+    const sortDatabase = new CrawlerDatabase(databasePath);
+    const sortGames = [
+      {
+        id: 118844,
+        sourceUrl: "https://www.gamer520.com/118844.html",
+        title: "排序测试 Alpha",
+        imageUrl: "https://images.example/118844.jpg",
+        hotPage: 1,
+        hotPosition: 2,
+        hotRank: 2,
+        createdAt: "2026-07-28T00:11:00.000Z",
+        updatedAt: "2026-07-28T00:31:00.000Z",
+      },
+      {
+        id: 118845,
+        sourceUrl: "https://www.gamer520.com/118845.html",
+        title: "排序测试 Beta",
+        imageUrl: "https://images.example/118845.jpg",
+        hotPage: 1,
+        hotPosition: 1,
+        hotRank: 1,
+        createdAt: "2026-07-28T00:12:00.000Z",
+        updatedAt: "2026-07-28T00:33:00.000Z",
+      },
+      {
+        id: 118846,
+        sourceUrl: "https://www.gamer520.com/118846.html",
+        title: "排序测试 Gamma",
+        imageUrl: "https://images.example/118846.jpg",
+        hotPage: null,
+        hotPosition: null,
+        hotRank: null,
+        createdAt: "2026-07-28T00:13:00.000Z",
+        updatedAt: "2026-07-28T00:32:00.000Z",
+      },
+    ];
+    for (const sortGame of sortGames) {
+      sortDatabase.upsertDiscoveredGames([sortGame], sortGame.createdAt);
+      sortDatabase.saveGameSuccess(
+        sortGame,
+        {
+          page: {
+            url: sortGame.sourceUrl,
+            title: sortGame.title,
+            image: sortGame.imageUrl,
+            gameDescription: "排序测试游戏简介",
+          },
+          resource: {
+            resourceCode: `A${sortGame.id}`,
+            detailPageUrl: sortGame.sourceUrl,
+            archivePassword: "test-password",
+            downloads: [
+              {
+                provider: "百度网盘",
+                url: `https://pan.example/${sortGame.id}`,
+                password: null,
+                extractionCode: null,
+                qrImageUrl: null,
+                qrDecodeMethod: "test",
+              },
+            ],
+          },
+        },
+        sortGame.updatedAt,
+      );
+    }
+    sortDatabase.close();
+
+    const hotSortedGames = await fetch(
+      `${baseUrl}/api/games?query=${encodeURIComponent("排序测试")}&sort=hot`,
+    ).then((response) => response.json());
+    assert.equal(hotSortedGames.sort, "hot");
+    assert.deepEqual(
+      hotSortedGames.items.map((item) => item.id),
+      [118845, 118844, 118846],
+    );
+
+    const createdSortedGames = await fetch(
+      `${baseUrl}/api/games?query=${encodeURIComponent("排序测试")}&sort=created`,
+    ).then((response) => response.json());
+    assert.equal(createdSortedGames.sort, "created");
+    assert.deepEqual(
+      createdSortedGames.items.map((item) => item.id),
+      [118846, 118845, 118844],
+    );
+
+    const updatedSortedGames = await fetch(
+      `${baseUrl}/api/games?query=${encodeURIComponent("排序测试")}&sort=updated`,
+    ).then((response) => response.json());
+    assert.equal(updatedSortedGames.sort, "updated");
+    assert.deepEqual(
+      updatedSortedGames.items.map((item) => item.id),
+      [118845, 118846, 118844],
+    );
+
+    const invalidSortedGames = await fetch(
+      `${baseUrl}/api/games?query=${encodeURIComponent("排序测试")}&sort=unknown`,
+    ).then((response) => response.json());
+    assert.equal(invalidSortedGames.sort, "hot");
 
     const runs = await fetch(`${baseUrl}/api/runs?limit=12`).then(
       (response) => response.json(),

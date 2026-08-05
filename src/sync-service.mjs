@@ -553,6 +553,7 @@ export class XianyuSyncService {
           const cachedCover = await this.cacheCover({
             gameId: candidate.id,
             imageUrl: listing.imageUrl,
+            referer: candidate.source_url,
             cacheDirectory: this.config.coverCacheDir,
             publicBaseUrl: this.config.publicBaseUrl,
             signal: control?.signal,
@@ -704,6 +705,18 @@ export class XianyuSyncService {
         } catch (error) {
           if (control?.terminated || isTaskTerminatedError(error)) {
             throw error;
+          }
+          if (error.code === "COVER_NOT_FOUND") {
+            const checkedAt = nowIso();
+            database.markGameImageMissing(candidate.id, checkedAt);
+            recordTaskLog({
+              gameId: candidate.id,
+              level: "error",
+              stage: "cover",
+              action: "missing",
+              message: `游戏 ${candidate.id} 图片链接返回 HTTP 404，标记为缺失`,
+              details: { title: candidate.title },
+            });
           }
           recordTaskLog({
             gameId: candidate.id,

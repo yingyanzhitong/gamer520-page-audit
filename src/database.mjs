@@ -1008,6 +1008,19 @@ export class CrawlerDatabase {
       );
   }
 
+  markGameImageMissing(gameId, checkedAt) {
+    this.database
+      .prepare(`
+        UPDATE games
+        SET last_attempt_at = ?,
+            scrape_status = 'missing',
+            last_error = '图片链接无法访问',
+            updated_at = ?
+        WHERE id = ?
+      `)
+      .run(checkedAt, checkedAt, gameId);
+  }
+
   saveGameSuccess(game, result, savedAt) {
     transaction(this.database, () => {
       const previous = this.database

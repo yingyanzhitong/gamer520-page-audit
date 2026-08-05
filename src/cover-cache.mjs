@@ -49,6 +49,7 @@ async function readLimitedBody(response) {
 export async function cacheCoverImage({
   gameId,
   imageUrl,
+  referer = null,
   cacheDirectory,
   publicBaseUrl,
   fetchImpl = fetch,
@@ -95,10 +96,14 @@ export async function cacheCoverImage({
         headers: {
           accept: "image/avif,image/webp,image/png,image/jpeg,image/*",
           "user-agent": "gamer520-page-audit/cover-cache",
+          ...(referer ? { referer } : {}),
         },
       });
       if (!response.ok) {
-        throw new Error(`封面下载返回 HTTP ${response.status}`);
+        const error = new Error(`封面下载返回 HTTP ${response.status}`);
+        error.statusCode = response.status;
+        if (response.status === 404) error.code = "COVER_NOT_FOUND";
+        throw error;
       }
       const contentType = String(
         response.headers.get("content-type") ?? "",
