@@ -186,6 +186,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
   let crawlTrigger = null;
   let syncTrigger = null;
   let taskControl = null;
+  let xianyuItemSyncCalls = 0;
   const dashboard = await startDashboardServer(
     {
       dashboardHost: "127.0.0.1",
@@ -251,6 +252,16 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           throw error;
         }
         return { accountId, enabled: true, remark: "主账号" };
+      },
+      syncXianyuPublishedItems: async () => {
+        xianyuItemSyncCalls += 1;
+        return {
+          accountId: "account-a",
+          accountItemCount: 3,
+          localItemCount: 2,
+          confirmedCount: 1,
+          unconfirmedCount: 1,
+        };
       },
       updateScheduleSettings: (settings) => {
         savedSchedule = settings;
@@ -351,6 +362,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /API Key 管理/);
     assert.match(appSource, /导入素材库/);
     assert.match(appSource, /发布成功/);
+    assert.match(appSource, /同步闲鱼商品/);
+    assert.doesNotMatch(appSource, /更新素材库/);
     assert.match(appSource, /图片链接/);
     assert.match(appSource, /总游戏数据/);
     assert.match(appSource, /有效游戏数据/);
@@ -378,14 +391,30 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(validGames.items[0].isValid, true);
 
     const updatedPublishedGames = await fetch(
-      `${baseUrl}/api/games?status=updated&xianyuStatus=material_update`,
+      `${baseUrl}/api/games?status=updated&xianyuStatus=published`,
     ).then((response) => response.json());
     assert.equal(updatedPublishedGames.total, 1);
     assert.equal(updatedPublishedGames.items[0].lastChangeType, "updated");
     assert.equal(
       updatedPublishedGames.items[0].xianyuStatus,
-      "material_update",
+      "published",
     );
+
+    const xianyuItemsSync = await fetch(
+      `${baseUrl}/api/xianyu/items/sync`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: "{}",
+      },
+    ).then((response) => response.json());
+    assert.equal(xianyuItemsSync.success, true);
+    assert.equal(xianyuItemsSync.confirmedCount, 1);
+    assert.equal(xianyuItemsSync.unconfirmedCount, 1);
+    assert.equal(xianyuItemSyncCalls, 1);
 
     const noXianyuStateGames = await fetch(
       `${baseUrl}/api/games?xianyuStatus=none`,
@@ -553,6 +582,20 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       errorMessage: "测试发布失败",
       updatedAt: timestamp,
     });
+    materialDatabase.database
+      .prepare(`
+        UPDATE games
+        SET xianyu_item_id = NULL, xianyu_item_url = NULL
+        WHERE id = ?
+      `)
+      .run(game.id);
+    materialDatabase.database
+      .prepare(`
+        UPDATE xianyu_publications
+        SET item_id = NULL, item_url = NULL
+        WHERE game_id = ? AND account_id = ?
+      `)
+      .run(game.id, "account-a");
     materialDatabase.close();
     const materialGames = await fetch(
       `${baseUrl}/api/games?xianyuStatus=material`,

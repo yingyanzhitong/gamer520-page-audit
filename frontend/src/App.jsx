@@ -101,7 +101,6 @@ const statusLabels = {
   unknown: "待确认",
   none: "无",
   material: "加入素材库",
-  material_update: "更新素材库",
   published: "发布成功",
   updated: "已更新",
 };
@@ -2113,6 +2112,7 @@ function GamesPage({ notify }) {
   const [data, setData] = useState({ items: [], total: 0, pageCount: 1 });
   const [detailId, setDetailId] = useState(null);
   const [syncingGameId, setSyncingGameId] = useState(null);
+  const [syncingXianyuItems, setSyncingXianyuItems] = useState(false);
 
   const load = useCallback(async () => {
     const parameters = new URLSearchParams({
@@ -2140,6 +2140,24 @@ function GamesPage({ notify }) {
       notify(errorMessage(caught), "error");
     } finally {
       setSyncingGameId(null);
+    }
+  }
+
+  async function syncXianyuItems() {
+    setSyncingXianyuItems(true);
+    try {
+      const result = await api("/api/xianyu/items/sync", {
+        method: "POST",
+        body: jsonBody({}),
+      });
+      notify(
+        `闲鱼商品核对完成：确认发布 ${result.confirmedCount} 个，待确认 ${result.unconfirmedCount} 个`,
+      );
+      await load();
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    } finally {
+      setSyncingXianyuItems(false);
     }
   }
 
@@ -2189,7 +2207,6 @@ function GamesPage({ notify }) {
               <option value="material">加入素材库</option>
               <option value="publishing">发布中</option>
               <option value="published">发布成功</option>
-              <option value="material_update">更新素材库</option>
             </Select>
           </div>
         </CardContent>
@@ -2202,10 +2219,23 @@ function GamesPage({ notify }) {
               共 {formatNumber(data.total)} 条
             </CardDescription>
           </div>
-          <Button variant="outline" size="sm" onClick={load}>
-            <RefreshCw className="h-4 w-4" />
-            刷新
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={syncingXianyuItems}
+              onClick={syncXianyuItems}
+            >
+              <RefreshCw
+                className={cn("h-4 w-4", syncingXianyuItems && "animate-spin")}
+              />
+              同步闲鱼商品
+            </Button>
+            <Button variant="outline" size="sm" onClick={load}>
+              <RefreshCw className="h-4 w-4" />
+              刷新
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           <Table>

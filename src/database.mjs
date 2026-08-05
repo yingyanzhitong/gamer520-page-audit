@@ -1714,6 +1714,107 @@ export class CrawlerDatabase {
     });
   }
 
+  reconcileAccountPublishedItems(accountId, items, syncedAt) {
+    const accountItems = new Map();
+    for (const item of items ?? []) {
+      const itemId = String(item?.item_id ?? item?.id ?? "").trim();
+      if (itemId && !accountItems.has(itemId)) {
+        accountItems.set(itemId, item);
+      }
+    }
+    const localItems = this.database
+      .prepare(`
+        SELECT
+          games.id,
+          games.xianyu_item_id,
+          games.xianyu_item_url,
+          publication.item_id AS publication_item_id,
+          publication.item_url AS publication_item_url
+        FROM games
+        LEFT JOIN xianyu_publications AS publication
+          ON publication.game_id = games.id
+         AND publication.account_id = ?
+        WHERE games.xianyu_item_id IS NOT NULL
+           OR publication.item_id IS NOT NULL
+      `)
+      .all(accountId);
+    const upsertPublication = this.database.prepare(`
+      INSERT INTO xianyu_publications (
+        game_id,
+        account_id,
+        status,
+        item_id,
+        item_url,
+        published_at,
+        updated_at
+      ) VALUES (?, ?, 'success', ?, ?, ?, ?)
+      ON CONFLICT(game_id, account_id) DO UPDATE SET
+        status = 'success',
+        item_id = excluded.item_id,
+        item_url = COALESCE(excluded.item_url, xianyu_publications.item_url),
+        last_error = NULL,
+        published_at = COALESCE(
+          xianyu_publications.published_at,
+          excluded.published_at
+        ),
+        updated_at = excluded.updated_at
+    `);
+    const updateGame = this.database.prepare(`
+      UPDATE games
+      SET xianyu_item_id = ?,
+          xianyu_item_url = COALESCE(?, xianyu_item_url),
+          xianyu_account_id = ?,
+          xianyu_published_at = COALESCE(xianyu_published_at, ?)
+      WHERE id = ?
+    `);
+    let confirmedCount = 0;
+    let unconfirmedCount = 0;
+    transaction(this.database, () => {
+      for (const localItem of localItems) {
+        const itemId = [
+          localItem.publication_item_id,
+          localItem.xianyu_item_id,
+        ]
+          .map((value) => String(value ?? "").trim())
+          .find((value) => accountItems.has(value));
+        if (!itemId) {
+          unconfirmedCount += 1;
+          continue;
+        }
+        const accountItem = accountItems.get(itemId);
+        const itemUrl = String(
+          accountItem.item_url ??
+            accountItem.itemUrl ??
+            localItem.publication_item_url ??
+            localItem.xianyu_item_url ??
+            `https://www.goofish.com/item?id=${encodeURIComponent(itemId)}`,
+        ).trim();
+        upsertPublication.run(
+          localItem.id,
+          accountId,
+          itemId,
+          itemUrl || null,
+          syncedAt,
+          syncedAt,
+        );
+        updateGame.run(
+          itemId,
+          itemUrl || null,
+          accountId,
+          syncedAt,
+          localItem.id,
+        );
+        confirmedCount += 1;
+      }
+    });
+    return {
+      accountItemCount: accountItems.size,
+      localItemCount: localItems.length,
+      confirmedCount,
+      unconfirmedCount,
+    };
+  }
+
   markCardBindingResult({
     gameId,
     accountId,

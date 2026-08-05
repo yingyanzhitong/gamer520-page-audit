@@ -524,6 +524,7 @@ dashboard = await startDashboardServer(config, scheduleRuntime, {
   listXianyuAccounts: () => syncService.listAccounts(),
   validateXianyuAccount: (accountId) =>
     syncService.validateAccount(accountId),
+  syncXianyuPublishedItems: () => syncService.syncAccountPublishedItems(),
   updateScheduleSettings,
   updateXianyuApiKey,
   triggerCrawl: (reason) => {

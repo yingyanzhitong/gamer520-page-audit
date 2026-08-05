@@ -144,6 +144,32 @@ export class XianyuSyncService {
     return account;
   }
 
+  async syncAccountPublishedItems({ signal = null } = {}) {
+    const database = new CrawlerDatabase(this.config.dbPath);
+    try {
+      const settings = database.getXianyuSyncSettings();
+      const accountId = String(settings.account_id ?? "").trim();
+      if (!accountId) {
+        const error = new Error("请先在页面配置发布账号");
+        error.statusCode = 422;
+        throw error;
+      }
+      await this.validateAccount(accountId, { signal });
+      await this.client.refreshAccountItems(accountId, { signal });
+      const items = await this.client.listAccountItems(accountId, { signal });
+      return {
+        accountId,
+        ...database.reconcileAccountPublishedItems(
+          accountId,
+          items,
+          nowIso(),
+        ),
+      };
+    } finally {
+      database.close();
+    }
+  }
+
   async run({
     trigger = "manual",
     mode = "all",

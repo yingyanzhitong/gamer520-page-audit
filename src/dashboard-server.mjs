@@ -41,13 +41,13 @@ const contentTypes = new Map([
 
 const xianyuStatusExpression = `
   CASE
-    WHEN publication.status IN ('publishing', 'unknown') THEN 'publishing'
-    WHEN material.material_id IS NOT NULL
-      AND material.status IN ('pending', 'failed')
-    THEN 'material_update'
     WHEN publication.status = 'success' THEN 'published'
+    WHEN games.xianyu_item_id IS NOT NULL
+      OR publication.item_id IS NOT NULL
+      OR publication.status IN ('publishing', 'unknown')
+    THEN 'publishing'
     WHEN material.material_id IS NOT NULL
-      OR material.status IN ('synced', 'skipped')
+    OR material.status IN ('synced', 'skipped')
     THEN 'material'
     ELSE 'none'
   END
@@ -468,7 +468,6 @@ function listGames(database, requestUrl) {
   const xianyuStatus = new Set([
     "none",
     "material",
-    "material_update",
     "published",
     "publishing",
   ]).has(requestedXianyuStatus)
@@ -1444,6 +1443,38 @@ export async function startDashboardServer(
         }
         const accounts = await handlers.listXianyuAccounts();
         sendJson(response, 200, { items: accounts });
+        return;
+      }
+      if (
+        request.method === "POST" &&
+        requestUrl.pathname === "/api/xianyu/items/sync"
+      ) {
+        if (
+          !requireKey(
+            request,
+            response,
+            config.xianyuApiKey,
+            "X-API-Key",
+          )
+        ) {
+          return;
+        }
+        await readJsonBody(request);
+        const state = runtimeState();
+        if (state.active || state.sync?.active) {
+          sendError(response, 409, "采集或同步任务正在运行");
+          return;
+        }
+        if (!handlers.syncXianyuPublishedItems) {
+          sendError(response, 503, "闲鱼商品同步服务尚未启用");
+          return;
+        }
+        const result = await handlers.syncXianyuPublishedItems();
+        sendJson(response, 200, {
+          success: true,
+          message: `闲鱼商品核对完成：确认发布 ${result.confirmedCount} 个，待确认 ${result.unconfirmedCount} 个`,
+          ...result,
+        });
         return;
       }
       if (

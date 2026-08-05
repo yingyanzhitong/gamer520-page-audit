@@ -629,6 +629,72 @@ test("发布成功后把闲鱼商品编号写回游戏数据", () => {
   }
 });
 
+test("账号商品核对会确认已有闲鱼商品编号的发布结果", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-item-reconcile-test-"),
+  );
+  const database = new CrawlerDatabase(
+    path.join(directory, "test.sqlite"),
+  );
+  try {
+    const timestamp = "2026-08-05T00:00:00.000Z";
+    const discovered = discovery(118901, "商品核对测试", 1);
+    database.upsertDiscoveredGames([discovered], timestamp);
+    database.saveGameSuccess(
+      discovered,
+      result(118901, "商品核对测试", "https://pan.example/reconcile"),
+      timestamp,
+    );
+    database.database
+      .prepare(`
+        UPDATE games
+        SET xianyu_item_id = ?, xianyu_item_url = ?
+        WHERE id = ?
+      `)
+      .run(
+        "1069000000001",
+        "https://www.goofish.com/item?id=1069000000001",
+        discovered.id,
+      );
+
+    const summary = database.reconcileAccountPublishedItems(
+      "account-a",
+      [
+        {
+          item_id: "1069000000001",
+          item_url: "https://www.goofish.com/item?id=1069000000001",
+        },
+      ],
+      timestamp,
+    );
+    assert.deepEqual(summary, {
+      accountItemCount: 1,
+      localItemCount: 1,
+      confirmedCount: 1,
+      unconfirmedCount: 0,
+    });
+    assert.deepEqual(
+      {
+        ...database.queryOne(
+          `SELECT status, item_id, item_url
+           FROM xianyu_publications
+           WHERE game_id = ? AND account_id = ?`,
+          discovered.id,
+          "account-a",
+        ),
+      },
+      {
+        status: "success",
+        item_id: "1069000000001",
+        item_url: "https://www.goofish.com/item?id=1069000000001",
+      },
+    );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("闲鱼同步候选只保留有效 HTTP 下载资源", () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-download-filter-test-"),

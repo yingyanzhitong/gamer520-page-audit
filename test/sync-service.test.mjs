@@ -67,6 +67,7 @@ class FakeXianyuClient {
     this.cardBindCalls = [];
     this.events = [];
     this.accountItems = new Map();
+    this.refreshAccountItemCalls = [];
   }
 
   async listAccounts() {
@@ -151,7 +152,8 @@ class FakeXianyuClient {
     };
   }
 
-  async refreshAccountItems() {
+  async refreshAccountItems(accountId) {
+    this.refreshAccountItemCalls.push(accountId);
     return { success: true };
   }
 
@@ -319,6 +321,76 @@ function config(databasePath, overrides = {}) {
     ...overrides,
   };
 }
+
+test("闲鱼商品核对仅将当前账号中存在的商品编号标记为发布成功", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-account-item-sync-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-08-05T00:00:00.000Z";
+  const confirmedGame = game(301);
+  const pendingGame = game(302);
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    database.upsertDiscoveredGames([confirmedGame, pendingGame], timestamp);
+    database.saveGameSuccess(confirmedGame, result(confirmedGame.id), timestamp);
+    database.saveGameSuccess(pendingGame, result(pendingGame.id), timestamp);
+    database.database.prepare(`
+      UPDATE games
+      SET xianyu_item_id = ?
+      WHERE id = ?
+    `).run("item-confirmed", confirmedGame.id);
+    database.database.prepare(`
+      UPDATE games
+      SET xianyu_item_id = ?
+      WHERE id = ?
+    `).run("item-pending", pendingGame.id);
+    database.setXianyuAccountId("account-a", timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new FakeXianyuClient();
+  client.accountItems.set("account-a", [
+    {
+      item_id: "item-confirmed",
+      item_url: "https://www.goofish.com/item?id=item-confirmed",
+    },
+  ]);
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const summary = await service.syncAccountPublishedItems();
+    assert.deepEqual(summary, {
+      accountId: "account-a",
+      accountItemCount: 1,
+      localItemCount: 2,
+      confirmedCount: 1,
+      unconfirmedCount: 1,
+    });
+    assert.deepEqual(client.refreshAccountItemCalls, ["account-a"]);
+
+    const checkedDatabase = new CrawlerDatabase(databasePath);
+    assert.equal(
+      checkedDatabase.queryOne(
+        "SELECT status FROM xianyu_publications WHERE game_id = ? AND account_id = ?",
+        confirmedGame.id,
+        "account-a",
+      ).status,
+      "success",
+    );
+    assert.equal(
+      checkedDatabase.queryOne(
+        "SELECT status FROM xianyu_publications WHERE game_id = ? AND account_id = ?",
+        pendingGame.id,
+        "account-a",
+      ),
+      undefined,
+    );
+    checkedDatabase.close();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("素材导入和商品发布独立运行，单批数量可配置", async () => {
   assert.equal(publishBatchSize, 20);
