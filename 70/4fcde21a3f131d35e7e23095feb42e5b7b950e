@@ -1,0 +1,45 @@
+frontend/src/App.jsx
+  s_d9b1981bec2587::t_b8981ecccb16ee 1545
+test/sync-service.test.mjs
+  s_d9b1981bec2587::t_70cc28fd316db9 955,958,1336
+  s_d9b1981bec2587::t_8ef2c7065f3d39 1344-1399,1407-1433,1435,1439
+  s_d9b1981bec2587::t_e932e836ee0693 1400-1406
+  s_d9b1981bec2587::t_abe9ce750ef33d 1341-1343
+  s_d9b1981bec2587::t_b1256cb0380283 1339-1340
+CHANGELOG.md
+  s_d9b1981bec2587::t_d8a107fc928d83 3-8
+src/database.mjs
+  s_d9b1981bec2587::t_70cc28fd316db9 48-63,68-75,1381-1384,1447,1476,1532
+  s_d9b1981bec2587::t_f1553d63707da1 64-67
+src/dashboard-server.mjs
+  s_d9b1981bec2587::t_b8981ecccb16ee 1572
+package.json
+  s_d9b1981bec2587::t_d8a107fc928d83 3
+README.md
+  s_d9b1981bec2587::t_70cc28fd316db9 132
+public/index.html
+  s_d9b1981bec2587::t_56733bb9776f07 12
+public/assets/index-CpFO-4Pe.js
+  s_d9b1981bec2587::t_56733bb9776f07 49
+package-lock.json
+  s_d9b1981bec2587::t_534b8f6b27d941 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "704fcde21a3f131d35e7e23095feb42e5b7b950e",
+  "prompts": {},
+  "logical_commit_id": "704fcde21a3f131d35e7e23095feb42e5b7b950e",
+  "sessions": {
+    "s_d9b1981bec2587": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd025-d578-7041-b3bb-0fe31bbe849c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 197,
+      "total_deletions": 39
+    }
+  }
+}
