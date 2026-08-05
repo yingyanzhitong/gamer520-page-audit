@@ -2152,7 +2152,7 @@ function GamesPage({ notify }) {
         body: jsonBody({}),
       });
       notify(
-        `闲鱼商品核对完成：确认发布 ${result.confirmedCount} 个，待确认 ${result.unconfirmedCount} 个`,
+        `闲鱼商品核对完成：确认发布 ${result.confirmedCount} 个（名称匹配 ${result.titleMatchedCount} 个），回退素材库 ${result.materialFallbackCount} 个`,
       );
       await load();
     } catch (caught) {

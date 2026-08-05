@@ -53,6 +53,13 @@ function missingGameDataError(imageAccessible) {
   return imageAccessible ? "缺少图片或资源" : "图片链接无法访问";
 }
 
+function normalizedXianyuTitle(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s+/gu, "");
+}
+
 const COMPLETE_GAME_CONTENT_CONDITION = `
   games.content_hash IS NOT NULL
   AND games.title IS NOT NULL
@@ -1808,28 +1815,43 @@ export class CrawlerDatabase {
     });
   }
 
-  reconcileAccountPublishedItems(accountId, items, syncedAt) {
+  reconcileAccountPublishedItems(
+    accountId,
+    items,
+    syncedAt,
+    { titleForGame = null } = {},
+  ) {
     const accountItems = new Map();
+    const accountItemsByTitle = new Map();
     for (const item of items ?? []) {
       const itemId = String(item?.item_id ?? item?.id ?? "").trim();
-      if (itemId && !accountItems.has(itemId)) {
-        accountItems.set(itemId, item);
-      }
+      if (!itemId || accountItems.has(itemId)) continue;
+      accountItems.set(itemId, item);
+      const title = normalizedXianyuTitle(item?.item_title ?? item?.title);
+      if (!title) continue;
+      const matched = accountItemsByTitle.get(title) ?? [];
+      matched.push(item);
+      accountItemsByTitle.set(title, matched);
     }
     const localItems = this.database
       .prepare(`
         SELECT
-          games.id,
+          games.*,
+          COALESCE(games.sale_price, settings.default_price, 1) AS effective_price,
           games.xianyu_item_id,
           games.xianyu_item_url,
+          publication.status AS publication_status,
           publication.item_id AS publication_item_id,
           publication.item_url AS publication_item_url
         FROM games
+        LEFT JOIN xianyu_sync_settings AS settings
+          ON settings.id = 1
         LEFT JOIN xianyu_publications AS publication
           ON publication.game_id = games.id
          AND publication.account_id = ?
         WHERE games.xianyu_item_id IS NOT NULL
            OR publication.item_id IS NOT NULL
+           OR publication.status IN ('publishing', 'unknown')
       `)
       .all(accountId);
     const upsertPublication = this.database.prepare(`
@@ -1861,21 +1883,89 @@ export class CrawlerDatabase {
           xianyu_published_at = COALESCE(xianyu_published_at, ?)
       WHERE id = ?
     `);
+    const resetPublication = this.database.prepare(`
+      UPDATE xianyu_publications
+      SET status = 'pending',
+          batch_id = NULL,
+          item_id = NULL,
+          item_url = NULL,
+          last_error = ?,
+          card_id = NULL,
+          card_bind_status = 'pending',
+          card_bind_error = NULL,
+          card_bound_at = NULL,
+          updated_at = ?
+      WHERE game_id = ? AND account_id = ?
+    `);
+    const resetGame = this.database.prepare(`
+      UPDATE games
+      SET xianyu_item_id = NULL,
+          xianyu_item_url = NULL,
+          xianyu_account_id = NULL,
+          xianyu_published_at = NULL
+      WHERE id = ?
+    `);
+    const downloadStatement = this.database.prepare(
+      "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
+    );
     let confirmedCount = 0;
-    let unconfirmedCount = 0;
+    let titleMatchedCount = 0;
+    let materialFallbackCount = 0;
+    const claimedItemIds = new Set();
     transaction(this.database, () => {
       for (const localItem of localItems) {
-        const itemId = [
+        const localItemIds = [
           localItem.publication_item_id,
           localItem.xianyu_item_id,
         ]
           .map((value) => String(value ?? "").trim())
-          .find((value) => accountItems.has(value));
-        if (!itemId) {
-          unconfirmedCount += 1;
+          .filter(Boolean);
+        let accountItem = localItemIds
+          .map((itemId) => accountItems.get(itemId))
+          .find(Boolean);
+        let matchedByTitle = false;
+        if (
+          !accountItem &&
+          localItemIds.length === 0 &&
+          typeof titleForGame === "function"
+        ) {
+          try {
+            const expectedTitle = normalizedXianyuTitle(
+              titleForGame({
+                ...localItem,
+                downloads: downloadStatement.all(localItem.id),
+              }),
+            );
+            const titleMatches = (accountItemsByTitle.get(expectedTitle) ?? [])
+              .filter((item) => {
+                const itemId = String(item?.item_id ?? item?.id ?? "").trim();
+                return itemId && !claimedItemIds.has(itemId);
+              });
+            if (titleMatches.length === 1) {
+              accountItem = titleMatches[0];
+              matchedByTitle = true;
+            }
+          } catch {
+            // 标题模板或历史数据无效时保守地不按名称认领商品。
+          }
+        }
+        if (!accountItem) {
+          if (localItem.publication_status !== "success") {
+            resetPublication.run(
+              "当前闲鱼账号未找到商品，已回退到素材库",
+              syncedAt,
+              localItem.id,
+              accountId,
+            );
+            resetGame.run(localItem.id);
+            materialFallbackCount += 1;
+          }
           continue;
         }
-        const accountItem = accountItems.get(itemId);
+        const itemId = String(
+          accountItem.item_id ?? accountItem.id ?? "",
+        ).trim();
+        claimedItemIds.add(itemId);
         const itemUrl = String(
           accountItem.item_url ??
             accountItem.itemUrl ??
@@ -1899,13 +1989,15 @@ export class CrawlerDatabase {
           localItem.id,
         );
         confirmedCount += 1;
+        if (matchedByTitle) titleMatchedCount += 1;
       }
     });
     return {
       accountItemCount: accountItems.size,
       localItemCount: localItems.length,
       confirmedCount,
-      unconfirmedCount,
+      titleMatchedCount,
+      materialFallbackCount,
     };
   }
 

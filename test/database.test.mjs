@@ -744,7 +744,8 @@ test("账号商品核对会确认已有闲鱼商品编号的发布结果", () =>
       accountItemCount: 1,
       localItemCount: 1,
       confirmedCount: 1,
-      unconfirmedCount: 0,
+      titleMatchedCount: 0,
+      materialFallbackCount: 0,
     });
     assert.deepEqual(
       {

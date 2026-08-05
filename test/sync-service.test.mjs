@@ -322,29 +322,62 @@ function config(databasePath, overrides = {}) {
   };
 }
 
-test("闲鱼商品核对仅将当前账号中存在的商品编号标记为发布成功", async () => {
+test("闲鱼商品核对按编号或唯一名称确认发布，未匹配项回退素材库", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-account-item-sync-test-"),
   );
   const databasePath = path.join(directory, "test.sqlite");
   const timestamp = "2026-08-05T00:00:00.000Z";
   const confirmedGame = game(301);
-  const pendingGame = game(302);
+  const titleMatchedGame = game(302);
+  const unmatchedGame = game(303);
+  const ambiguousTitleGame = game(304);
   const database = new CrawlerDatabase(databasePath);
   try {
-    database.upsertDiscoveredGames([confirmedGame, pendingGame], timestamp);
+    database.upsertDiscoveredGames(
+      [confirmedGame, titleMatchedGame, unmatchedGame, ambiguousTitleGame],
+      timestamp,
+    );
     database.saveGameSuccess(confirmedGame, result(confirmedGame.id), timestamp);
-    database.saveGameSuccess(pendingGame, result(pendingGame.id), timestamp);
+    database.saveGameSuccess(
+      titleMatchedGame,
+      result(titleMatchedGame.id),
+      timestamp,
+    );
+    database.saveGameSuccess(unmatchedGame, result(unmatchedGame.id), timestamp);
+    database.saveGameSuccess(
+      ambiguousTitleGame,
+      result(ambiguousTitleGame.id),
+      timestamp,
+    );
     database.database.prepare(`
       UPDATE games
       SET xianyu_item_id = ?
       WHERE id = ?
     `).run("item-confirmed", confirmedGame.id);
-    database.database.prepare(`
-      UPDATE games
-      SET xianyu_item_id = ?
-      WHERE id = ?
-    `).run("item-pending", pendingGame.id);
+    for (const gameItem of [
+      titleMatchedGame,
+      unmatchedGame,
+      ambiguousTitleGame,
+    ]) {
+      const stored = database.queryOne(
+        "SELECT content_hash FROM games WHERE id = ?",
+        gameItem.id,
+      );
+      database.markMaterialSynced(
+        gameItem.id,
+        gameItem.id * 10,
+        stored.content_hash,
+        timestamp,
+      );
+      database.markPublicationSubmitted(
+        gameItem.id,
+        "account-a",
+        gameItem.id * 10,
+        `batch-${gameItem.id}`,
+        timestamp,
+      );
+    }
     database.setXianyuAccountId("account-a", timestamp);
   } finally {
     database.close();
@@ -356,16 +389,30 @@ test("闲鱼商品核对仅将当前账号中存在的商品编号标记为发�
       item_id: "item-confirmed",
       item_url: "https://www.goofish.com/item?id=item-confirmed",
     },
+    {
+      item_id: "item-title-matched",
+      item_title: "【秒发】游戏 302",
+      item_url: "https://www.goofish.com/item?id=item-title-matched",
+    },
+    {
+      item_id: "item-ambiguous-one",
+      item_title: "【秒发】游戏 304",
+    },
+    {
+      item_id: "item-ambiguous-two",
+      item_title: "【秒发】游戏 304",
+    },
   ]);
   const service = new XianyuSyncService(config(databasePath), client);
   try {
     const summary = await service.syncAccountPublishedItems();
     assert.deepEqual(summary, {
       accountId: "account-a",
-      accountItemCount: 1,
-      localItemCount: 2,
-      confirmedCount: 1,
-      unconfirmedCount: 1,
+      accountItemCount: 4,
+      localItemCount: 4,
+      confirmedCount: 2,
+      titleMatchedCount: 1,
+      materialFallbackCount: 2,
     });
     assert.deepEqual(client.refreshAccountItemCalls, ["account-a"]);
 
@@ -378,13 +425,44 @@ test("闲鱼商品核对仅将当前账号中存在的商品编号标记为发�
       ).status,
       "success",
     );
+    assert.deepEqual(
+      {
+        ...checkedDatabase.queryOne(
+          "SELECT status, item_id FROM xianyu_publications WHERE game_id = ? AND account_id = ?",
+          titleMatchedGame.id,
+          "account-a",
+        ),
+      },
+      { status: "success", item_id: "item-title-matched" },
+    );
+    assert.deepEqual(
+      {
+        ...checkedDatabase.queryOne(
+          "SELECT status, item_id, last_error FROM xianyu_publications WHERE game_id = ? AND account_id = ?",
+          unmatchedGame.id,
+          "account-a",
+        ),
+      },
+      {
+        status: "pending",
+        item_id: null,
+        last_error: "当前闲鱼账号未找到商品，已回退到素材库",
+      },
+    );
+    assert.equal(
+      checkedDatabase.queryOne(
+        "SELECT xianyu_item_id FROM games WHERE id = ?",
+        unmatchedGame.id,
+      ).xianyu_item_id,
+      null,
+    );
     assert.equal(
       checkedDatabase.queryOne(
         "SELECT status FROM xianyu_publications WHERE game_id = ? AND account_id = ?",
-        pendingGame.id,
+        ambiguousTitleGame.id,
         "account-a",
-      ),
-      undefined,
+      ).status,
+      "pending",
     );
     checkedDatabase.close();
   } finally {

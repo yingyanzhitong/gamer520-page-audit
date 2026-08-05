@@ -260,7 +260,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           accountItemCount: 3,
           localItemCount: 2,
           confirmedCount: 1,
-          unconfirmedCount: 1,
+          titleMatchedCount: 0,
+          materialFallbackCount: 1,
         };
       },
       updateScheduleSettings: (settings) => {
@@ -415,7 +416,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     ).then((response) => response.json());
     assert.equal(xianyuItemsSync.success, true);
     assert.equal(xianyuItemsSync.confirmedCount, 1);
-    assert.equal(xianyuItemsSync.unconfirmedCount, 1);
+    assert.equal(xianyuItemsSync.titleMatchedCount, 0);
+    assert.equal(xianyuItemsSync.materialFallbackCount, 1);
     assert.equal(xianyuItemSyncCalls, 1);
 
     const noXianyuStateGames = await fetch(

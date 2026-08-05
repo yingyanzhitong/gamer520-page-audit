@@ -1473,7 +1473,7 @@ export async function startDashboardServer(
         const result = await handlers.syncXianyuPublishedItems();
         sendJson(response, 200, {
           success: true,
-          message: `闲鱼商品核对完成：确认发布 ${result.confirmedCount} 个，待确认 ${result.unconfirmedCount} 个`,
+          message: `闲鱼商品核对完成：确认发布 ${result.confirmedCount} 个（名称匹配 ${result.titleMatchedCount} 个），回退素材库 ${result.materialFallbackCount} 个`,
           ...result,
         });
         return;

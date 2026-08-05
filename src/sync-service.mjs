@@ -163,6 +163,14 @@ export class XianyuSyncService {
           accountId,
           items,
           nowIso(),
+          {
+            titleForGame: (game) =>
+              renderXianyuListing(game, {
+                titleTemplate: settings.title_template,
+                descriptionTemplate: settings.description_template,
+                imageTemplate: settings.image_template,
+              }).title,
+          },
         ),
       };
     } finally {
