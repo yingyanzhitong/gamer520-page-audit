@@ -1,0 +1,47 @@
+src/database.mjs
+  s_d9b1981bec2587::t_e494a4435c4e9e 56-62,1818-1823,1825,1828-1834,1839-1840,1843,1847-1848,1854,1884-1905,1908-1910,1912-1914,1917,1922-1962,1965-1968,1992,1999-2000
+src/dashboard-server.mjs
+  s_d9b1981bec2587::t_e494a4435c4e9e 1476
+package.json
+  s_d9b1981bec2587::t_3921bad1c22bc1 3
+CHANGELOG.md
+  s_d9b1981bec2587::t_3921bad1c22bc1 3-8
+test/database.test.mjs
+  s_d9b1981bec2587::t_e494a4435c4e9e 747-748
+test/sync-service.test.mjs
+  s_d9b1981bec2587::t_4e8a56c579efb6 334,338,348-352,358-362,397-404,411-412,415,427,458,462,464-465
+  s_d9b1981bec2587::t_044cd925f7d8f9 325,332-333,337,339-340,342-347,363-380,391-395,413-414,428-436,438-457
+frontend/src/App.jsx
+  s_d9b1981bec2587::t_e494a4435c4e9e 2155
+test/dashboard.test.mjs
+  s_d9b1981bec2587::t_e494a4435c4e9e 263-264,419-420
+src/sync-service.mjs
+  s_d9b1981bec2587::t_e494a4435c4e9e 166-173
+public/assets/index-CKsuiIQ4.js
+  s_d9b1981bec2587::t_aaf7322962444b 49
+README.md
+  s_d9b1981bec2587::t_4e8a56c579efb6 132
+public/index.html
+  s_d9b1981bec2587::t_aaf7322962444b 12
+package-lock.json
+  s_d9b1981bec2587::t_a08bc77535f53a 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "fa09e638c1300a9a5861ca7e25a68e02febc9ad4",
+  "prompts": {},
+  "logical_commit_id": "fa09e638c1300a9a5861ca7e25a68e02febc9ad4",
+  "sessions": {
+    "s_d9b1981bec2587": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd025-d578-7041-b3bb-0fe31bbe849c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 1208,
+      "total_deletions": 151
+    }
+  }
+}
