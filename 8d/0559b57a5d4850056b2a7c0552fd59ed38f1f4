@@ -1,0 +1,57 @@
+src/database.mjs
+  s_d9b1981bec2587::t_3e828fd8259893 1717-1817
+src/scheduler.mjs
+  s_d9b1981bec2587::t_3e828fd8259893 527
+CHANGELOG.md
+  s_d9b1981bec2587::t_e8d1e764c13e6c 3-8
+frontend/src/App.jsx
+  s_d9b1981bec2587::t_3e828fd8259893 2115,2146-2163,2222-2237
+  s_d9b1981bec2587::t_06bfbc5b9ce8b2 2238
+test/database.test.mjs
+  s_d9b1981bec2587::t_1d5147c26679ce 632-676,686-697
+  s_d9b1981bec2587::t_d06351e7112541 677-678,684-685
+  s_d9b1981bec2587::t_2a2ba830044959 679-683
+src/dashboard-server.mjs
+  s_d9b1981bec2587::t_3e828fd8259893 45-48,1446-1477
+  s_d9b1981bec2587::t_9168a57fb09c0e 50
+src/sync-service.mjs
+  s_d9b1981bec2587::t_3e828fd8259893 147-172
+README.md
+  s_d9b1981bec2587::t_3e828fd8259893 132
+  s_d9b1981bec2587::t_9168a57fb09c0e 126
+public/index.html
+  s_d9b1981bec2587::t_75bc57cb7d82c5 12
+public/assets/index-50oD7JD9.js
+  s_d9b1981bec2587::t_75bc57cb7d82c5 8-9,49
+test/dashboard.test.mjs
+  s_d9b1981bec2587::t_30992a45181323 407-410
+  s_d9b1981bec2587::t_fc5b0f0121fcf2 585-598
+  s_d9b1981bec2587::t_1d5147c26679ce 189,256-265,365,394,400,402-406,411-417
+  s_d9b1981bec2587::t_120daef189bd84 366
+package.json
+  s_d9b1981bec2587::t_e8d1e764c13e6c 3
+test/sync-service.test.mjs
+  s_d9b1981bec2587::t_30992a45181323 387
+  s_d9b1981bec2587::t_d06351e7112541 70,155-156,324-386,388-393
+package-lock.json
+  s_d9b1981bec2587::t_806b6815d3bc51 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "8d0559b57a5d4850056b2a7c0552fd59ed38f1f4",
+  "prompts": {},
+  "logical_commit_id": "8d0559b57a5d4850056b2a7c0552fd59ed38f1f4",
+  "sessions": {
+    "s_d9b1981bec2587": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd025-d578-7041-b3bb-0fe31bbe849c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 504,
+      "total_deletions": 30
+    }
+  }
+}
