@@ -186,6 +186,7 @@ export class XianyuSyncService {
     materialConcurrency = materialSyncConcurrency,
     publishBatchSize: configuredPublishBatchSize = publishBatchSize,
     publishLimit: configuredPublishLimit = 0,
+    candidateSort = "created",
     onProgress = () => {},
   } = {}) {
     if (!syncModes.has(mode)) {
@@ -211,6 +212,11 @@ export class XianyuSyncService {
       100_000,
       Math.max(0, Number.parseInt(configuredPublishLimit, 10) || 0),
     );
+    const resolvedCandidateSort = new Set(["created", "updated", "hot"]).has(
+      candidateSort,
+    )
+      ? candidateSort
+      : "created";
     const accountId = settings.account_id;
     if (!accountId) {
       database.close();
@@ -438,6 +444,7 @@ export class XianyuSyncService {
         publishMode: "batch",
         publishBatchSize: resolvedPublishBatchSize,
         publishLimit: resolvedPublishLimit || null,
+        candidateSort: resolvedCandidateSort,
         publishLogIntervalSeconds: publishBatchLogIntervalMs / 1_000,
         requestedGameIds: Array.isArray(gameIds) ? gameIds : null,
       },
@@ -469,6 +476,7 @@ export class XianyuSyncService {
         accountId,
         100_000,
         mode,
+        resolvedCandidateSort,
       );
       if (Array.isArray(gameIds) && gameIds.length > 0) {
         const requestedGameIds = new Set(
@@ -500,6 +508,7 @@ export class XianyuSyncService {
           existingPublishedCount: scopeProgress.publishCompleted,
           existingPublishSkippedCount: scopeProgress.publishSkipped,
           publishSuccessLimit: resolvedPublishLimit || null,
+          candidateSort: resolvedCandidateSort,
         },
       });
       reportProgress({

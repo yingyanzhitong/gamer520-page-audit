@@ -49,6 +49,7 @@ function settingsFromRow(row) {
     materialConcurrency: Number(row.material_concurrency),
     publishBatchSize: Number(row.publish_batch_size),
     publishLimit: Number(row.sync_publish_limit ?? 0),
+    syncSort: row.sync_sort ?? "created",
     publishConcurrency: Number(row.publish_concurrency),
     updatedAt: row.updated_at,
   };
@@ -108,6 +109,7 @@ function normalizeScheduleSettings(input) {
     publishLimit: publishLimitValue(
       input.publishLimit ?? schedulerSettings?.publishLimit ?? 0,
     ),
+    syncSort: String(input.syncSort ?? schedulerSettings?.syncSort ?? "created").trim(),
     publishConcurrency: concurrencyValue(
       input.publishConcurrency ??
         schedulerSettings?.publishConcurrency ??
@@ -125,6 +127,11 @@ function normalizeScheduleSettings(input) {
   }
   if (!new Set(["all", "pending", "updated"]).has(normalized.syncMode)) {
     const error = new Error("定时同步范围必须是 all、pending 或 updated");
+    error.statusCode = 422;
+    throw error;
+  }
+  if (!new Set(["created", "updated", "hot"]).has(normalized.syncSort)) {
+    const error = new Error("同步排序必须是 created、updated 或 hot");
     error.statusCode = 422;
     throw error;
   }
@@ -260,6 +267,7 @@ function triggerSync(
       control,
       materialConcurrency: schedulerSettings.materialConcurrency,
       publishBatchSize: schedulerSettings.publishBatchSize,
+      candidateSort: schedulerSettings.syncSort,
       publishLimit: reason.startsWith("schedule")
         ? schedulerSettings.publishLimit
         : 0,
@@ -360,6 +368,7 @@ function updateScheduleSettings(input) {
     materialConcurrency: schedulerSettings.materialConcurrency,
     publishBatchSize: schedulerSettings.publishBatchSize,
     publishLimit: schedulerSettings.publishLimit,
+    syncSort: schedulerSettings.syncSort,
   });
   return scheduleRuntime();
 }
@@ -484,6 +493,7 @@ function scheduleRuntime() {
       materialConcurrency: schedulerSettings.materialConcurrency,
       publishBatchSize: schedulerSettings.publishBatchSize,
       publishLimit: schedulerSettings.publishLimit,
+      sort: schedulerSettings.syncSort,
       mode: schedulerSettings.syncMode,
       progress: syncProgress,
     },
@@ -511,6 +521,7 @@ schedulerSettings = settingsFromRow(
       materialConcurrency: materialSyncConcurrency,
       publishBatchSize,
       publishLimit: 0,
+      syncSort: "created",
       publishConcurrency: 4,
     },
     nowIso(),

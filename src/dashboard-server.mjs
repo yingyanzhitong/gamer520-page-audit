@@ -523,7 +523,7 @@ function listGames(database, requestUrl) {
     updated: "games.updated_at DESC, games.id DESC",
     hot: `
       CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
-      games.hot_rank ASC,
+      games.hot_rank DESC,
       games.updated_at DESC,
       games.id DESC
     `,
@@ -1405,6 +1405,7 @@ export async function startDashboardServer(
               state.sync?.publishBatchSize ?? 20,
             ),
             publishLimit: Number(state.sync?.publishLimit ?? 0),
+            sort: state.sync?.sort ?? "created",
             progress: state.sync?.progress ?? null,
           },
         });
@@ -1440,6 +1441,7 @@ export async function startDashboardServer(
           materialConcurrency: body.sync?.material_concurrency,
           publishBatchSize: body.sync?.publish_batch_size,
           publishLimit: body.sync?.publish_limit,
+          syncSort: body.sync?.sort,
         });
         sendJson(response, 200, {
           success: true,

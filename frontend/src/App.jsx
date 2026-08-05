@@ -1311,6 +1311,7 @@ function TasksPage({ notify }) {
               schedule.sync.publishBatchSize,
             ),
             publish_limit: Number(schedule.sync.publishLimit),
+            sort: schedule.sync.sort,
           },
         }),
       });
@@ -1467,6 +1468,19 @@ function TasksPage({ notify }) {
                       <option value="all">全部待处理商品</option>
                       <option value="updated">已更新商品</option>
                     </Select>
+                    <div className="space-y-2">
+                      <Label>同步排序</Label>
+                      <Select
+                        value={schedule?.sync?.sort ?? "created"}
+                        onChange={(event) =>
+                          updateSchedule(["sync", "sort"], event.target.value)
+                        }
+                      >
+                        <option value="created">创建时间从早到晚</option>
+                        <option value="updated">更新时间从早到晚</option>
+                        <option value="hot">热度从高到低</option>
+                      </Select>
+                    </div>
                     <div className="grid gap-3 sm:grid-cols-3">
                       <div className="space-y-2">
                         <Label>素材导入并行数</Label>

@@ -87,9 +87,14 @@ export const VALID_GAME_DATA_CONDITION = `
 `;
 
 const syncModes = new Set(["all", "pending", "updated"]);
+const syncSorts = new Set(["created", "updated", "hot"]);
 
 function normalizeSyncMode(mode) {
   return syncModes.has(mode) ? mode : "all";
+}
+
+function normalizeSyncSort(sort) {
+  return syncSorts.has(sort) ? sort : "created";
 }
 
 function syncScopeConditions(mode) {
@@ -273,6 +278,7 @@ export class CrawlerDatabase {
         material_concurrency INTEGER NOT NULL DEFAULT 4,
         publish_batch_size INTEGER NOT NULL DEFAULT 20,
         sync_publish_limit INTEGER NOT NULL DEFAULT 0,
+        sync_sort TEXT NOT NULL DEFAULT 'created',
         publish_concurrency INTEGER NOT NULL DEFAULT 4,
         updated_at TEXT NOT NULL
       );
@@ -380,7 +386,7 @@ export class CrawlerDatabase {
     this.#backfillMissingGameStatuses();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 15;");
+    this.database.exec("PRAGMA user_version = 16;");
   }
 
   #migrateSchema() {
@@ -480,6 +486,7 @@ export class CrawlerDatabase {
       ["material_concurrency", "INTEGER NOT NULL DEFAULT 4"],
       ["publish_batch_size", "INTEGER NOT NULL DEFAULT 20"],
       ["sync_publish_limit", "INTEGER NOT NULL DEFAULT 0"],
+      ["sync_sort", "TEXT NOT NULL DEFAULT 'created'"],
       ["publish_concurrency", "INTEGER NOT NULL DEFAULT 4"],
     ];
     for (const [name, definition] of schedulerConcurrencyAdditions) {
@@ -1368,9 +1375,10 @@ export class CrawlerDatabase {
           material_concurrency,
           publish_batch_size,
           sync_publish_limit,
+          sync_sort,
           publish_concurrency,
           updated_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         defaults.cronTimezone,
@@ -1383,6 +1391,7 @@ export class CrawlerDatabase {
         defaults.materialConcurrency ?? 4,
         defaults.publishBatchSize ?? 20,
         defaults.publishLimit ?? 0,
+        normalizeSyncSort(defaults.syncSort),
         defaults.publishConcurrency ?? 4,
         updatedAt,
       );
@@ -1406,9 +1415,10 @@ export class CrawlerDatabase {
           material_concurrency,
           publish_batch_size,
           sync_publish_limit,
+          sync_sort,
           publish_concurrency,
           updated_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           cron_timezone = excluded.cron_timezone,
           crawl_cron_schedule = excluded.crawl_cron_schedule,
@@ -1420,6 +1430,7 @@ export class CrawlerDatabase {
           material_concurrency = excluded.material_concurrency,
           publish_batch_size = excluded.publish_batch_size,
           sync_publish_limit = excluded.sync_publish_limit,
+          sync_sort = excluded.sync_sort,
           publish_concurrency = excluded.publish_concurrency,
           updated_at = excluded.updated_at
       `)
@@ -1434,6 +1445,7 @@ export class CrawlerDatabase {
         settings.materialConcurrency,
         settings.publishBatchSize,
         settings.publishLimit ?? 0,
+        normalizeSyncSort(settings.syncSort),
         settings.publishConcurrency,
         updatedAt,
       );
@@ -1556,9 +1568,20 @@ export class CrawlerDatabase {
     };
   }
 
-  listSyncCandidates(accountId, limit, mode = "all") {
+  listSyncCandidates(accountId, limit, mode = "all", sort = "created") {
     const settings = this.getXianyuSyncSettings();
     const normalizedMode = normalizeSyncMode(mode);
+    const normalizedSort = normalizeSyncSort(sort);
+    const sortClause = {
+      created: "games.first_seen_at ASC, games.id ASC",
+      updated: "games.updated_at ASC, games.id ASC",
+      hot: `
+        CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
+        games.hot_rank DESC,
+        games.updated_at DESC,
+        games.id DESC
+      `,
+    }[normalizedSort];
     const rows = this.database
       .prepare(`
         SELECT
@@ -1590,9 +1613,7 @@ export class CrawlerDatabase {
           AND ${syncScopeConditions(normalizedMode).join("\n          AND ")}
         ORDER BY
           CASE WHEN publication.status = 'failed' THEN 0 ELSE 1 END,
-          COALESCE(games.last_changed_at, games.first_seen_at) ASC,
-          CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
-          games.hot_rank ASC
+          ${sortClause}
       `)
       .all(accountId);
     const downloadStatement = this.database.prepare(

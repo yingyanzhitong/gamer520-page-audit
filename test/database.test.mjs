@@ -541,6 +541,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         materialConcurrency: 4,
         publishBatchSize: 20,
         publishLimit: 0,
+        syncSort: "created",
         publishConcurrency: 4,
       },
       "2026-07-28T00:00:00.000Z",
@@ -552,6 +553,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(initial.material_concurrency, 4);
     assert.equal(initial.publish_batch_size, 20);
     assert.equal(initial.sync_publish_limit, 0);
+    assert.equal(initial.sync_sort, "created");
     assert.equal(initial.publish_concurrency, 4);
 
     const updated = database.setSchedulerSettings(
@@ -566,6 +568,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         materialConcurrency: 6,
         publishBatchSize: 8,
         publishLimit: 42,
+        syncSort: "updated",
         publishConcurrency: 2,
       },
       "2026-07-28T01:00:00.000Z",
@@ -578,10 +581,70 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.material_concurrency, 6);
     assert.equal(updated.publish_batch_size, 8);
     assert.equal(updated.sync_publish_limit, 42);
+    assert.equal(updated.sync_sort, "updated");
     assert.equal(updated.publish_concurrency, 2);
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      15,
+      16,
+    );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("闲鱼同步候选支持创建、更新和热度排序", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-sort-test-"),
+  );
+  const database = new CrawlerDatabase(path.join(directory, "sort.sqlite"));
+  try {
+    const sortGames = [
+      {
+        ...discovery(130001, "排序候选 Alpha", 20),
+        createdAt: "2026-07-28T00:00:00.000Z",
+        updatedAt: "2026-07-28T00:04:00.000Z",
+      },
+      {
+        ...discovery(130002, "排序候选 Beta", 10),
+        createdAt: "2026-07-28T00:01:00.000Z",
+        updatedAt: "2026-07-28T00:03:00.000Z",
+      },
+      {
+        ...discovery(130003, "排序候选 Gamma", 1),
+        hotPage: null,
+        hotPosition: null,
+        hotRank: null,
+        createdAt: "2026-07-28T00:02:00.000Z",
+        updatedAt: "2026-07-28T00:05:00.000Z",
+      },
+    ];
+    for (const game of sortGames) {
+      database.upsertDiscoveredGames([game], game.createdAt);
+      database.saveGameSuccess(
+        game,
+        result(game.id, game.title, `https://pan.example/${game.id}`),
+        game.updatedAt,
+      );
+    }
+
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "all", "hot")
+        .map((candidate) => candidate.id),
+      [130001, 130002, 130003],
+    );
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "all", "created")
+        .map((candidate) => candidate.id),
+      [130001, 130002, 130003],
+    );
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "all", "updated")
+        .map((candidate) => candidate.id),
+      [130002, 130001, 130003],
     );
   } finally {
     database.close();
