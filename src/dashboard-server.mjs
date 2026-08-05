@@ -1569,7 +1569,7 @@ export async function startDashboardServer(
         const accepted = handlers.triggerSync("manual", mode);
         sendJson(response, 202, {
           success: true,
-          message: `${mode === "pending" ? "未发布商品" : mode === "updated" ? "已更新商品" : "全部商品"}同步任务已启动`,
+          message: `${mode === "pending" ? "未发布商品" : mode === "updated" ? "已更新商品" : "全部待处理商品"}同步任务已启动`,
           ...accepted,
         });
         return;

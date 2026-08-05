@@ -45,6 +45,34 @@ export const VALID_GAME_DATA_CONDITION = `
   )
 `;
 
+const syncModes = new Set(["all", "pending", "updated"]);
+
+function normalizeSyncMode(mode) {
+  return syncModes.has(mode) ? mode : "all";
+}
+
+function syncScopeConditions(mode) {
+  const normalizedMode = normalizeSyncMode(mode);
+  if (normalizedMode === "pending") {
+    return [
+      "games.xianyu_item_id IS NULL",
+      "publication.item_id IS NULL",
+      "COALESCE(publication.status, 'pending') NOT IN ('failed', 'publishing', 'unknown', 'success')",
+    ];
+  }
+  if (normalizedMode === "updated") {
+    return [
+      "games.last_change_type IN ('new', 'updated')",
+      "COALESCE(publication.status, 'pending') NOT IN ('publishing', 'unknown')",
+    ];
+  }
+  return [
+    "games.xianyu_item_id IS NULL",
+    "publication.item_id IS NULL",
+    "COALESCE(publication.status, 'pending') NOT IN ('publishing', 'unknown', 'success')",
+  ];
+}
+
 export function computeGameContentHash(game, downloads = []) {
   const canonicalDownloads = downloads
     .map((download) => ({
@@ -1350,24 +1378,11 @@ export class CrawlerDatabase {
   }
 
   getSyncScopeProgress(accountId, mode = "all", gameIds = null) {
-    const normalizedMode = new Set([
-      "all",
-      "pending",
-      "updated",
-    ]).has(mode)
-      ? mode
-      : "all";
-    const conditions = [VALID_GAME_DATA_CONDITION];
+    const conditions = [
+      VALID_GAME_DATA_CONDITION,
+      ...syncScopeConditions(mode),
+    ];
     const parameters = [accountId];
-    if (normalizedMode === "pending") {
-      conditions.push(
-        "games.xianyu_item_id IS NULL",
-        "publication.item_id IS NULL",
-        "COALESCE(publication.status, 'pending') != 'success'",
-      );
-    } else if (normalizedMode === "updated") {
-      conditions.push("games.last_change_type = 'updated'");
-    }
     const requestedGameIds = Array.isArray(gameIds)
       ? gameIds
           .map((gameId) => Number(gameId))
@@ -1429,6 +1444,7 @@ export class CrawlerDatabase {
 
   listSyncCandidates(accountId, limit, mode = "all") {
     const settings = this.getXianyuSyncSettings();
+    const normalizedMode = normalizeSyncMode(mode);
     const rows = this.database
       .prepare(`
         SELECT
@@ -1457,9 +1473,7 @@ export class CrawlerDatabase {
           ON publication.game_id = games.id
          AND publication.account_id = ?
         WHERE ${VALID_GAME_DATA_CONDITION}
-          AND games.xianyu_item_id IS NULL
-          AND publication.item_id IS NULL
-          AND COALESCE(publication.status, 'pending') NOT IN ('publishing', 'unknown', 'success')
+          AND ${syncScopeConditions(normalizedMode).join("\n          AND ")}
         ORDER BY
           CASE WHEN publication.status = 'failed' THEN 0 ELSE 1 END,
           COALESCE(games.last_changed_at, games.first_seen_at) ASC,
@@ -1477,13 +1491,6 @@ export class CrawlerDatabase {
          )
        ORDER BY provider, url`,
     );
-    const normalizedMode = new Set([
-      "all",
-      "pending",
-      "updated",
-    ]).has(mode)
-      ? mode
-      : "all";
     return rows
       .map((row) => {
         const downloads = downloadStatement.all(row.id);
@@ -1522,7 +1529,7 @@ export class CrawlerDatabase {
           return publicationNeedsSync;
         }
         if (normalizedMode === "updated") {
-          return row.publication_status === "success" && materialNeedsSync;
+          return materialNeedsSync || publicationNeedsSync;
         }
         return row.material_sync_status !== "skipped";
       })

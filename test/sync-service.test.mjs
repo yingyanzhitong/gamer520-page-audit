@@ -952,10 +952,10 @@ test("自定义模板用于素材、封面和卡券标题，修改后不重复�
       trigger: "test",
       mode: "updated",
     });
-    assert.equal(updated.selectedCount, 0);
+    assert.equal(updated.selectedCount, 1);
     assert.equal(updated.publishSubmitted, 0);
     assert.equal(client.publishCalls.length, 1);
-    assert.equal(client.upsertCalls.length, 1);
+    assert.equal(client.upsertCalls.length, 2);
     const verifiedDatabase = new CrawlerDatabase(databasePath);
     try {
       assert.equal(
@@ -1333,10 +1333,106 @@ test("未发布和已更新同步范围只处理对应商品", async () => {
       mode: "updated",
     });
     assert.equal(updated.mode, "updated");
-    assert.equal(updated.selectedCount, 0);
+    assert.equal(updated.selectedCount, 1);
     assert.equal(updated.publishSubmitted, 0);
     assert.equal(client.publishCalls.length, 2);
   } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("同步范围按发布结果和内容变更筛选待处理商品", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-scope-filter-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const firstAt = "2026-07-28T00:00:00.000Z";
+  const changedAt = "2026-07-29T00:00:00.000Z";
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    const games = [801, 802, 803, 804].map((id) => game(id));
+    for (const discovered of games) {
+      database.upsertDiscoveredGames([discovered], firstAt);
+      database.saveGameSuccess(
+        discovered,
+        result(discovered.id, "初始简介"),
+        firstAt,
+      );
+    }
+    database.setXianyuAccountId("account-a", firstAt);
+
+    const initialCandidates = database.listSyncCandidates(
+      "account-a",
+      20,
+      "all",
+    );
+    for (const id of [802, 803, 804]) {
+      const candidate = initialCandidates.find((item) => item.id === id);
+      database.markMaterialSynced(
+        id,
+        id * 10,
+        candidate.sync_content_hash,
+        firstAt,
+      );
+      database.markPublicationSubmitted(
+        id,
+        "account-a",
+        id * 10,
+        `batch-${id}`,
+        firstAt,
+      );
+    }
+    database.markPublicationResult({
+      gameId: 802,
+      accountId: "account-a",
+      status: "failed",
+      errorMessage: "发布失败",
+      updatedAt: firstAt,
+    });
+    for (const id of [803, 804]) {
+      database.markPublicationResult({
+        gameId: id,
+        accountId: "account-a",
+        status: "success",
+        itemId: `item-${id}`,
+        updatedAt: firstAt,
+      });
+      database.markCardBindingResult({
+        gameId: id,
+        accountId: "account-a",
+        cardId: 6,
+        status: "success",
+        updatedAt: firstAt,
+      });
+    }
+    const updatedGame = game(804);
+    database.saveGameSuccess(
+      updatedGame,
+      result(updatedGame.id, "更新后的简介"),
+      changedAt,
+    );
+
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "pending")
+        .map((candidate) => candidate.id),
+      [801],
+    );
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "all")
+        .map((candidate) => candidate.id),
+      [802, 801],
+    );
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "updated")
+        .map((candidate) => candidate.id)
+        .sort((left, right) => left - right),
+      [801, 802, 804],
+    );
+  } finally {
+    database.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });

@@ -1542,7 +1542,7 @@ function TasksPage({ notify }) {
           <CardContent className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Button variant="outline" onClick={() => runTask("sync", "all")}>
-                全部商品
+                全部待处理商品
               </Button>
               <Button
                 variant="outline"
