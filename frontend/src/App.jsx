@@ -1991,13 +1991,17 @@ function ProductConfigPage({ notify }) {
 
 function GameDetail({ gameId, open, onOpenChange }) {
   const [detail, setDetail] = useState(null);
+  const [imagePreviewFailed, setImagePreviewFailed] = useState(false);
   useEffect(() => {
     if (!open || !gameId) return;
     void api(`/api/games/${gameId}`).then(setDetail);
   }, [gameId, open]);
+  useEffect(() => {
+    setImagePreviewFailed(false);
+  }, [detail?.game?.imageUrl]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>{detail?.game?.title ?? `游戏 ${gameId}`}</DialogTitle>
           <DialogDescription>
@@ -2019,15 +2023,37 @@ function GameDetail({ gameId, open, onOpenChange }) {
           </div>
         </div>
         {detail?.game?.imageUrl ? (
-          <div className="rounded-lg border p-4">
-            <p className="text-xs text-muted-foreground">图片链接</p>
+          <div className="grid gap-4 rounded-lg border p-4 sm:grid-cols-[minmax(0,1fr)_10rem] sm:items-center">
+            <div className="min-w-0">
+              <p className="text-xs text-muted-foreground">图片链接</p>
+              <a
+                className="mt-2 block break-all text-sm text-primary hover:underline"
+                href={detail.game.imageUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {detail.game.imageUrl}
+              </a>
+            </div>
             <a
-              className="mt-2 block break-all text-sm text-primary hover:underline"
+              className="flex h-24 overflow-hidden rounded-md border bg-slate-50"
               href={detail.game.imageUrl}
               target="_blank"
               rel="noreferrer"
+              aria-label="在新标签页打开图片"
             >
-              {detail.game.imageUrl}
+              {imagePreviewFailed ? (
+                <span className="flex w-full items-center justify-center px-3 text-center text-xs text-muted-foreground">
+                  图片预览加载失败
+                </span>
+              ) : (
+                <img
+                  className="h-full w-full object-cover"
+                  src={detail.game.imageUrl}
+                  alt={`${detail.game.title} 封面预览`}
+                  onError={() => setImagePreviewFailed(true)}
+                />
+              )}
             </a>
           </div>
         ) : null}

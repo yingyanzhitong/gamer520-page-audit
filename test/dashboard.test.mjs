@@ -368,6 +368,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /缺失/);
     assert.doesNotMatch(appSource, /缺少图片或资源/);
     assert.match(appSource, /图片链接/);
+    assert.match(appSource, /图片预览加载失败/);
     assert.match(appSource, /总游戏数据/);
     assert.match(appSource, /有效游戏数据/);
     assert.match(appSource, /已同步素材库数据/);
