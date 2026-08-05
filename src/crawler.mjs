@@ -8,6 +8,7 @@ import {
   fetchSourceUpdateTimes,
   isSourceTimestampCurrent,
   launchBrowser,
+  validateImageUrl,
 } from "./playwright-extractor.mjs";
 import { isTaskTerminatedError } from "./task-control.mjs";
 import {
@@ -393,50 +394,70 @@ export async function runCrawl({
     }
 
     const detailQueue = [];
-    for (const game of queue) {
-      const refreshState = database.getGameRefreshState(game.id) ?? {};
-      if (
-        isSourceTimestampCurrent(
-          game.sourceUpdatedAt,
-          refreshState.last_scraped_at,
-        )
-      ) {
-        const checkedAt = nowIso();
-        database.markGameAttempt(game.id, checkedAt);
-        database.saveGameUnchanged(game.id, game.sourceUpdatedAt, checkedAt);
-        statistics.detailSkipped += 1;
-        log("detail_skipped_source_unchanged", {
-          runId,
-          gameId: game.id,
-          hotRank: game.hotRank,
-          sourceUpdatedAt: game.sourceUpdatedAt,
-        });
-        recordTaskLog({
-          gameId: game.id,
-          level: "warning",
-          stage: "detail",
-          action: "skipped",
-          message: `游戏 ${game.id} 来源更新时间未变化，跳过详情采集`,
-          details: {
-            title: game.title,
+    const imageValidationContext = await createCrawlerContext(browser);
+    try {
+      for (const game of queue) {
+        const refreshState = database.getGameRefreshState(game.id) ?? {};
+        if (
+          isSourceTimestampCurrent(
+            game.sourceUpdatedAt,
+            refreshState.last_scraped_at,
+          )
+        ) {
+          const checkedAt = nowIso();
+          database.markGameAttempt(game.id, checkedAt);
+          const imageAccessible = await validateImageUrl(
+            imageValidationContext,
+            refreshState.image_url,
+            game.sourceUrl,
+            config,
+          );
+          database.saveGameUnchanged(
+            game.id,
+            game.sourceUpdatedAt,
+            checkedAt,
+            imageAccessible,
+          );
+          statistics.detailSkipped += 1;
+          log("detail_skipped_source_unchanged", {
+            runId,
+            gameId: game.id,
             hotRank: game.hotRank,
             sourceUpdatedAt: game.sourceUpdatedAt,
-          },
-        });
-      } else {
-        detailQueue.push(game);
-        recordTaskLog({
-          gameId: game.id,
-          stage: "detail",
-          action: "queued",
-          message: `游戏 ${game.id} 已加入详情采集队列`,
-          details: {
-            title: game.title,
-            hotRank: game.hotRank,
-            sourceUpdatedAt: game.sourceUpdatedAt,
-          },
-        });
+            imageAccessible,
+          });
+          recordTaskLog({
+            gameId: game.id,
+            level: imageAccessible ? "warning" : "error",
+            stage: "detail",
+            action: "skipped",
+            message: imageAccessible
+              ? `游戏 ${game.id} 来源更新时间未变化，跳过详情采集`
+              : `游戏 ${game.id} 图片链接无法访问，标记为缺失`,
+            details: {
+              title: game.title,
+              hotRank: game.hotRank,
+              sourceUpdatedAt: game.sourceUpdatedAt,
+              imageAccessible,
+            },
+          });
+        } else {
+          detailQueue.push(game);
+          recordTaskLog({
+            gameId: game.id,
+            stage: "detail",
+            action: "queued",
+            message: `游戏 ${game.id} 已加入详情采集队列`,
+            details: {
+              title: game.title,
+              hotRank: game.hotRank,
+              sourceUpdatedAt: game.sourceUpdatedAt,
+            },
+          });
+        }
       }
+    } finally {
+      await imageValidationContext.close().catch(() => {});
     }
     database.updateRunProgress(runId, statistics);
 
@@ -478,10 +499,17 @@ export async function runCrawl({
               control,
             );
             if (result.unchanged) {
+              const imageAccessible = await validateImageUrl(
+                context,
+                refreshState.image_url,
+                game.sourceUrl,
+                config,
+              );
               database.saveGameUnchanged(
                 game.id,
                 result.sourceUpdatedAt,
                 nowIso(),
+                imageAccessible,
               );
               statistics.detailSkipped += 1;
               accessBlockStreak = 0;
@@ -492,18 +520,22 @@ export async function runCrawl({
                 hotRank: game.hotRank,
                 attemptCount,
                 sourceUpdatedAt: result.sourceUpdatedAt,
+                imageAccessible,
               });
               recordTaskLog({
                 gameId: game.id,
                 level: "warning",
                 stage: "detail",
                 action: "skipped",
-                message: `游戏 ${game.id} 详情更新时间未变化，保留原数据`,
+                message: imageAccessible
+                  ? `游戏 ${game.id} 详情更新时间未变化，保留原数据`
+                  : `游戏 ${game.id} 图片链接无法访问，标记为缺失`,
                 details: {
                   title: game.title,
                   workerId,
                   attemptCount,
                   sourceUpdatedAt: result.sourceUpdatedAt,
+                  imageAccessible,
                 },
               });
               database.updateRunProgress(runId, statistics);

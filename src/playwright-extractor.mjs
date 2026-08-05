@@ -187,6 +187,30 @@ function responseError(response, label) {
   return new Error(`${label}请求失败：HTTP ${status ?? "unknown"}`);
 }
 
+export async function validateImageUrl(
+  context,
+  imageUrl,
+  referer,
+  config,
+) {
+  if (!imageUrl) return false;
+  try {
+    const response = await context.request.get(imageUrl, {
+      timeout: config.navigationTimeoutMs,
+      headers: {
+        accept: "image/avif,image/webp,image/png,image/jpeg,image/*",
+        referer,
+      },
+    });
+    const contentType = String(
+      response.headers()["content-type"] ?? "",
+    ).toLowerCase();
+    return response.ok() && contentType.startsWith("image/");
+  } catch {
+    return false;
+  }
+}
+
 function normalizeSourceUpdatedAt(value, { utc = false } = {}) {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
@@ -680,6 +704,12 @@ export async function extractGame(
       ];
     });
     const image = selectImageUrl(imageCandidates, articlePage.url());
+    const imageAccessible = await validateImageUrl(
+      context,
+      image,
+      articlePage.url(),
+      config,
+    );
     const gameDescription = await extractGameDescription(articlePage);
     const resourceCodeLocator = articlePage.locator("#refurl");
     const resourceCode =
@@ -702,6 +732,7 @@ export async function extractGame(
           url: articlePage.url(),
           title,
           image,
+          imageAccessible,
           gameDescription,
           sourceUpdatedAt,
         },
@@ -750,22 +781,17 @@ export async function extractGame(
         : { downloads: [], contentText: "" };
     const downloads =
       modernDownloads.length > 0 ? modernDownloads : legacy.downloads;
+    const resolvedDownloads = downloads.filter((download) => download.url);
     const passwordText = `${archiveText || ""} ${legacy.contentText}`;
     const archivePassword =
       passwordText.match(/解压密码\s*[：:]\s*([^\s|]+)/i)?.[1] || null;
-
-    if (downloads.length === 0) {
-      throw new Error("资源详情页没有可识别的下载链接");
-    }
-    if (downloads.some((download) => !download.url)) {
-      throw new Error("至少一个下载卡片未能解析出链接");
-    }
 
     return {
       page: {
         url: articlePage.url(),
         title,
         image,
+        imageAccessible,
         gameDescription,
         sourceUpdatedAt,
       },
@@ -773,7 +799,7 @@ export async function extractGame(
         resourceCode,
         detailPageUrl: detailPage.url(),
         archivePassword,
-        downloads,
+        downloads: resolvedDownloads,
       },
     };
   } finally {

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   fetchSourceUpdateTimes,
   isSourceTimestampCurrent,
+  validateImageUrl,
 } from "../src/playwright-extractor.mjs";
 
 test("来源更新时间接口批量读取 modified_gmt 并按 UTC 标准化", async () => {
@@ -49,6 +50,51 @@ test("来源修改时间不晚于最后成功采集时间时可直接跳过", ()
     isSourceTimestampCurrent(
       "2026-07-28T04:01:00.000Z",
       "2026-07-28T04:00:00.000Z",
+    ),
+    false,
+  );
+});
+
+test("图片链接必须返回可访问的图片内容", async () => {
+  let requestOptions;
+  const context = {
+    request: {
+      async get(url, options) {
+        requestOptions = options;
+        if (url.endsWith("missing.jpg")) {
+          return {
+            ok: () => false,
+            headers: () => ({ "content-type": "text/html" }),
+          };
+        }
+        return {
+          ok: () => true,
+          headers: () => ({ "content-type": "image/webp" }),
+        };
+      },
+    },
+  };
+  const config = { navigationTimeoutMs: 30_000 };
+
+  assert.equal(
+    await validateImageUrl(
+      context,
+      "https://images.example/cover.webp",
+      "https://www.gamer520.com/118842.html",
+      config,
+    ),
+    true,
+  );
+  assert.equal(
+    requestOptions.headers.referer,
+    "https://www.gamer520.com/118842.html",
+  );
+  assert.equal(
+    await validateImageUrl(
+      context,
+      "https://images.example/missing.jpg",
+      "https://www.gamer520.com/118842.html",
+      config,
     ),
     false,
   );

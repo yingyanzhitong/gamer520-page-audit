@@ -457,6 +457,7 @@ function listGames(database, requestUrl) {
     "pending",
     "running",
     "success",
+    "missing",
     "failed",
     "updated",
   ]).has(requestedStatus)
@@ -1793,7 +1794,7 @@ export async function startDashboardServer(
             .prepare(
               `SELECT
                  games.id,
-                 CASE WHEN ${VALID_GAME_DATA_CONDITION} THEN 1 ELSE 0 END AS is_valid
+                 games.scrape_status
                FROM games
                WHERE games.id = ?`,
             )
@@ -1803,8 +1804,8 @@ export async function startDashboardServer(
           sendError(response, 404, "没有找到该游戏");
           return;
         }
-        if (!game.is_valid) {
-          sendError(response, 422, "该游戏缺少有效图片或下载资源，不能同步");
+        if (game.scrape_status !== "success") {
+          sendError(response, 422, "该游戏采集状态不是成功，不能同步");
           return;
         }
         const state = runtimeState();

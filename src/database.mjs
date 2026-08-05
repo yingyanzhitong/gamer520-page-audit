@@ -24,7 +24,36 @@ function normalizeHashValue(value) {
   return typeof value === "string" ? value.trim() : (value ?? null);
 }
 
-export const VALID_GAME_DATA_CONDITION = `
+function isHttpUrl(value) {
+  try {
+    const url = new URL(String(value ?? "").trim());
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function hasCompleteGameData({
+  title,
+  description,
+  imageUrl,
+  imageAccessible = true,
+  downloads = [],
+}) {
+  return (
+    Boolean(String(title ?? "").trim()) &&
+    Boolean(String(description ?? "").trim()) &&
+    imageAccessible &&
+    isHttpUrl(imageUrl) &&
+    downloads.some((download) => isHttpUrl(download?.url))
+  );
+}
+
+function missingGameDataError(imageAccessible) {
+  return imageAccessible ? "缺少图片或资源" : "图片链接无法访问";
+}
+
+const COMPLETE_GAME_CONTENT_CONDITION = `
   games.content_hash IS NOT NULL
   AND games.title IS NOT NULL
   AND length(trim(games.title)) > 0
@@ -43,6 +72,11 @@ export const VALID_GAME_DATA_CONDITION = `
         OR trim(downloads.url) LIKE 'https://%'
       )
   )
+`;
+
+export const VALID_GAME_DATA_CONDITION = `
+  games.scrape_status = 'success'
+  AND (${COMPLETE_GAME_CONTENT_CONDITION})
 `;
 
 const syncModes = new Set(["all", "pending", "updated"]);
@@ -336,9 +370,10 @@ export class CrawlerDatabase {
 
     this.#migrateSchema();
     this.#backfillContentHashes();
+    this.#backfillMissingGameStatuses();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 14;");
+    this.database.exec("PRAGMA user_version = 15;");
   }
 
   #migrateSchema() {
@@ -493,6 +528,19 @@ export class CrawlerDatabase {
       UPDATE xianyu_sync_runs
       SET publish_processed_count = publish_success + publish_failed
       WHERE publish_processed_count = 0;
+    `);
+  }
+
+  #backfillMissingGameStatuses() {
+    this.database.exec(`
+      UPDATE games
+      SET scrape_status = 'missing',
+          last_error = COALESCE(
+            NULLIF(last_error, ''),
+            '缺少图片或资源'
+          )
+      WHERE scrape_status = 'success'
+        AND NOT (${COMPLETE_GAME_CONTENT_CONDITION});
     `);
   }
 
@@ -897,6 +945,9 @@ export class CrawlerDatabase {
     return this.database
       .prepare(`
         SELECT
+          title,
+          description,
+          image_url,
           source_updated_at,
           last_scraped_at,
           scrape_status,
@@ -907,18 +958,47 @@ export class CrawlerDatabase {
       .get(gameId);
   }
 
-  saveGameUnchanged(gameId, sourceUpdatedAt, checkedAt) {
+  saveGameUnchanged(
+    gameId,
+    sourceUpdatedAt,
+    checkedAt,
+    imageAccessible = true,
+  ) {
+    const game = this.database
+      .prepare(`
+        SELECT title, description, image_url
+        FROM games
+        WHERE id = ?
+      `)
+      .get(gameId);
+    const downloads = this.database
+      .prepare("SELECT url FROM downloads WHERE game_id = ?")
+      .all(gameId);
+    const complete = hasCompleteGameData({
+      title: game?.title,
+      description: game?.description,
+      imageUrl: game?.image_url,
+      imageAccessible,
+      downloads,
+    });
     this.database
       .prepare(`
         UPDATE games
         SET source_updated_at = ?,
             last_attempt_at = ?,
-            scrape_status = 'success',
-            last_error = NULL,
+            scrape_status = ?,
+            last_error = ?,
             updated_at = ?
         WHERE id = ?
       `)
-      .run(sourceUpdatedAt, checkedAt, checkedAt, gameId);
+      .run(
+        sourceUpdatedAt,
+        checkedAt,
+        complete ? "success" : "missing",
+        complete ? null : missingGameDataError(imageAccessible),
+        checkedAt,
+        gameId,
+      );
   }
 
   saveGameSuccess(game, result, savedAt) {
@@ -932,6 +1012,15 @@ export class CrawlerDatabase {
         )
         .all(game.id);
       const nextDownloads = result.resource.downloads ?? [];
+      const imageAccessible = result.page.imageAccessible !== false;
+      const complete = hasCompleteGameData({
+        title: result.page.title,
+        description: result.page.gameDescription,
+        imageUrl: result.page.image,
+        imageAccessible,
+        downloads: nextDownloads,
+      });
+      const scrapeStatus = complete ? "success" : "missing";
       const nextHash = computeGameContentHash(
         {
           title: result.page.title,
@@ -970,8 +1059,8 @@ export class CrawlerDatabase {
               last_scraped_at = ?,
               last_attempt_at = ?,
               source_updated_at = ?,
-              scrape_status = 'success',
-              last_error = NULL,
+              scrape_status = ?,
+              last_error = ?,
               content_hash = ?,
               last_change_type = ?,
               last_changed_at = ?,
@@ -989,6 +1078,8 @@ export class CrawlerDatabase {
           savedAt,
           savedAt,
           result.page.sourceUpdatedAt ?? null,
+          scrapeStatus,
+          complete ? null : missingGameDataError(imageAccessible),
           nextHash,
           changeType,
           changedAt,
@@ -1028,7 +1119,7 @@ export class CrawlerDatabase {
         );
       }
 
-      if (nextDownloads.length > 0) {
+      if (scrapeStatus === "success") {
         this.database
           .prepare(`
             INSERT INTO xianyu_material_sync (
@@ -1052,7 +1143,10 @@ export class CrawlerDatabase {
               updated_at = excluded.updated_at
           `)
           .run(game.id, savedAt, nextHash, nextHash);
-      } else if (previousDownloads.length > 0) {
+      } else if (
+        previousDownloads.length > 0 &&
+        nextDownloads.length === 0
+      ) {
         this.database
           .prepare(`
             INSERT INTO xianyu_material_sync (

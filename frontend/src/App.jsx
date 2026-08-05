@@ -95,6 +95,7 @@ const statusLabels = {
   running: "运行中",
   publishing: "发布中",
   success: "成功",
+  missing: "缺失",
   failed: "失败",
   partial: "部分完成",
   interrupted: "已中断",
@@ -2193,6 +2194,7 @@ function GamesPage({ notify }) {
               <option value="all">全部采集状态</option>
               <option value="success">采集成功</option>
               <option value="updated">已更新</option>
+              <option value="missing">缺失</option>
               <option value="failed">采集失败</option>
             </Select>
             <Select
@@ -2264,12 +2266,6 @@ function GamesPage({ notify }) {
                       <span className="font-data mt-1 block text-[10px] text-muted-foreground">
                         ID {game.id} · 热度 {game.hotRank ?? "—"}
                       </span>
-                      <Badge
-                        tone={game.isValid ? "success" : "warning"}
-                        className="mt-2"
-                      >
-                        {game.isValid ? "可同步" : "缺少图片或资源"}
-                      </Badge>
                     </button>
                   </TableCell>
                   <TableCell>{game.downloadCount} 个</TableCell>
@@ -2279,7 +2275,9 @@ function GamesPage({ notify }) {
                   <TableCell>
                     <StatusBadge
                       status={
-                        game.lastChangeType === "updated"
+                        game.scrapeStatus === "missing"
+                          ? "missing"
+                          : game.lastChangeType === "updated"
                           ? "updated"
                           : game.scrapeStatus
                       }
@@ -2306,11 +2304,14 @@ function GamesPage({ notify }) {
                       </Button>
                       <Button
                         size="sm"
-                        disabled={!game.isValid || syncingGameId === game.id}
+                        disabled={
+                          game.scrapeStatus !== "success" ||
+                          syncingGameId === game.id
+                        }
                         title={
-                          game.isValid
+                          game.scrapeStatus === "success"
                             ? "同步此游戏"
-                            : "缺少有效图片或下载资源，不能同步"
+                            : "仅采集成功的游戏可以同步"
                         }
                         onClick={() => syncGame(game.id)}
                       >

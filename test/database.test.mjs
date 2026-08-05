@@ -448,6 +448,79 @@ test("下载源消失时记录告警且不改动已发布商品", () => {
   }
 });
 
+test("缺少图片或资源时采集状态标记为缺失", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-db-missing-data-test-"),
+  );
+  const database = new CrawlerDatabase(
+    path.join(directory, "test.sqlite"),
+  );
+  try {
+    const timestamp = "2026-08-05T00:00:00.000Z";
+    const imageMissing = discovery(118902, "图片不可用", 1);
+    const resourceMissing = discovery(118903, "资源缺失", 2);
+    database.upsertDiscoveredGames([imageMissing, resourceMissing], timestamp);
+
+    const inaccessibleImage = result(
+      imageMissing.id,
+      "图片不可用",
+      "https://pan.example/image-missing",
+    );
+    inaccessibleImage.page.imageAccessible = false;
+    database.saveGameSuccess(imageMissing, inaccessibleImage, timestamp);
+
+    const noResources = result(
+      resourceMissing.id,
+      "资源缺失",
+      "https://pan.example/resource-missing",
+    );
+    noResources.resource.downloads = [];
+    database.saveGameSuccess(resourceMissing, noResources, timestamp);
+
+    assert.deepEqual(
+      {
+        ...database.queryOne(
+          "SELECT scrape_status, last_error FROM games WHERE id = ?",
+          imageMissing.id,
+        ),
+      },
+      {
+        scrape_status: "missing",
+        last_error: "图片链接无法访问",
+      },
+    );
+    assert.deepEqual(
+      {
+        ...database.queryOne(
+          "SELECT scrape_status, last_error FROM games WHERE id = ?",
+          resourceMissing.id,
+        ),
+      },
+      {
+        scrape_status: "missing",
+        last_error: "缺少图片或资源",
+      },
+    );
+
+    database.saveGameUnchanged(
+      imageMissing.id,
+      "2026-08-05T00:00:00.000Z",
+      "2026-08-05T01:00:00.000Z",
+      true,
+    );
+    assert.equal(
+      database.queryOne(
+        "SELECT scrape_status FROM games WHERE id = ?",
+        imageMissing.id,
+      ).scrape_status,
+      "success",
+    );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("任务调度设置写入单例配置并覆盖更新", () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-schedule-test-"),
@@ -508,7 +581,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.publish_concurrency, 2);
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      14,
+      15,
     );
   } finally {
     database.close();

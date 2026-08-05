@@ -364,6 +364,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /发布成功/);
     assert.match(appSource, /同步闲鱼商品/);
     assert.doesNotMatch(appSource, /更新素材库/);
+    assert.match(appSource, /缺失/);
+    assert.doesNotMatch(appSource, /缺少图片或资源/);
     assert.match(appSource, /图片链接/);
     assert.match(appSource, /总游戏数据/);
     assert.match(appSource, /有效游戏数据/);
@@ -887,6 +889,23 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       mode: "all",
       options: { gameIds: [118842] },
     });
+
+    const missingGameSync = await fetch(
+      `${baseUrl}/api/games/118843/sync`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({}),
+      },
+    );
+    assert.equal(missingGameSync.status, 422);
+    assert.match(
+      (await missingGameSync.json()).error,
+      /采集状态不是成功/,
+    );
 
     const selectedSync = await fetch(
       `${baseUrl}/api/games/sync-selected`,
