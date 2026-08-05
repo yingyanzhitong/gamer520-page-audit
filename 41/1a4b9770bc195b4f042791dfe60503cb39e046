@@ -1,0 +1,53 @@
+package.json
+  s_d9b1981bec2587::t_21790c27c9b410 3
+test/sync-service.test.mjs
+  s_d9b1981bec2587::t_916242c01b16a9 1098-1099
+  s_d9b1981bec2587::t_314468f95fc3b7 1038-1097,1100-1104
+public/index.html
+  s_d9b1981bec2587::t_16a731c2310c40 12-13
+src/dashboard-server.mjs
+  s_d9b1981bec2587::t_ebc7b16de86cce 468-471,521-530,556,566
+  s_d9b1981bec2587::t_9eb2e0f3b001ce 1103,1110-1126
+CHANGELOG.md
+  s_d9b1981bec2587::t_21790c27c9b410 3-8
+frontend/src/App.jsx
+  s_d9b1981bec2587::t_ebc7b16de86cce 2138,2152,2155,2202,2240-2250
+  s_d9b1981bec2587::t_5316e20d58b437 2040,2043
+  s_d9b1981bec2587::t_9eb2e0f3b001ce 2052
+src/database.mjs
+  s_d9b1981bec2587::t_9eb2e0f3b001ce 1011-1023
+src/cover-cache.mjs
+  s_d9b1981bec2587::t_9eb2e0f3b001ce 52,99,103-104,106
+  s_d9b1981bec2587::t_ecd87df7fdafed 105
+src/sync-service.mjs
+  s_d9b1981bec2587::t_9eb2e0f3b001ce 556,708-719
+public/assets/index-B32VLZia.css
+  s_d9b1981bec2587::t_16a731c2310c40 1
+test/dashboard.test.mjs
+  s_d9b1981bec2587::t_081998286de591 367-369,631-730
+public/assets/index-DYyihL0B.js
+  s_d9b1981bec2587::t_16a731c2310c40 8-9,49
+test/cover-cache.test.mjs
+  s_d9b1981bec2587::t_9eb2e0f3b001ce 27,30,46,62
+package-lock.json
+  s_d9b1981bec2587::t_66b2268595f753 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "411a4b9770bc195b4f042791dfe60503cb39e046",
+  "prompts": {},
+  "logical_commit_id": "411a4b9770bc195b4f042791dfe60503cb39e046",
+  "sessions": {
+    "s_d9b1981bec2587": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd025-d578-7041-b3bb-0fe31bbe849c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 1720,
+      "total_deletions": 186
+    }
+  }
+}
