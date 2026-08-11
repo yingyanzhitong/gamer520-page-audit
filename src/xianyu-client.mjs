@@ -94,6 +94,25 @@ export class XianyuClient {
     return payload?.data?.items ?? [];
   }
 
+  async listMaterials({ signal = null } = {}) {
+    const materials = [];
+    let page = 1;
+    let totalPages = 1;
+    while (page <= totalPages) {
+      const payload = await this.request(
+        `/api/v1/product-publish/materials?page=${page}&page_size=1000`,
+        { signal },
+      );
+      const data = payload?.data ?? {};
+      const items = Array.isArray(data.list) ? data.list : [];
+      materials.push(...items);
+      totalPages = Math.max(1, Number(data.total_pages) || 1);
+      if (items.length === 0) break;
+      page += 1;
+    }
+    return materials;
+  }
+
   async publishBatch(
     { accountId, materialIds, requestId },
     { signal = null } = {},

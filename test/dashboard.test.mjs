@@ -284,6 +284,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
             publishLimit: settings.publishLimit,
             nextRun: "2026-07-29T16:15:00.000Z",
             mode: settings.syncMode,
+            gameIds: settings.syncGameIds,
           },
         };
       },
@@ -935,7 +936,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           sync: {
             cron_schedule: "15 */8 * * *",
             enabled: true,
-            mode: "updated",
+            mode: "selected-force",
+            selected_game_ids: [118842],
             material_concurrency: 6,
             publish_batch_size: 8,
             publish_limit: 42,
@@ -948,7 +950,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(savedSchedule.crawlEnabled, false);
     assert.equal(savedSchedule.crawlConcurrency, 5);
     assert.equal(savedSchedule.syncCronSchedule, "15 */8 * * *");
-    assert.equal(savedSchedule.syncMode, "updated");
+    assert.equal(savedSchedule.syncMode, "selected-force");
+    assert.deepEqual(savedSchedule.syncGameIds, [118842]);
     assert.equal(savedSchedule.materialConcurrency, 6);
     assert.equal(savedSchedule.publishBatchSize, 8);
     assert.equal(savedSchedule.publishLimit, 42);

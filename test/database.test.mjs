@@ -537,6 +537,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         syncCronSchedule: "0 */6 * * *",
         syncEnabled: true,
         syncMode: "all",
+        syncGameIds: [],
         crawlConcurrency: 3,
         materialConcurrency: 4,
         publishBatchSize: 20,
@@ -549,6 +550,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(initial.crawl_cron_schedule, "0 3 * * *");
     assert.equal(initial.sync_enabled, 1);
     assert.equal(initial.sync_mode, "all");
+    assert.equal(initial.sync_game_ids, "[]");
     assert.equal(initial.crawl_concurrency, 3);
     assert.equal(initial.material_concurrency, 4);
     assert.equal(initial.publish_batch_size, 20);
@@ -564,6 +566,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         syncCronSchedule: "15 */8 * * *",
         syncEnabled: true,
         syncMode: "updated",
+        syncGameIds: [118842],
         crawlConcurrency: 5,
         materialConcurrency: 6,
         publishBatchSize: 8,
@@ -577,6 +580,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.crawl_enabled, 0);
     assert.equal(updated.sync_cron_schedule, "15 */8 * * *");
     assert.equal(updated.sync_mode, "updated");
+    assert.equal(updated.sync_game_ids, "[118842]");
     assert.equal(updated.crawl_concurrency, 5);
     assert.equal(updated.material_concurrency, 6);
     assert.equal(updated.publish_batch_size, 8);
@@ -585,7 +589,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.publish_concurrency, 2);
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      16,
+      17,
     );
   } finally {
     database.close();

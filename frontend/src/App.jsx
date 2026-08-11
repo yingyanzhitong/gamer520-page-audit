@@ -1022,13 +1022,24 @@ function TaskProgress({ schedule, crawlRun, onViewLogs }) {
   );
 }
 
-function SelectedGamesDialog({ open, onOpenChange, notify, onStarted }) {
+function SelectedGamesDialog({
+  open,
+  onOpenChange,
+  notify,
+  onStarted,
+  initialGameIds = [],
+  onSelected = null,
+}) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [data, setData] = useState({ items: [], total: 0, pageCount: 1 });
   const [selectedGameIds, setSelectedGameIds] = useState(() => new Set());
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const initialSelectionKey = Array.isArray(initialGameIds)
+    ? initialGameIds.join(",")
+    : "";
+  const isScheduleSelection = typeof onSelected === "function";
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1048,8 +1059,10 @@ function SelectedGamesDialog({ open, onOpenChange, notify, onStarted }) {
   }, [page, query, notify]);
 
   useEffect(() => {
-    if (open) void load();
-  }, [open, load]);
+    if (!open) return;
+    setSelectedGameIds(new Set(initialGameIds));
+    void load();
+  }, [open, load, initialSelectionKey]);
 
   const currentPageGameIds = useMemo(
     () => data.items.map((game) => game.id),
@@ -1092,6 +1105,11 @@ function SelectedGamesDialog({ open, onOpenChange, notify, onStarted }) {
   async function syncSelectedGames() {
     const gameIds = [...selectedGameIds];
     if (!gameIds.length) return;
+    if (isScheduleSelection) {
+      onSelected(gameIds);
+      closeDialog();
+      return;
+    }
     setSyncing(true);
     try {
       const result = await api("/api/games/sync-selected", {
@@ -1118,9 +1136,13 @@ function SelectedGamesDialog({ open, onOpenChange, notify, onStarted }) {
     >
       <DialogContent className="max-w-4xl">
         <DialogHeader>
-          <DialogTitle>选择有效游戏同步</DialogTitle>
+          <DialogTitle>
+            {isScheduleSelection ? "选择定时强制发布游戏" : "选择有效游戏同步"}
+          </DialogTitle>
           <DialogDescription>
-            仅显示同时具备有效图片链接和下载资源的游戏，可跨页累计选择。
+            {isScheduleSelection
+              ? "仅显示同时具备有效图片链接和下载资源的游戏。定时执行时会先查询闲鱼实际商品，已存在的商品不会重复发布。"
+              : "仅显示同时具备有效图片链接和下载资源的游戏，可跨页累计选择。"}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1242,9 +1264,11 @@ function SelectedGamesDialog({ open, onOpenChange, notify, onStarted }) {
               {syncing ? (
                 <LoaderCircle className="h-4 w-4 animate-spin" />
               ) : (
-                <Play className="h-4 w-4" />
+                isScheduleSelection ? <Check className="h-4 w-4" /> : <Play className="h-4 w-4" />
               )}
-              同步所选 {selectedGameIds.size} 个
+              {isScheduleSelection
+                ? `保存所选 ${selectedGameIds.size} 个`
+                : `同步所选 ${selectedGameIds.size} 个`}
             </Button>
           </div>
         </div>
@@ -1261,6 +1285,7 @@ function TasksPage({ notify }) {
   const [logTask, setLogTask] = useState(null);
   const [controlAction, setControlAction] = useState(null);
   const [selectedGamesOpen, setSelectedGamesOpen] = useState(false);
+  const [scheduledGamesOpen, setScheduledGamesOpen] = useState(false);
   const scheduleDirtyRef = useRef(false);
   const scheduleRevisionRef = useRef(0);
 
@@ -1312,6 +1337,7 @@ function TasksPage({ notify }) {
             ),
             publish_limit: Number(schedule.sync.publishLimit),
             sort: schedule.sync.sort,
+            selected_game_ids: schedule.sync.gameIds ?? [],
           },
         }),
       });
@@ -1467,7 +1493,28 @@ function TasksPage({ notify }) {
                       <option value="pending">未发布商品</option>
                       <option value="all">全部待处理商品</option>
                       <option value="updated">已更新商品</option>
+                      <option value="selected-force">自选游戏强制发布</option>
                     </Select>
+                    {schedule?.sync?.mode === "selected-force" ? (
+                      <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <Label>定时自选游戏</Label>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              已选 {schedule?.sync?.gameIds?.length ?? 0} 个。每次执行会先刷新闲鱼实际商品列表；仅在未找到对应商品时发布。
+                            </p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setScheduledGamesOpen(true)}
+                          >
+                            <Check className="h-4 w-4" />
+                            选择游戏
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="space-y-2">
                       <Label>同步排序</Label>
                       <Select
@@ -1748,6 +1795,17 @@ function TasksPage({ notify }) {
         onOpenChange={setSelectedGamesOpen}
         notify={notify}
         onStarted={load}
+      />
+      <SelectedGamesDialog
+        open={scheduledGamesOpen}
+        onOpenChange={setScheduledGamesOpen}
+        notify={notify}
+        onStarted={load}
+        initialGameIds={schedule?.sync?.gameIds ?? []}
+        onSelected={(gameIds) => {
+          updateSchedule(["sync", "gameIds"], gameIds);
+          notify("定时自选游戏已更新，请保存定时配置");
+        }}
       />
       <TaskLogDialog
         task={logTask}
@@ -2194,7 +2252,7 @@ function GamesPage({ notify }) {
         body: jsonBody({}),
       });
       notify(
-        `闲鱼商品核对完成：确认发布 ${result.confirmedCount} 个（名称匹配 ${result.titleMatchedCount} 个），回退素材库 ${result.materialFallbackCount} 个`,
+        `闲鱼状态核对完成：素材确认 ${result.materialConfirmedCount ?? 0} 个，失效 ${result.materialResetCount ?? 0} 个；商品确认发布 ${result.confirmedCount} 个（名称匹配 ${result.titleMatchedCount} 个），回退素材库 ${result.materialFallbackCount} 个`,
       );
       await load();
     } catch (caught) {

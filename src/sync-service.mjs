@@ -12,7 +12,7 @@ import {
 
 export { buildListingDescription };
 
-const syncModes = new Set(["all", "pending", "updated"]);
+const syncModes = new Set(["all", "pending", "updated", "selected-force"]);
 const deliveryCardId = 6;
 export const materialSyncConcurrency = 4;
 export const publishBatchSize = 20;
@@ -72,6 +72,21 @@ function titleMatchScore(listingTitle, itemTitle) {
     commonPrefix += 1;
   }
   return commonPrefix >= 12 ? commonPrefix : 0;
+}
+
+function matchingAccountItem(candidate, accountItems, listingFor) {
+  const listingTitle = listingFor(candidate).title;
+  const normalizedListingTitle = normalizedTitle(listingTitle);
+  return (accountItems ?? []).find((item) => {
+    const itemTitle = item?.item_title ?? item?.title;
+    const normalizedItemTitle = normalizedTitle(itemTitle);
+    return (
+      normalizedListingTitle &&
+      normalizedItemTitle &&
+      (normalizedListingTitle === normalizedItemTitle ||
+        titleMatchScore(listingTitle, itemTitle) > 0)
+    );
+  });
 }
 
 function matchNewPublishedItems(
@@ -155,10 +170,16 @@ export class XianyuSyncService {
         throw error;
       }
       await this.validateAccount(accountId, { signal });
+      const materials = await this.client.listMaterials({ signal });
+      const materialState = database.reconcileRemoteMaterials(
+        materials,
+        nowIso(),
+      );
       await this.client.refreshAccountItems(accountId, { signal });
       const items = await this.client.listAccountItems(accountId, { signal });
       return {
         accountId,
+        ...materialState,
         ...database.reconcileAccountPublishedItems(
           accountId,
           items,
@@ -190,7 +211,17 @@ export class XianyuSyncService {
     onProgress = () => {},
   } = {}) {
     if (!syncModes.has(mode)) {
-      const error = new Error("同步范围必须是 all、pending 或 updated");
+      const error = new Error(
+        "同步范围必须是 all、pending、updated 或 selected-force",
+      );
+      error.statusCode = 422;
+      throw error;
+    }
+    if (
+      mode === "selected-force" &&
+      (!Array.isArray(gameIds) || gameIds.length === 0)
+    ) {
+      const error = new Error("自选游戏强制发布至少需要选择一个游戏");
       error.statusCode = 422;
       throw error;
     }
@@ -358,6 +389,43 @@ export class XianyuSyncService {
       });
       return knownAccountItems;
     };
+    const synchronizeRemoteState = async () => {
+      recordTaskLog({
+        stage: "preflight",
+        action: "list-materials",
+        message: "正在读取闲鱼素材库并同步本地素材状态",
+      });
+      const remoteMaterials = await this.client.listMaterials({
+        signal: control?.signal,
+      });
+      await control?.checkpoint();
+      const materialState = database.reconcileRemoteMaterials(
+        remoteMaterials,
+        nowIso(),
+      );
+      recordTaskLog({
+        level: "success",
+        stage: "preflight",
+        action: "materials-synchronized",
+        message: `闲鱼素材库核对完成：确认 ${materialState.materialConfirmedCount} 个，新增关联 ${materialState.materialImportedCount} 个，已清除失效素材 ${materialState.materialResetCount} 个`,
+        details: materialState,
+      });
+      await refreshAccountItems();
+      const publicationState = database.reconcileAccountPublishedItems(
+        accountId,
+        knownAccountItems,
+        nowIso(),
+        { titleForGame: listingFor },
+      );
+      recordTaskLog({
+        level: "success",
+        stage: "preflight",
+        action: "items-synchronized",
+        message: `闲鱼商品管理核对完成：确认发布 ${publicationState.confirmedCount} 个，回退素材库 ${publicationState.materialFallbackCount} 个`,
+        details: publicationState,
+      });
+      return { materialState, publicationState };
+    };
     const bindDeliveryCard = async (candidate, itemId) => {
       await control?.checkpoint();
       reportProgress({
@@ -472,6 +540,8 @@ export class XianyuSyncService {
         },
       });
       await control?.checkpoint();
+      await synchronizeRemoteState();
+      await control?.checkpoint();
       candidates = database.listSyncCandidates(
         accountId,
         100_000,
@@ -487,6 +557,40 @@ export class XianyuSyncService {
         candidates = candidates.filter((candidate) =>
           requestedGameIds.has(candidate.id),
         );
+      }
+      let actualPublishedSkipped = 0;
+      if (mode === "selected-force") {
+        const missingCandidates = [];
+        const existingItems = [];
+        for (const candidate of candidates) {
+          const existingItem = matchingAccountItem(
+            candidate,
+            knownAccountItems,
+            listingFor,
+          );
+          if (existingItem) {
+            actualPublishedSkipped += 1;
+            existingItems.push({
+              gameId: candidate.id,
+              itemId: String(
+                existingItem.item_id ?? existingItem.id ?? "",
+              ).trim() || null,
+            });
+          } else {
+            missingCandidates.push(candidate);
+          }
+        }
+        candidates = missingCandidates;
+        recordTaskLog({
+          level: "success",
+          stage: "selection",
+          action: "verified-account-items",
+          message: `已通过闲鱼实际商品列表核验：${actualPublishedSkipped} 个自选游戏仍在售，${candidates.length} 个需要发布`,
+          details: {
+            accountItemCount: knownAccountItems.length,
+            existingItems,
+          },
+        });
       }
       scopeProgress = database.getSyncScopeProgress(
         accountId,
@@ -507,6 +611,7 @@ export class XianyuSyncService {
           existingMaterialCount: scopeProgress.materialCompleted,
           existingPublishedCount: scopeProgress.publishCompleted,
           existingPublishSkippedCount: scopeProgress.publishSkipped,
+          actualPublishedSkipped,
           publishSuccessLimit: resolvedPublishLimit || null,
           candidateSort: resolvedCandidateSort,
         },
@@ -1296,8 +1401,9 @@ export class XianyuSyncService {
         totals.material_skipped += actionCounts.skipped;
 
         if (
-          candidate.publication_status === "success" ||
-          result.action === "skipped"
+          mode !== "selected-force" &&
+          (candidate.publication_status === "success" ||
+            result.action === "skipped")
         ) {
           recordTaskLog({
             gameId: candidate.id,

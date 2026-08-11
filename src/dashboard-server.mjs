@@ -210,8 +210,14 @@ function stockQuantity(value) {
 
 function syncMode(value, fallback = "all") {
   const normalized = String(value ?? fallback).trim();
-  if (!new Set(["all", "pending", "updated"]).has(normalized)) {
-    const error = new Error("同步范围必须是 all、pending 或 updated");
+  if (
+    !new Set(["all", "pending", "updated", "selected-force"]).has(
+      normalized,
+    )
+  ) {
+    const error = new Error(
+      "同步范围必须是 all、pending、updated 或 selected-force",
+    );
     error.statusCode = 422;
     throw error;
   }
@@ -1395,6 +1401,7 @@ export async function startDashboardServer(
             enabled: Boolean(state.sync?.enabled),
             cronSchedule: state.sync?.cronSchedule,
             mode: state.sync?.mode ?? "all",
+            gameIds: state.sync?.gameIds ?? [],
             nextRun: state.sync?.nextRun ?? null,
             active: Boolean(state.sync?.active),
             interrupted: Boolean(state.sync?.interrupted),
@@ -1438,6 +1445,7 @@ export async function startDashboardServer(
           syncCronSchedule: body.sync?.cron_schedule,
           syncEnabled: body.sync?.enabled,
           syncMode: syncMode(body.sync?.mode),
+          syncGameIds: body.sync?.selected_game_ids,
           materialConcurrency: body.sync?.material_concurrency,
           publishBatchSize: body.sync?.publish_batch_size,
           publishLimit: body.sync?.publish_limit,
@@ -1498,7 +1506,7 @@ export async function startDashboardServer(
         const result = await handlers.syncXianyuPublishedItems();
         sendJson(response, 200, {
           success: true,
-          message: `闲鱼商品核对完成：确认发布 ${result.confirmedCount} 个（名称匹配 ${result.titleMatchedCount} 个），回退素材库 ${result.materialFallbackCount} 个`,
+          message: `闲鱼状态核对完成：素材确认 ${result.materialConfirmedCount ?? 0} 个，失效 ${result.materialResetCount ?? 0} 个；商品确认发布 ${result.confirmedCount} 个（名称匹配 ${result.titleMatchedCount} 个），回退素材库 ${result.materialFallbackCount} 个`,
           ...result,
         });
         return;
@@ -1623,10 +1631,24 @@ export async function startDashboardServer(
           return;
         }
         const mode = syncMode(body.mode);
-        const accepted = handlers.triggerSync("manual", mode);
+        if (
+          mode === "selected-force" &&
+          (!Array.isArray(state.sync?.gameIds) ||
+            state.sync.gameIds.length === 0)
+        ) {
+          sendError(response, 422, "请先配置至少一个自选游戏");
+          return;
+        }
+        const accepted = handlers.triggerSync(
+          "manual",
+          mode,
+          mode === "selected-force"
+            ? { gameIds: state.sync.gameIds }
+            : {},
+        );
         sendJson(response, 202, {
           success: true,
-          message: `${mode === "pending" ? "未发布商品" : mode === "updated" ? "已更新商品" : "全部待处理商品"}同步任务已启动`,
+          message: `${mode === "pending" ? "未发布商品" : mode === "updated" ? "已更新商品" : mode === "selected-force" ? "自选游戏强制发布" : "全部待处理商品"}同步任务已启动`,
           ...accepted,
         });
         return;

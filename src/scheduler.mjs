@@ -27,6 +27,45 @@ let syncJob = null;
 let schedulerSettings;
 let syncService;
 
+function parseSyncGameIds(value) {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  return [
+    ...new Set(
+      parsed
+        .map((gameId) => Number(gameId))
+        .filter((gameId) => Number.isSafeInteger(gameId) && gameId > 0),
+    ),
+  ];
+}
+
+function syncGameIdsValue(value) {
+  if (!Array.isArray(value)) {
+    const error = new Error("自选游戏必须是游戏 ID 数组");
+    error.statusCode = 422;
+    throw error;
+  }
+  const gameIds = parseSyncGameIds(value);
+  if (gameIds.length !== value.length) {
+    const error = new Error("自选游戏 ID 必须是正整数");
+    error.statusCode = 422;
+    throw error;
+  }
+  if (gameIds.length > 1_000) {
+    const error = new Error("自选游戏最多 1000 个");
+    error.statusCode = 422;
+    throw error;
+  }
+  return gameIds;
+}
+
 function log(event, fields = {}) {
   console.log(
     JSON.stringify({
@@ -45,6 +84,7 @@ function settingsFromRow(row) {
     syncCronSchedule: row.sync_cron_schedule,
     syncEnabled: Boolean(row.sync_enabled),
     syncMode: row.sync_mode ?? "all",
+    syncGameIds: parseSyncGameIds(row.sync_game_ids),
     crawlConcurrency: Number(row.crawl_concurrency),
     materialConcurrency: Number(row.material_concurrency),
     publishBatchSize: Number(row.publish_batch_size),
@@ -93,6 +133,9 @@ function normalizeScheduleSettings(input) {
     syncCronSchedule: String(input.syncCronSchedule ?? "").trim(),
     syncEnabled: input.syncEnabled,
     syncMode: String(input.syncMode ?? "").trim(),
+    syncGameIds: syncGameIdsValue(
+      input.syncGameIds ?? schedulerSettings?.syncGameIds ?? [],
+    ),
     crawlConcurrency: concurrencyValue(
       input.crawlConcurrency,
       "采集并行数",
@@ -125,8 +168,22 @@ function normalizeScheduleSettings(input) {
     error.statusCode = 422;
     throw error;
   }
-  if (!new Set(["all", "pending", "updated"]).has(normalized.syncMode)) {
-    const error = new Error("定时同步范围必须是 all、pending 或 updated");
+  if (
+    !new Set(["all", "pending", "updated", "selected-force"]).has(
+      normalized.syncMode,
+    )
+  ) {
+    const error = new Error(
+      "定时同步范围必须是 all、pending、updated 或 selected-force",
+    );
+    error.statusCode = 422;
+    throw error;
+  }
+  if (
+    normalized.syncMode === "selected-force" &&
+    normalized.syncGameIds.length === 0
+  ) {
+    const error = new Error("自选游戏强制发布至少需要选择一个游戏");
     error.statusCode = 422;
     throw error;
   }
@@ -224,6 +281,10 @@ function triggerSync(
   mode = schedulerSettings.syncMode,
   options = {},
 ) {
+  const resolvedOptions =
+    mode === "selected-force" && !Array.isArray(options.gameIds)
+      ? { ...options, gameIds: schedulerSettings.syncGameIds }
+      : options;
   if (
     stopping ||
     (reason.startsWith("schedule") && !schedulerSettings.syncEnabled)
@@ -263,7 +324,7 @@ function triggerSync(
     .run({
       trigger: reason,
       mode,
-      gameIds: options.gameIds ?? null,
+      gameIds: resolvedOptions.gameIds ?? null,
       control,
       materialConcurrency: schedulerSettings.materialConcurrency,
       publishBatchSize: schedulerSettings.publishBatchSize,
@@ -495,6 +556,7 @@ function scheduleRuntime() {
       publishLimit: schedulerSettings.publishLimit,
       sort: schedulerSettings.syncSort,
       mode: schedulerSettings.syncMode,
+      gameIds: schedulerSettings.syncGameIds,
       progress: syncProgress,
     },
   };
@@ -517,6 +579,7 @@ schedulerSettings = settingsFromRow(
       syncCronSchedule: config.syncCronSchedule,
       syncEnabled: config.syncEnabled,
       syncMode: "all",
+      syncGameIds: [],
       crawlConcurrency: config.detailConcurrency,
       materialConcurrency: materialSyncConcurrency,
       publishBatchSize,

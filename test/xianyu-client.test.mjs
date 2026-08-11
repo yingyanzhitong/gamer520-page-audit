@@ -30,6 +30,53 @@ test("刷新账号商品使用闲鱼允许的每页 20 条", async () => {
   });
 });
 
+test("素材库查询按 1000 条分页读取全部素材", async () => {
+  const originalFetch = globalThis.fetch;
+  const requestUrls = [];
+  globalThis.fetch = async (url) => {
+    requestUrls.push(String(url));
+    const page = new URL(String(url)).searchParams.get("page");
+    const payload =
+      page === "1"
+        ? {
+            success: true,
+            data: {
+              list: [{ id: 1, source_item_id: "101" }],
+              total_pages: 2,
+            },
+          }
+        : {
+            success: true,
+            data: {
+              list: [{ id: 2, source_item_id: "102" }],
+              total_pages: 2,
+            },
+          };
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const client = new XianyuClient({
+      baseUrl: "https://xianyu.example",
+      apiKey: "test-key",
+    });
+    assert.deepEqual(await client.listMaterials(), [
+      { id: 1, source_item_id: "101" },
+      { id: 2, source_item_id: "102" },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(requestUrls, [
+    "https://xianyu.example/api/v1/product-publish/materials?page=1&page_size=1000",
+    "https://xianyu.example/api/v1/product-publish/materials?page=2&page_size=1000",
+  ]);
+});
+
 test("单商品发布使用同步接口并透传素材内容", async () => {
   const originalFetch = globalThis.fetch;
   let requestUrl;
