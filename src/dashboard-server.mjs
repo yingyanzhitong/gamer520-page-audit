@@ -42,7 +42,13 @@ const contentTypes = new Map([
 const xianyuStatusExpression = `
   CASE
     WHEN publication.status = 'success' THEN 'published'
-    WHEN games.xianyu_item_id IS NOT NULL
+    WHEN (
+      games.xianyu_item_id IS NOT NULL
+      AND (
+        games.xianyu_account_id IS NULL
+        OR games.xianyu_account_id = settings.account_id
+      )
+    )
       OR publication.item_id IS NOT NULL
       OR publication.status IN ('publishing', 'unknown')
     THEN 'publishing'

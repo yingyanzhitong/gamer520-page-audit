@@ -2059,10 +2059,6 @@ export class CrawlerDatabase {
          AND publication.account_id = ?
         LEFT JOIN xianyu_material_sync AS material
           ON material.game_id = games.id
-        WHERE games.xianyu_item_id IS NOT NULL
-           OR publication.item_id IS NOT NULL
-           OR publication.status IN ('publishing', 'unknown')
-           OR material.material_id IS NOT NULL
       `)
       .all(accountId);
     const upsertPublication = this.database.prepare(`

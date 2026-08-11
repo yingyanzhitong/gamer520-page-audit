@@ -632,6 +632,33 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       ),
     );
 
+    const otherAccountDatabase = new CrawlerDatabase(databasePath);
+    otherAccountDatabase.database
+      .prepare(`
+        UPDATE games
+        SET xianyu_item_id = ?, xianyu_account_id = ?
+        WHERE id = ?
+      `)
+      .run("item-from-other-account", "account-b", game.id);
+    otherAccountDatabase.close();
+    const currentAccountNoneGames = await fetch(
+      `${baseUrl}/api/games?xianyuStatus=none`,
+    ).then((response) => response.json());
+    assert.ok(
+      currentAccountNoneGames.items.some(
+        (item) => item.id === game.id && item.xianyuStatus === "none",
+      ),
+    );
+    const clearOtherAccountDatabase = new CrawlerDatabase(databasePath);
+    clearOtherAccountDatabase.database
+      .prepare(`
+        UPDATE games
+        SET xianyu_item_id = NULL, xianyu_account_id = NULL
+        WHERE id = ?
+      `)
+      .run(game.id);
+    clearOtherAccountDatabase.close();
+
     const sortDatabase = new CrawlerDatabase(databasePath);
     const sortGames = [
       {

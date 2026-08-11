@@ -486,6 +486,126 @@ test("闲鱼商品核对按编号或唯一名称确认发布，未匹配项回�
   }
 });
 
+test("手动闲鱼商品同步按素材库和商品管理回写当前状态", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-current-xianyu-status-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-08-11T00:00:00.000Z";
+  const materialOnlyGame = game(401);
+  const productOnlyGame = game(402);
+  const deletedRemoteGame = game(403);
+  const database = new CrawlerDatabase(databasePath);
+  let materialContentHash;
+  try {
+    for (const gameItem of [
+      materialOnlyGame,
+      productOnlyGame,
+      deletedRemoteGame,
+    ]) {
+      database.upsertDiscoveredGames([gameItem], timestamp);
+      database.saveGameSuccess(gameItem, result(gameItem.id), timestamp);
+    }
+    materialContentHash = database.queryOne(
+      "SELECT content_hash FROM games WHERE id = ?",
+      materialOnlyGame.id,
+    ).content_hash;
+    const deletedContentHash = database.queryOne(
+      "SELECT content_hash FROM games WHERE id = ?",
+      deletedRemoteGame.id,
+    ).content_hash;
+    database.markMaterialSynced(
+      deletedRemoteGame.id,
+      4030,
+      deletedContentHash,
+      timestamp,
+    );
+    database.markPublicationSubmitted(
+      deletedRemoteGame.id,
+      "account-a",
+      4030,
+      "batch-403",
+      timestamp,
+    );
+    database.setXianyuAccountId("account-a", timestamp);
+  } finally {
+    database.close();
+  }
+
+  const client = new FakeXianyuClient();
+  client.materials.set(String(materialOnlyGame.id), {
+    materialId: 4010,
+    contentHash: materialContentHash,
+    title: "游戏 401",
+  });
+  client.accountItems.set("account-a", [
+    {
+      item_id: "item-product-only",
+      item_title: "【秒发】游戏 402",
+      item_url: "https://www.goofish.com/item?id=item-product-only",
+    },
+  ]);
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const summary = await service.syncAccountPublishedItems();
+    assert.deepEqual(summary, {
+      accountId: "account-a",
+      remoteMaterialCount: 1,
+      materialConfirmedCount: 0,
+      materialResetCount: 1,
+      materialImportedCount: 1,
+      accountItemCount: 1,
+      localItemCount: 3,
+      confirmedCount: 1,
+      titleMatchedCount: 1,
+      materialFallbackCount: 1,
+    });
+
+    const checkedDatabase = new CrawlerDatabase(databasePath);
+    assert.deepEqual(
+      {
+        ...checkedDatabase.queryOne(
+          "SELECT material_id, status FROM xianyu_material_sync WHERE game_id = ?",
+          materialOnlyGame.id,
+        ),
+      },
+      { material_id: 4010, status: "synced" },
+    );
+    assert.deepEqual(
+      {
+        ...checkedDatabase.queryOne(
+          "SELECT status, item_id FROM xianyu_publications WHERE game_id = ? AND account_id = ?",
+          productOnlyGame.id,
+          "account-a",
+        ),
+      },
+      { status: "success", item_id: "item-product-only" },
+    );
+    assert.deepEqual(
+      {
+        ...checkedDatabase.queryOne(
+          "SELECT material_id, status FROM xianyu_material_sync WHERE game_id = ?",
+          deletedRemoteGame.id,
+        ),
+      },
+      { material_id: null, status: "pending" },
+    );
+    assert.deepEqual(
+      {
+        ...checkedDatabase.queryOne(
+          "SELECT status, item_id FROM xianyu_publications WHERE game_id = ? AND account_id = ?",
+          deletedRemoteGame.id,
+          "account-a",
+        ),
+      },
+      { status: "pending", item_id: null },
+    );
+    checkedDatabase.close();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("素材导入和商品发布独立运行，单批数量可配置", async () => {
   assert.equal(publishBatchSize, 20);
   assert.equal(publishBatchLogIntervalMs, 60_000);
