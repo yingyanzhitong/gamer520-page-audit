@@ -1,0 +1,74 @@
+test/sync-service.test.mjs
+  s_97a783e0ca6cf4::t_9cfc68fe8e8613 71,116-124
+  s_97a783e0ca6cf4::t_417ce166852098 1354
+  s_97a783e0ca6cf4::t_77882952d5eb5d 423-426,1268-1269,1295,1307,1322-1326
+  s_97a783e0ca6cf4::t_2da6d100ebd790 1577,1579,1581,1583-1622
+  s_97a783e0ca6cf4::t_1d1875dbd4c313 125,1578,1580,1623-1669,1675
+  s_97a783e0ca6cf4::t_b27835a839d42b 126
+  s_97a783e0ca6cf4::t_a8d3410c2ccc94 1582
+CHANGELOG.md
+  s_97a783e0ca6cf4::t_11996d93548db5 3-8
+test/database.test.mjs
+  s_97a783e0ca6cf4::t_1d1875dbd4c313 540,553,569,583,592
+frontend/src/App.jsx
+  s_97a783e0ca6cf4::t_2c5b04f60af949 2255
+  s_97a783e0ca6cf4::t_5369a088889317 1288,1340,1496,1498-1517,1798-1808
+  s_97a783e0ca6cf4::t_e597f3d1ff47da 1025-1032,1039-1042,1062-1065,1108-1112,1139-1141,1143-1145,1267,1269-1271
+public/index.html
+  s_97a783e0ca6cf4::t_ae2d87cfae5e78 12
+src/database.mjs
+  s_97a783e0ca6cf4::t_dfcd778867bd29 1685,1869-2008,2010-2013,2015-2016,2018-2023,2025
+  s_97a783e0ca6cf4::t_9e021340534958 2130-2133
+  s_97a783e0ca6cf4::t_f18713aafccd2f 89,115,117,280,393,486-490,1383,1391,1400,1425,1433,1441,1457,1683-1684,1867
+  s_97a783e0ca6cf4::t_b60445c58f07f7 116
+  s_97a783e0ca6cf4::t_56ab401a06a795 2060-2061,2065,2141,2163-2168
+  s_97a783e0ca6cf4::t_9c31f214ceb1a6 1864-1866
+  s_97a783e0ca6cf4::t_64691a504d6739 1868
+src/sync-service.mjs
+  s_97a783e0ca6cf4::t_543764c7191bd7 392-427,543-544
+  s_97a783e0ca6cf4::t_a036d0e04c58ed 214-216
+  s_97a783e0ca6cf4::t_2d44b5af27c96b 15,77-91,217-224,560-593,614,1404-1406
+  s_97a783e0ca6cf4::t_ca542c24ddcc3d 173-177,182
+  s_97a783e0ca6cf4::t_364aa09c374585 391
+src/xianyu-client.mjs
+  s_97a783e0ca6cf4::t_a19e9be5890e18 97-115
+src/dashboard-server.mjs
+  s_97a783e0ca6cf4::t_2c5b04f60af949 1509
+  s_97a783e0ca6cf4::t_96bba800d0a639 1404,1448,1634-1635,1638-1648,1651
+  s_97a783e0ca6cf4::t_a036d0e04c58ed 213-220,1636-1637
+package.json
+  s_97a783e0ca6cf4::t_11996d93548db5 3
+src/scheduler.mjs
+  s_97a783e0ca6cf4::t_a07b1e656a87b2 30-39,47-68,87,182-186,284-287,327,559,582
+  s_97a783e0ca6cf4::t_a036d0e04c58ed 40-46,136-138,168-178
+README.md
+  s_97a783e0ca6cf4::t_08fdbcc27acc9f 162-163
+  s_97a783e0ca6cf4::t_2c5b04f60af949 134-135
+test/dashboard.test.mjs
+  s_97a783e0ca6cf4::t_1d1875dbd4c313 287,939-940,953-954
+test/xianyu-client.test.mjs
+  s_97a783e0ca6cf4::t_277aa339581a74 33-79
+public/assets/index-CGpozxhl.js
+  s_97a783e0ca6cf4::t_ae2d87cfae5e78 49
+package-lock.json
+  s_97a783e0ca6cf4::t_f92fe2e9ee0402 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "042f9bccc9006329be2aa034094ee7fb78ca30d9",
+  "prompts": {},
+  "logical_commit_id": "042f9bccc9006329be2aa034094ee7fb78ca30d9",
+  "sessions": {
+    "s_97a783e0ca6cf4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fef6f-bb92-7352-bf29-9cbe1eaee5c1",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 783,
+      "total_deletions": 58
+    }
+  }
+}
