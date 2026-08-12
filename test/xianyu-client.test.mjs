@@ -138,6 +138,53 @@ test("单商品发布使用同步接口并透传素材内容", async () => {
   });
 });
 
+test("鱼小铺批量发布使用专用提交和状态查询接口", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), body: options.body });
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: options.method === "POST" ? { batch_id: "shop-batch-1" } : { done: true },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  try {
+    const client = new XianyuClient({
+      baseUrl: "https://xianyu.example",
+      apiKey: "test-key",
+    });
+    assert.deepEqual(
+      await client.publishShopBatch({
+        accountId: "account-a",
+        materialIds: [1, 2],
+      }),
+      { batch_id: "shop-batch-1" },
+    );
+    assert.deepEqual(await client.getShopBatchStatus("shop-batch-1"), {
+      done: true,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(
+    requests[0].url,
+    "https://xianyu.example/api/v1/product-publish/publish/shop/batch",
+  );
+  assert.deepEqual(JSON.parse(requests[0].body), {
+    account_ids: ["account-a"],
+    material_ids: [1, 2],
+  });
+  assert.equal(
+    requests[1].url,
+    "https://xianyu.example/api/v1/product-publish/publish/shop/batch/shop-batch-1/status",
+  );
+});
+
 test("外部终止信号会取消正在进行的闲鱼请求", async () => {
   const originalFetch = globalThis.fetch;
   const controller = new AbortController();

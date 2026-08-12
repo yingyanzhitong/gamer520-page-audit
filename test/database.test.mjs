@@ -589,7 +589,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.publish_concurrency, 2);
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      17,
+      18,
     );
   } finally {
     database.close();

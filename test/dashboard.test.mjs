@@ -360,6 +360,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /运营看板/);
     assert.match(appSource, /任务记录/);
     assert.match(appSource, /商品配置/);
+    assert.match(appSource, /鱼小铺批量发布/);
     assert.match(appSource, /游戏数据/);
     assert.match(appSource, /API Key 管理/);
     assert.match(appSource, /导入素材库/);
@@ -392,6 +393,29 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(games.items[0].title, "黄昏远征军");
     assert.equal(games.items[0].xianyuItemId, "1067769058126");
     assert.equal(games.items[0].isValid, true);
+
+    const accountSwitchDatabase = new CrawlerDatabase(databasePath);
+    accountSwitchDatabase.setXianyuAccountId(
+      "account-b",
+      "2026-07-28T00:01:45.000Z",
+    );
+    accountSwitchDatabase.close();
+    const accountBStates = await fetch(
+      `${baseUrl}/api/games?query=118842&xianyuStatus=none`,
+    ).then((response) => response.json());
+    assert.equal(accountBStates.total, 1);
+    assert.equal(accountBStates.items[0].xianyuStatus, "none");
+    assert.equal(accountBStates.items[0].xianyuItemId, null);
+    const accountBDashboard = await fetch(`${baseUrl}/api/dashboard`).then(
+      (response) => response.json(),
+    );
+    assert.equal(accountBDashboard.totals.publishedGames, 0);
+    const restoreAccountDatabase = new CrawlerDatabase(databasePath);
+    restoreAccountDatabase.setXianyuAccountId(
+      "account-a",
+      "2026-07-28T00:01:46.000Z",
+    );
+    restoreAccountDatabase.close();
 
     const validGames = await fetch(
       `${baseUrl}/api/games?validOnly=true`,
@@ -836,6 +860,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           account_id: "account-a",
           default_price: 3.5,
           default_stock: 88,
+          publish_mode: "shop-batch",
           title_template: "现货 {title}",
           description_template: "{description}\n{cloud_drives}",
           image_template: "https://cdn.example/{id}.jpg",
@@ -847,6 +872,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(savedAccountPayload.accountId, "account-a");
     assert.equal(savedAccountPayload.defaultPrice, 3.5);
     assert.equal(savedAccountPayload.defaultStock, 88);
+    assert.equal(savedAccountPayload.publishMode, "shop-batch");
     assert.equal(savedAccountPayload.titleTemplate, "现货 {title}");
 
     const settings = await fetch(
@@ -855,6 +881,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(settings.accountId, "account-a");
     assert.equal(settings.defaultPrice, 3.5);
     assert.equal(settings.defaultStock, 88);
+    assert.equal(settings.publishMode, "shop-batch");
     assert.equal(settings.titleTemplate, "现货 {title}");
     assert.equal(
       settings.descriptionTemplate,
@@ -924,6 +951,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         "现货 {title}",
       );
       assert.equal(persisted.getXianyuSyncSettings().default_stock, 88);
+      assert.equal(
+        persisted.getXianyuSyncSettings().publish_mode,
+        "shop-batch",
+      );
       assert.equal(
         persisted.queryOne(
           "SELECT sale_price FROM games WHERE id = ?",

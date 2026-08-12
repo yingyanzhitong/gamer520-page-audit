@@ -88,6 +88,7 @@ export const VALID_GAME_DATA_CONDITION = `
 
 const syncModes = new Set(["all", "pending", "updated", "selected-force"]);
 const syncSorts = new Set(["created", "updated", "hot"]);
+const xianyuPublishModes = new Set(["batch", "shop-batch"]);
 
 function normalizeSyncMode(mode) {
   return syncModes.has(mode) ? mode : "all";
@@ -97,11 +98,14 @@ function normalizeSyncSort(sort) {
   return syncSorts.has(sort) ? sort : "created";
 }
 
+function normalizeXianyuPublishMode(mode) {
+  return xianyuPublishModes.has(mode) ? mode : "batch";
+}
+
 function syncScopeConditions(mode) {
   const normalizedMode = normalizeSyncMode(mode);
   if (normalizedMode === "pending") {
     return [
-      "games.xianyu_item_id IS NULL",
       "publication.item_id IS NULL",
       "COALESCE(publication.status, 'pending') NOT IN ('failed', 'publishing', 'unknown', 'success')",
     ];
@@ -116,7 +120,6 @@ function syncScopeConditions(mode) {
     return ["1 = 1"];
   }
   return [
-    "games.xianyu_item_id IS NULL",
     "publication.item_id IS NULL",
     "COALESCE(publication.status, 'pending') NOT IN ('publishing', 'unknown', 'success')",
   ];
@@ -263,6 +266,7 @@ export class CrawlerDatabase {
         account_id TEXT,
         default_price REAL NOT NULL DEFAULT 1,
         default_stock INTEGER NOT NULL DEFAULT 999,
+        publish_mode TEXT NOT NULL DEFAULT 'batch',
         title_template TEXT,
         description_template TEXT,
         image_template TEXT,
@@ -390,7 +394,7 @@ export class CrawlerDatabase {
     this.#backfillMissingGameStatuses();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 17;");
+    this.database.exec("PRAGMA user_version = 18;");
   }
 
   #migrateSchema() {
@@ -459,6 +463,11 @@ export class CrawlerDatabase {
     if (!xianyuSettingsColumns.has("default_stock")) {
       this.database.exec(
         "ALTER TABLE xianyu_sync_settings ADD COLUMN default_stock INTEGER NOT NULL DEFAULT 999",
+      );
+    }
+    if (!xianyuSettingsColumns.has("publish_mode")) {
+      this.database.exec(
+        "ALTER TABLE xianyu_sync_settings ADD COLUMN publish_mode TEXT NOT NULL DEFAULT 'batch'",
       );
     }
     const xianyuTemplateAdditions = [
@@ -1227,6 +1236,7 @@ export class CrawlerDatabase {
              account_id,
              default_price,
              default_stock,
+             publish_mode,
              title_template,
              description_template,
              image_template,
@@ -1239,6 +1249,7 @@ export class CrawlerDatabase {
       account_id: row?.account_id ?? null,
       default_price: Number(row?.default_price ?? 1),
       default_stock: Number(row?.default_stock ?? 999),
+      publish_mode: normalizeXianyuPublishMode(row?.publish_mode),
       title_template:
         row?.title_template ?? DEFAULT_XIANYU_TEMPLATES.titleTemplate,
       description_template:
@@ -1256,11 +1267,15 @@ export class CrawlerDatabase {
     updatedAt,
     templates = null,
     defaultStock = null,
+    publishMode = null,
   ) {
     transaction(this.database, () => {
       const previous = this.getXianyuSyncSettings();
       const resolvedDefaultStock = Number(
         defaultStock ?? previous.default_stock ?? 999,
+      );
+      const resolvedPublishMode = normalizeXianyuPublishMode(
+        publishMode ?? previous.publish_mode,
       );
       const normalizedTemplates = normalizeXianyuTemplates(
         templates ?? {
@@ -1276,15 +1291,17 @@ export class CrawlerDatabase {
             account_id,
             default_price,
             default_stock,
+            publish_mode,
             title_template,
             description_template,
             image_template,
             updated_at
-          ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             account_id = excluded.account_id,
             default_price = excluded.default_price,
             default_stock = excluded.default_stock,
+            publish_mode = excluded.publish_mode,
             title_template = excluded.title_template,
             description_template = excluded.description_template,
             image_template = excluded.image_template,
@@ -1294,6 +1311,7 @@ export class CrawlerDatabase {
           accountId,
           defaultPrice,
           resolvedDefaultStock,
+          resolvedPublishMode,
           normalizedTemplates.titleTemplate,
           normalizedTemplates.descriptionTemplate,
           normalizedTemplates.imageTemplate,
@@ -1345,6 +1363,7 @@ export class CrawlerDatabase {
       updatedAt,
       null,
       Number(settings.default_stock ?? 999),
+      settings.publish_mode,
     );
   }
 
@@ -1548,8 +1567,7 @@ export class CrawlerDatabase {
           ) AS material_completed,
           SUM(
             CASE
-              WHEN games.xianyu_item_id IS NOT NULL
-                OR publication.item_id IS NOT NULL
+              WHEN publication.item_id IS NOT NULL
                 OR publication.status = 'success'
               THEN 1
               ELSE 0
@@ -1558,7 +1576,6 @@ export class CrawlerDatabase {
           SUM(
             CASE
               WHEN material.status = 'skipped'
-               AND games.xianyu_item_id IS NULL
                AND publication.item_id IS NULL
                AND COALESCE(publication.status, 'pending') != 'success'
               THEN 1

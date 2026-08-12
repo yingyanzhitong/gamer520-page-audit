@@ -42,18 +42,14 @@ const contentTypes = new Map([
 const xianyuStatusExpression = `
   CASE
     WHEN publication.status = 'success' THEN 'published'
-    WHEN (
-      games.xianyu_item_id IS NOT NULL
-      AND (
-        games.xianyu_account_id IS NULL
-        OR games.xianyu_account_id = settings.account_id
-      )
-    )
-      OR publication.item_id IS NOT NULL
+    WHEN publication.item_id IS NOT NULL
       OR publication.status IN ('publishing', 'unknown')
     THEN 'publishing'
-    WHEN material.material_id IS NOT NULL
-    OR material.status IN ('synced', 'skipped')
+    WHEN publication.material_id IS NOT NULL
+      AND (
+        material.material_id IS NOT NULL
+        OR material.status IN ('synced', 'skipped')
+      )
     THEN 'material'
     ELSE 'none'
   END
@@ -105,12 +101,10 @@ function mapGame(row) {
     contentHash: row.content_hash,
     lastChangeType: row.last_change_type,
     lastChangedAt: row.last_changed_at,
-    xianyuItemId:
-      row.xianyu_item_id ?? row.publication_item_id ?? null,
-    xianyuItemUrl:
-      row.xianyu_item_url ?? row.publication_item_url ?? null,
-    xianyuAccountId: row.xianyu_account_id ?? null,
-    xianyuPublishedAt: row.xianyu_published_at ?? null,
+    xianyuItemId: row.publication_item_id ?? null,
+    xianyuItemUrl: row.publication_item_url ?? null,
+    xianyuAccountId: row.publication_account_id ?? null,
+    xianyuPublishedAt: row.publication_published_at ?? null,
     materialSyncStatus: row.material_sync_status ?? "pending",
     publicationStatus: row.publication_status ?? "pending",
     xianyuStatus: row.xianyu_status ?? "none",
@@ -360,8 +354,12 @@ function dashboardPayload(database, config, runtimeState) {
         SUM(CASE WHEN ${VALID_GAME_DATA_CONDITION}
           THEN 1 ELSE 0 END) AS valid_games,
         (SELECT COUNT(*) FROM xianyu_material_sync WHERE status = 'synced') AS material_synced,
-        (SELECT COUNT(*) FROM xianyu_publications WHERE status = 'success') AS published_games,
-        (SELECT COUNT(*) FROM xianyu_publications WHERE status IN ('failed', 'unknown')) AS publish_attention
+        (SELECT COUNT(*) FROM xianyu_publications
+          WHERE account_id = (SELECT account_id FROM xianyu_sync_settings WHERE id = 1)
+            AND status = 'success') AS published_games,
+        (SELECT COUNT(*) FROM xianyu_publications
+          WHERE account_id = (SELECT account_id FROM xianyu_sync_settings WHERE id = 1)
+            AND status IN ('failed', 'unknown')) AS publish_attention
       FROM games
     `)
     .get();
@@ -400,6 +398,7 @@ function dashboardPayload(database, config, runtimeState) {
            account_id,
            default_price,
            default_stock,
+           publish_mode,
            title_template,
            description_template,
            image_template,
@@ -440,6 +439,7 @@ function dashboardPayload(database, config, runtimeState) {
       accountId: syncSettings.account_id,
       defaultPrice: Number(syncSettings.default_price ?? 1),
       defaultStock: Number(syncSettings.default_stock ?? 999),
+      publishMode: syncSettings.publish_mode ?? "batch",
       titleTemplate:
         syncSettings.title_template ??
         DEFAULT_XIANYU_TEMPLATES.titleTemplate,
@@ -507,7 +507,7 @@ function listGames(database, requestUrl) {
 
   if (query) {
     conditions.push(
-      "(CAST(games.id AS TEXT) LIKE ? OR games.title LIKE ? OR games.xianyu_item_id LIKE ?)",
+      "(CAST(games.id AS TEXT) LIKE ? OR games.title LIKE ? OR publication.item_id LIKE ?)",
     );
     const pattern = `%${query}%`;
     parameters.push(pattern, pattern, pattern);
@@ -561,8 +561,10 @@ function listGames(database, requestUrl) {
         (${xianyuStatusExpression}) AS xianyu_status,
         material.status AS material_sync_status,
         publication.status AS publication_status,
+        publication.account_id AS publication_account_id,
         publication.item_id AS publication_item_id,
-        publication.item_url AS publication_item_url
+        publication.item_url AS publication_item_url,
+        publication.published_at AS publication_published_at
       ${joinedTables}
       ${whereClause}
       ORDER BY ${sortClause}
@@ -595,8 +597,10 @@ function gameDetail(database, gameId) {
         (${xianyuStatusExpression}) AS xianyu_status,
         material.status AS material_sync_status,
         publication.status AS publication_status,
+        publication.account_id AS publication_account_id,
         publication.item_id AS publication_item_id,
-        publication.item_url AS publication_item_url
+        publication.item_url AS publication_item_url,
+        publication.published_at AS publication_published_at
       FROM games
       LEFT JOIN xianyu_sync_settings AS settings
         ON settings.id = 1
@@ -1328,6 +1332,7 @@ export async function startDashboardServer(
                  account_id,
                  default_price,
                  default_stock,
+                 publish_mode,
                  title_template,
                  description_template,
                  image_template,
@@ -1360,6 +1365,7 @@ export async function startDashboardServer(
           accountId: settings?.account_id ?? null,
           defaultPrice: Number(settings?.default_price ?? 1),
           defaultStock: Number(settings?.default_stock ?? 999),
+          publishMode: settings?.publish_mode ?? "batch",
           titleTemplate:
             settings?.title_template ??
             DEFAULT_XIANYU_TEMPLATES.titleTemplate,
@@ -1546,6 +1552,7 @@ export async function startDashboardServer(
         const database = new CrawlerDatabase(config.dbPath);
         let templates;
         let defaultStock;
+        let publishMode;
         try {
           const current = database.getXianyuSyncSettings();
           defaultStock = stockQuantity(
@@ -1560,12 +1567,20 @@ export async function startDashboardServer(
             imageTemplate:
               body.image_template ?? current.image_template,
           });
+          publishMode = String(
+            body.publish_mode ?? current.publish_mode ?? "batch",
+          ).trim();
+          if (!["batch", "shop-batch"].includes(publishMode)) {
+            sendError(response, 422, "publish_mode 必须是 batch 或 shop-batch");
+            return;
+          }
           database.setXianyuSettings(
             accountId,
             defaultPrice,
             new Date().toISOString(),
             templates,
             defaultStock,
+            publishMode,
           );
         } finally {
           database.close();
@@ -1575,6 +1590,7 @@ export async function startDashboardServer(
           accountId,
           defaultPrice,
           defaultStock,
+          publishMode,
           ...templates,
           account,
         });

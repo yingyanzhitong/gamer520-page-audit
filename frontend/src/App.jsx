@@ -1856,6 +1856,7 @@ function ProductConfigPage({ notify }) {
           account_id: settings.accountId,
           default_price: Number(settings.defaultPrice),
           default_stock: Number(settings.defaultStock),
+          publish_mode: settings.publishMode,
           title_template: settings.titleTemplate,
           description_template: settings.descriptionTemplate,
           image_template: settings.imageTemplate,
@@ -1975,6 +1976,19 @@ function ProductConfigPage({ notify }) {
                   }
                 />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label>发布方式</Label>
+              <Select
+                value={settings?.publishMode ?? "batch"}
+                onChange={(event) => update("publishMode", event.target.value)}
+              >
+                <option value="batch">批量发布</option>
+                <option value="shop-batch">鱼小铺批量发布</option>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                鱼小铺批量发布支持库存、发货设置和粉丝价。
+              </p>
             </div>
             <div className="space-y-2">
               <Label>标题模板</Label>

@@ -133,6 +133,16 @@ class FakeXianyuClient {
     return { batch_id: payload.requestId };
   }
 
+  async publishShopBatch(payload) {
+    const batchId = `shop-${this.publishCalls.length + 1}`;
+    this.publishCalls.push({ ...payload, requestId: batchId, shop: true });
+    this.events.push({
+      type: "publish",
+      count: payload.materialIds.length,
+    });
+    return { batch_id: batchId };
+  }
+
   async getBatchStatus(batchId) {
     const call = this.publishCalls.find(
       (item) => item.requestId === batchId,
@@ -162,6 +172,10 @@ class FakeXianyuClient {
         item_url: `https://www.goofish.com/item?id=${materialId}`,
       })),
     };
+  }
+
+  async getShopBatchStatus(batchId) {
+    return this.getBatchStatus(batchId);
   }
 
   async refreshAccountItems(accountId) {
@@ -1547,7 +1561,7 @@ test("已有商品编号时跳过素材同步和卡券重试", async () => {
   }
 });
 
-test("已有商品编号后更新内容或切换账号都不再同步", async () => {
+test("已有商品编号后更新内容不重复发布，切换账号会重新发布", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-update-test-"),
   );
@@ -1619,9 +1633,21 @@ test("已有商品编号后更新内容或切换账号都不再同步", async ()
     switchedDatabase.close();
 
     const switched = await service.run({ trigger: "test", limit: 20 });
-    assert.equal(switched.selectedCount, 0);
-    assert.equal(switched.publishSuccess, 0);
-    assert.equal(client.publishCalls.length, 1);
+    assert.equal(switched.selectedCount, 1);
+    assert.equal(switched.publishSuccess, 1);
+    assert.equal(client.publishCalls.length, 2);
+    const switchedPublicationDatabase = new CrawlerDatabase(databasePath);
+    assert.equal(
+      switchedPublicationDatabase.queryOne(
+        `SELECT status, item_id
+         FROM xianyu_publications
+         WHERE game_id = ? AND account_id = ?`,
+        discovered.id,
+        "account-b",
+      ).status,
+      "success",
+    );
+    switchedPublicationDatabase.close();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

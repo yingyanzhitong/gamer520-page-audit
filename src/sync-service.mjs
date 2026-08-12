@@ -255,6 +255,18 @@ export class XianyuSyncService {
       error.statusCode = 422;
       throw error;
     }
+    const publishMode =
+      settings.publish_mode === "shop-batch" ? "shop-batch" : "batch";
+    const publishLabel =
+      publishMode === "shop-batch" ? "鱼小铺批量发布" : "批量发布";
+    const submitPublishBatch = (payload, options) =>
+      publishMode === "shop-batch"
+        ? this.client.publishShopBatch(payload, options)
+        : this.client.publishBatch(payload, options);
+    const getPublishBatchStatus = (batchId, options) =>
+      publishMode === "shop-batch"
+        ? this.client.getShopBatchStatus(batchId, options)
+        : this.client.getBatchStatus(batchId, options);
 
     const startedAt = nowIso();
     const runId = database.startSyncRun(
@@ -509,7 +521,7 @@ export class XianyuSyncService {
         mode,
         accountId,
         materialConcurrency: resolvedMaterialConcurrency,
-        publishMode: "batch",
+        publishMode,
         publishBatchSize: resolvedPublishBatchSize,
         publishLimit: resolvedPublishLimit || null,
         candidateSort: resolvedCandidateSort,
@@ -887,10 +899,10 @@ export class XianyuSyncService {
           recordTaskLog({
             stage: "publish",
             action: "submit",
-            message: `正在提交批量发布请求，共 ${entries.length} 个商品`,
-            details: { requestId, materialIds, accountId },
+            message: `正在提交${publishLabel}请求，共 ${entries.length} 个商品`,
+            details: { requestId, materialIds, accountId, publishMode },
           });
-          batch = await this.client.publishBatch(
+          batch = await submitPublishBatch(
             {
               accountId,
               materialIds,
@@ -903,11 +915,12 @@ export class XianyuSyncService {
             level: "success",
             stage: "publish",
             action: "submitted",
-            message: `批量发布请求提交成功，批次 ${batch.batch_id ?? requestId}`,
+            message: `${publishLabel}请求提交成功，批次 ${batch.batch_id ?? requestId}`,
             details: {
               requestId,
               batchId: batch.batch_id ?? requestId,
               itemCount: entries.length,
+              publishMode,
               idempotentReplay: Boolean(batch.idempotent_replay),
             },
           });
@@ -959,10 +972,10 @@ export class XianyuSyncService {
             throw submissionError;
           }
           try {
-            recoveredStatus = await this.client.getBatchStatus(
-              requestId,
-              { signal: control?.signal },
-            );
+            if (publishMode === "shop-batch") throw submissionError;
+            recoveredStatus = await getPublishBatchStatus(requestId, {
+              signal: control?.signal,
+            });
             batch = { batch_id: requestId, idempotent_replay: true };
             recordTaskLog({
               level: "warning",
@@ -1059,7 +1072,7 @@ export class XianyuSyncService {
         while (Date.now() < deadline) {
           await control?.checkpoint();
           if (!status) {
-            status = await this.client.getBatchStatus(batchId, {
+            status = await getPublishBatchStatus(batchId, {
               signal: control?.signal,
             });
             await control?.checkpoint();

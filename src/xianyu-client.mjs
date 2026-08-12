@@ -132,6 +132,24 @@ export class XianyuClient {
     return payload?.data ?? {};
   }
 
+  async publishShopBatch(
+    { accountId, materialIds },
+    { signal = null } = {},
+  ) {
+    const payload = await this.request(
+      "/api/v1/product-publish/publish/shop/batch",
+      {
+        method: "POST",
+        body: {
+          account_ids: [accountId],
+          material_ids: materialIds,
+        },
+        signal,
+      },
+    );
+    return payload?.data ?? {};
+  }
+
   async publishSingle(
     {
       accountId,
@@ -174,6 +192,14 @@ export class XianyuClient {
   async getBatchStatus(batchId, { signal = null } = {}) {
     const payload = await this.request(
       `/api/v1/product-publish/publish/batch/${encodeURIComponent(batchId)}/status`,
+      { signal },
+    );
+    return payload?.data ?? {};
+  }
+
+  async getShopBatchStatus(batchId, { signal = null } = {}) {
+    const payload = await this.request(
+      `/api/v1/product-publish/publish/shop/batch/${encodeURIComponent(batchId)}/status`,
       { signal },
     );
     return payload?.data ?? {};
