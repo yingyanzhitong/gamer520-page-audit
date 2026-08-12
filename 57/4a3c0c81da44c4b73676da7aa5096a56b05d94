@@ -1,0 +1,48 @@
+src/dashboard-server.mjs
+  s_4af8822b6b786d::t_bdc041810f5b1d 45,48-52,104-107,357-362,401,442,510,564,566-567,600,602-603,1335,1368,1555,1570-1576,1583,1593
+test/xianyu-client.test.mjs
+  s_4af8822b6b786d::t_7b8e7a2693cd3c 141-187
+test/sync-service.test.mjs
+  s_4af8822b6b786d::t_7b8e7a2693cd3c 136-145,175-178,180,1564,1636-1650
+src/database.mjs
+  s_4af8822b6b786d::t_d6fa9c74e8a45f 91,101-104,269,397,466-470,1239,1252,1270,1276-1278,1294,1299,1304,1314,1366,1570
+public/assets/index-CaYzDlNz.js
+  s_4af8822b6b786d::t_9e04fe654bbc76 49
+public/index.html
+  s_4af8822b6b786d::t_9e04fe654bbc76 12
+CHANGELOG.md
+  s_4af8822b6b786d::t_fe48aafc35e652 3-8
+frontend/src/App.jsx
+  s_4af8822b6b786d::t_f13aa18add5126 1859,1979-1991
+test/dashboard.test.mjs
+  s_4af8822b6b786d::t_7b8e7a2693cd3c 363,397-419,863,875,884,954-957
+src/xianyu-client.mjs
+  s_4af8822b6b786d::t_0840d7182e7850 135-152,195-202
+src/sync-service.mjs
+  s_4af8822b6b786d::t_c7173d8c6d6a9b 258-269,524,902-903,905,918,923,975-978,1075
+test/database.test.mjs
+  s_4af8822b6b786d::t_7b8e7a2693cd3c 592
+package.json
+  s_4af8822b6b786d::t_fe48aafc35e652 3
+package-lock.json
+  s_4af8822b6b786d::t_752e65b05025ce 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "574a3c0c81da44c4b73676da7aa5096a56b05d94",
+  "prompts": {},
+  "logical_commit_id": "574a3c0c81da44c4b73676da7aa5096a56b05d94",
+  "sessions": {
+    "s_4af8822b6b786d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff595-b5c7-71f0-9d8d-419782d5293f",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 423,
+      "total_deletions": 48
+    }
+  }
+}
