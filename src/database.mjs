@@ -939,7 +939,10 @@ export class CrawlerDatabase {
         hot_position = excluded.hot_position,
         hot_rank = excluded.hot_rank,
         last_seen_at = excluded.last_seen_at,
-        scrape_status = 'pending',
+        scrape_status = CASE
+          WHEN games.scrape_status = 'violation' THEN 'violation'
+          ELSE 'pending'
+        END,
         updated_at = excluded.updated_at
     `);
 
@@ -966,7 +969,10 @@ export class CrawlerDatabase {
       .prepare(`
         UPDATE games
         SET last_attempt_at = ?,
-            scrape_status = 'running',
+            scrape_status = CASE
+              WHEN scrape_status = 'violation' THEN 'violation'
+              ELSE 'running'
+            END,
             updated_at = ?
         WHERE id = ?
       `)
@@ -998,7 +1004,7 @@ export class CrawlerDatabase {
   ) {
     const game = this.database
       .prepare(`
-        SELECT title, description, image_url
+        SELECT title, description, image_url, scrape_status, last_error
         FROM games
         WHERE id = ?
       `)
@@ -1026,8 +1032,16 @@ export class CrawlerDatabase {
       .run(
         sourceUpdatedAt,
         checkedAt,
-        complete ? "success" : "missing",
-        complete ? null : missingGameDataError(imageAccessible),
+        game?.scrape_status === "violation"
+          ? "violation"
+          : complete
+            ? "success"
+            : "missing",
+        game?.scrape_status === "violation"
+          ? game.last_error
+          : complete
+            ? null
+            : missingGameDataError(imageAccessible),
         checkedAt,
         gameId,
       );
@@ -1038,8 +1052,14 @@ export class CrawlerDatabase {
       .prepare(`
         UPDATE games
         SET last_attempt_at = ?,
-            scrape_status = 'missing',
-            last_error = '图片链接无法访问',
+            scrape_status = CASE
+              WHEN scrape_status = 'violation' THEN 'violation'
+              ELSE 'missing'
+            END,
+            last_error = CASE
+              WHEN scrape_status = 'violation' THEN last_error
+              ELSE '图片链接无法访问'
+            END,
             updated_at = ?
         WHERE id = ?
       `)
@@ -1065,7 +1085,12 @@ export class CrawlerDatabase {
         imageAccessible,
         downloads: nextDownloads,
       });
-      const scrapeStatus = complete ? "success" : "missing";
+      const scrapeStatus =
+        previous?.scrape_status === "violation"
+          ? "violation"
+          : complete
+            ? "success"
+            : "missing";
       const nextHash = computeGameContentHash(
         {
           title: result.page.title,
@@ -1124,7 +1149,11 @@ export class CrawlerDatabase {
           savedAt,
           result.page.sourceUpdatedAt ?? null,
           scrapeStatus,
-          complete ? null : missingGameDataError(imageAccessible),
+          scrapeStatus === "violation"
+            ? previous.last_error
+            : complete
+              ? null
+              : missingGameDataError(imageAccessible),
           nextHash,
           changeType,
           changedAt,
@@ -1215,8 +1244,14 @@ export class CrawlerDatabase {
       .prepare(`
         UPDATE games
         SET last_attempt_at = ?,
-            scrape_status = 'failed',
-            last_error = ?,
+            scrape_status = CASE
+              WHEN scrape_status = 'violation' THEN 'violation'
+              ELSE 'failed'
+            END,
+            last_error = CASE
+              WHEN scrape_status = 'violation' THEN last_error
+              ELSE ?
+            END,
             updated_at = ?
         WHERE id = ?
       `)
@@ -1226,6 +1261,36 @@ export class CrawlerDatabase {
         attemptedAt,
         gameId,
       );
+  }
+
+  setGameViolationStatus(gameId, status, updatedAt) {
+    if (status === "violation") {
+      return (
+        this.database
+          .prepare(`
+            UPDATE games
+            SET scrape_status = 'violation',
+                last_error = '闲鱼认定违规，已人工排除发布',
+                updated_at = ?
+            WHERE id = ?
+          `)
+          .run(updatedAt, gameId).changes > 0
+      );
+    }
+
+    return (
+      this.database
+        .prepare(`
+          UPDATE games
+          SET scrape_status = 'success',
+              last_error = NULL,
+              updated_at = ?
+          WHERE id = ?
+            AND scrape_status = 'violation'
+            AND (${COMPLETE_GAME_CONTENT_CONDITION})
+        `)
+        .run(updatedAt, gameId).changes > 0
+    );
   }
 
   getXianyuSyncSettings() {

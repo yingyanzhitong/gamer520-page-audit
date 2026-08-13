@@ -656,6 +656,68 @@ test("闲鱼同步候选支持创建、更新和热度排序", () => {
   }
 });
 
+test("违规游戏只能手动恢复，采集更新不会使其重新进入发布候选", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-violation-status-test-"),
+  );
+  const database = new CrawlerDatabase(path.join(directory, "test.sqlite"));
+  try {
+    const firstAt = "2026-08-13T00:00:00.000Z";
+    const secondAt = "2026-08-13T01:00:00.000Z";
+    const game = discovery(130004, "违规状态测试游戏", 1);
+    database.upsertDiscoveredGames([game], firstAt);
+    database.saveGameSuccess(
+      game,
+      result(game.id, game.title, "https://pan.example/violation"),
+      firstAt,
+    );
+
+    assert.equal(
+      database.setGameViolationStatus(game.id, "violation", secondAt),
+      true,
+    );
+    database.upsertDiscoveredGames([game], secondAt);
+    database.markGameAttempt(game.id, secondAt);
+    database.saveGameUnchanged(
+      game.id,
+      "2026-08-13T00:30:00.000Z",
+      secondAt,
+    );
+    database.saveGameSuccess(
+      game,
+      result(game.id, game.title, "https://pan.example/violation-updated"),
+      secondAt,
+    );
+    database.saveGameFailure(game.id, "模拟采集失败", secondAt);
+
+    assert.equal(
+      database.queryOne("SELECT scrape_status FROM games WHERE id = ?", game.id)
+        .scrape_status,
+      "violation",
+    );
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "all")
+        .map((candidate) => candidate.id),
+      [],
+    );
+
+    assert.equal(
+      database.setGameViolationStatus(game.id, "success", secondAt),
+      true,
+    );
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "all")
+        .map((candidate) => candidate.id),
+      [game.id],
+    );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("任务操作日志和服务 Key 持久化并支持增删", () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-task-log-test-"),

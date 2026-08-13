@@ -28,7 +28,7 @@ export function formatNumber(value) {
 
 export function statusTone(status) {
   if (["success", "published", "synced"].includes(status)) return "success";
-  if (["failed", "unknown"].includes(status)) return "danger";
+  if (["failed", "unknown", "violation"].includes(status)) return "danger";
   if (["running", "publishing"].includes(status)) return "info";
   if (["partial", "interrupted", "updated", "missing"].includes(status)) return "warning";
   return "neutral";

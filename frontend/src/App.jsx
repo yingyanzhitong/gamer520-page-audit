@@ -29,6 +29,7 @@ import {
   Save,
   Search,
   Settings2,
+  ShieldAlert,
   ShieldCheck,
   ScrollText,
   Square,
@@ -96,6 +97,7 @@ const statusLabels = {
   publishing: "发布中",
   success: "成功",
   missing: "缺失",
+  violation: "违规",
   failed: "失败",
   partial: "部分完成",
   interrupted: "已中断",
@@ -1462,6 +1464,11 @@ function TasksPage({ notify }) {
                     updateSchedule([kind, "cronSchedule"], event.target.value)
                   }
                 />
+                <p className="text-xs text-muted-foreground">
+                  Cron 格式为“分 时 日 月 周”。每天 08:00 执行一次请填写
+                  <span className="font-data"> 0 8 * * *</span>；
+                  <span className="font-data"> * 8 * * *</span> 会在 08:00–08:59 每分钟执行一次。
+                </p>
                 {kind === "crawl" ? (
                   <div className="space-y-2">
                     <Label>详情采集并行数</Label>
@@ -2227,6 +2234,7 @@ function GamesPage({ notify }) {
   const [detailId, setDetailId] = useState(null);
   const [syncingGameId, setSyncingGameId] = useState(null);
   const [syncingXianyuItems, setSyncingXianyuItems] = useState(false);
+  const [updatingViolationGameId, setUpdatingViolationGameId] = useState(null);
 
   const load = useCallback(async () => {
     const parameters = new URLSearchParams({
@@ -2276,6 +2284,28 @@ function GamesPage({ notify }) {
     }
   }
 
+  async function updateViolationStatus(game) {
+    const nextStatus =
+      game.scrapeStatus === "violation" ? "success" : "violation";
+    setUpdatingViolationGameId(game.id);
+    try {
+      await api(`/api/games/${game.id}/scrape-status`, {
+        method: "PUT",
+        body: jsonBody({ status: nextStatus }),
+      });
+      notify(
+        nextStatus === "violation"
+          ? `游戏 ${game.id} 已标记违规，不会再进入发布列表`
+          : `游戏 ${game.id} 已恢复为采集成功`,
+      );
+      await load();
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    } finally {
+      setUpdatingViolationGameId(null);
+    }
+  }
+
   return (
     <>
       <PageHeading
@@ -2309,6 +2339,7 @@ function GamesPage({ notify }) {
               <option value="success">采集成功</option>
               <option value="updated">已更新</option>
               <option value="missing">缺失</option>
+              <option value="violation">违规</option>
               <option value="failed">采集失败</option>
             </Select>
             <Select
@@ -2400,7 +2431,9 @@ function GamesPage({ notify }) {
                   <TableCell>
                     <StatusBadge
                       status={
-                        game.scrapeStatus === "missing"
+                        game.scrapeStatus === "violation"
+                          ? "violation"
+                          : game.scrapeStatus === "missing"
                           ? "missing"
                           : game.lastChangeType === "updated"
                           ? "updated"
@@ -2426,6 +2459,30 @@ function GamesPage({ notify }) {
                       >
                         <Eye className="h-3.5 w-3.5" />
                         详情
+                      </Button>
+                      <Button
+                        variant={
+                          game.scrapeStatus === "violation"
+                            ? "outline"
+                            : "destructive"
+                        }
+                        size="sm"
+                        disabled={updatingViolationGameId === game.id}
+                        title={
+                          game.scrapeStatus === "violation"
+                            ? "手动恢复为采集成功"
+                            : "标记为闲鱼违规并排除后续发布"
+                        }
+                        onClick={() => updateViolationStatus(game)}
+                      >
+                        {game.scrapeStatus === "violation" ? (
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        ) : (
+                          <ShieldAlert className="h-3.5 w-3.5" />
+                        )}
+                        {game.scrapeStatus === "violation"
+                          ? "恢复成功"
+                          : "标记违规"}
                       </Button>
                       <Button
                         size="sm"

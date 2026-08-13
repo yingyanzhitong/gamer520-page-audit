@@ -471,6 +471,7 @@ function listGames(database, requestUrl) {
     "success",
     "missing",
     "failed",
+    "violation",
     "updated",
   ]).has(requestedStatus)
     ? requestedStatus
@@ -1797,6 +1798,60 @@ export async function startDashboardServer(
       const gamePriceMatch = requestUrl.pathname.match(
         /^\/api\/games\/(\d+)\/price$/,
       );
+      const gameScrapeStatusMatch = requestUrl.pathname.match(
+        /^\/api\/games\/(\d+)\/scrape-status$/,
+      );
+      if (request.method === "PUT" && gameScrapeStatusMatch) {
+        if (
+          !requireKey(
+            request,
+            response,
+            config.xianyuApiKey,
+            "X-API-Key",
+          )
+        ) {
+          return;
+        }
+        const body = await readJsonBody(request);
+        const status = String(body.status ?? "").trim();
+        if (!new Set(["violation", "success"]).has(status)) {
+          sendError(response, 422, "仅支持手动标记违规或恢复为采集成功");
+          return;
+        }
+        const gameId = Number(gameScrapeStatusMatch[1]);
+        const database = new CrawlerDatabase(config.dbPath);
+        let error = null;
+        try {
+          const game = database.queryOne(
+            "SELECT scrape_status FROM games WHERE id = ?",
+            gameId,
+          );
+          if (!game) {
+            error = { status: 404, message: "没有找到该游戏" };
+          } else if (status === "success" && game.scrape_status !== "violation") {
+            error = { status: 422, message: "只有违规游戏可以手动恢复" };
+          } else if (
+            !database.setGameViolationStatus(
+              gameId,
+              status,
+              new Date().toISOString(),
+            )
+          ) {
+            error = {
+              status: 422,
+              message: "游戏数据不完整，不能恢复为采集成功",
+            };
+          }
+        } finally {
+          database.close();
+        }
+        if (error) {
+          sendError(response, error.status, error.message);
+          return;
+        }
+        sendJson(response, 200, { success: true, gameId, scrapeStatus: status });
+        return;
+      }
       if (request.method === "PUT" && gamePriceMatch) {
         if (
           !requireKey(

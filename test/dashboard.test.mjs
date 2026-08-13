@@ -1116,6 +1116,65 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       /缺少有效图片、下载资源/,
     );
 
+    const markedViolation = await fetch(
+      `${baseUrl}/api/games/118842/scrape-status`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({ status: "violation" }),
+      },
+    ).then((response) => response.json());
+    assert.equal(markedViolation.scrapeStatus, "violation");
+
+    const violationGames = await fetch(
+      `${baseUrl}/api/games?status=violation`,
+    ).then((response) => response.json());
+    assert.equal(violationGames.total, 1);
+    assert.equal(violationGames.items[0].id, 118842);
+    assert.equal(violationGames.items[0].isValid, false);
+
+    const violationSync = await fetch(
+      `${baseUrl}/api/games/118842/sync`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({}),
+      },
+    );
+    assert.equal(violationSync.status, 422);
+
+    const restoredViolation = await fetch(
+      `${baseUrl}/api/games/118842/scrape-status`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({ status: "success" }),
+      },
+    ).then((response) => response.json());
+    assert.equal(restoredViolation.scrapeStatus, "success");
+
+    const invalidScrapeStatus = await fetch(
+      `${baseUrl}/api/games/118842/scrape-status`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({ status: "failed" }),
+      },
+    );
+    assert.equal(invalidScrapeStatus.status, 422);
+
     const interruptedSync = await fetch(
       `${baseUrl}/api/tasks/sync/pause`,
       {
