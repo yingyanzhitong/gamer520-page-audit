@@ -1,0 +1,58 @@
+test/dashboard.test.mjs
+  s_22cf00eaea9cc0::t_60f6f79f7d4a51 1119-1177
+package.json
+  s_22cf00eaea9cc0::t_af053670d0f0f4 3
+public/assets/index-ImQ_DbZ4.js
+  s_22cf00eaea9cc0::t_8ab3560d5b845f 26,30,34,38,42
+  s_22cf00eaea9cc0::t_40053784308c26 8-10,14,27,31,35,39,43-44,46,49
+frontend/src/lib/utils.js
+  s_22cf00eaea9cc0::t_68fb531d3bd2b8 31
+README.md
+  s_22cf00eaea9cc0::t_d64b761952e2c6 126
+CHANGELOG.md
+  s_22cf00eaea9cc0::t_af053670d0f0f4 3-8
+frontend/src/App.jsx
+  s_22cf00eaea9cc0::t_040b3c8e80872a 32,100,2237,2284-2305,2308,2342,2434-2436,2462-2485
+  s_4af8822b6b786d::t_8cf7c08b9302fd 1467-1471
+test/database.test.mjs
+  s_22cf00eaea9cc0::t_54d4bf565bcf0d 659-720
+src/dashboard-server.mjs
+  s_22cf00eaea9cc0::t_f01c22f0841778 474,1801-1854
+src/database.mjs
+  s_22cf00eaea9cc0::t_a9881ec61caf39 942-945,972-975,1007,1035-1044,1055-1062,1088-1093,1152-1156,1247-1254
+  s_22cf00eaea9cc0::t_eb8d28c3c433f5 1266-1277,1279-1293,1295
+  s_22cf00eaea9cc0::t_6402889747a10e 1263-1265
+public/index.html
+  s_22cf00eaea9cc0::t_40053784308c26 12
+package-lock.json
+  s_22cf00eaea9cc0::t_79be526528b3c4 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8d0516c82b5c217fa7dd64411cfaa3eb360520a4",
+  "prompts": {},
+  "logical_commit_id": "8d0516c82b5c217fa7dd64411cfaa3eb360520a4",
+  "sessions": {
+    "s_22cf00eaea9cc0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff953-ae06-7ff2-8eef-1635b278716e",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 369,
+      "total_deletions": 21
+    },
+    "s_4af8822b6b786d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff595-b5c7-71f0-9d8d-419782d5293f",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 63,
+      "total_deletions": 9
+    }
+  }
+}
