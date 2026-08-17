@@ -2012,3 +2012,75 @@ test("缺少 games.image_url 时即使使用固定模板也不会进入同步队
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("指定账号运行同步时使用各自独立的发布配置", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-multi-account-config-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-08-17T00:00:00.000Z";
+  const discovered = game(901);
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    database.upsertDiscoveredGames([discovered], timestamp);
+    database.saveGameSuccess(discovered, result(discovered.id), timestamp);
+    database.setXianyuSettings(
+      "account-a",
+      2.5,
+      timestamp,
+      {
+        titleTemplate: "A-{title}",
+        descriptionTemplate: "A-{description}",
+        imageTemplate: "{image_url}",
+      },
+      10,
+      "batch",
+    );
+    database.setXianyuSettings(
+      "account-b",
+      8.8,
+      "2026-08-17T00:01:00.000Z",
+      {
+        titleTemplate: "B-{title}",
+        descriptionTemplate: "B-{description}",
+        imageTemplate: "{image_url}",
+      },
+      20,
+      "shop-batch",
+    );
+  } finally {
+    database.close();
+  }
+
+  const client = new FakeXianyuClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    await service.run({ trigger: "test", accountId: "account-a" });
+    await service.run({ trigger: "test", accountId: "account-b" });
+
+    assert.equal(client.upsertCalls.length, 2);
+    assert.deepEqual(
+      client.upsertCalls.map(([payload]) => ({
+        title: payload.title,
+        price: payload.price,
+        stock: payload.stock,
+      })),
+      [
+        { title: "A-游戏 901", price: 2.5, stock: 10 },
+        { title: "B-游戏 901", price: 8.8, stock: 20 },
+      ],
+    );
+    assert.deepEqual(
+      client.publishCalls.map((call) => ({
+        accountId: call.accountId,
+        shop: Boolean(call.shop),
+      })),
+      [
+        { accountId: "account-a", shop: false },
+        { accountId: "account-b", shop: true },
+      ],
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

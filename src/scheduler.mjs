@@ -46,6 +46,25 @@ function parseSyncGameIds(value) {
   ];
 }
 
+function parseSyncAccountIds(value) {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  return [
+    ...new Set(
+      parsed
+        .map((accountId) => String(accountId ?? "").trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 function syncGameIdsValue(value) {
   if (!Array.isArray(value)) {
     const error = new Error("自选游戏必须是游戏 ID 数组");
@@ -64,6 +83,29 @@ function syncGameIdsValue(value) {
     throw error;
   }
   return gameIds;
+}
+
+function syncAccountIdsValue(value) {
+  if (!Array.isArray(value)) {
+    const error = new Error("发布账号必须是账号 ID 数组");
+    error.statusCode = 422;
+    throw error;
+  }
+  const accountIds = parseSyncAccountIds(value);
+  if (
+    accountIds.length !== value.length ||
+    accountIds.some((accountId) => accountId.length > 80)
+  ) {
+    const error = new Error("发布账号 ID 不能为空且不能超过 80 个字符");
+    error.statusCode = 422;
+    throw error;
+  }
+  if (accountIds.length > 20) {
+    const error = new Error("单个同步任务最多选择 20 个发布账号");
+    error.statusCode = 422;
+    throw error;
+  }
+  return accountIds;
 }
 
 function log(event, fields = {}) {
@@ -85,6 +127,7 @@ function settingsFromRow(row) {
     syncEnabled: Boolean(row.sync_enabled),
     syncMode: row.sync_mode ?? "all",
     syncGameIds: parseSyncGameIds(row.sync_game_ids),
+    syncAccountIds: parseSyncAccountIds(row.sync_account_ids),
     crawlConcurrency: Number(row.crawl_concurrency),
     materialConcurrency: Number(row.material_concurrency),
     publishBatchSize: Number(row.publish_batch_size),
@@ -136,6 +179,9 @@ function normalizeScheduleSettings(input) {
     syncGameIds: syncGameIdsValue(
       input.syncGameIds ?? schedulerSettings?.syncGameIds ?? [],
     ),
+    syncAccountIds: syncAccountIdsValue(
+      input.syncAccountIds ?? schedulerSettings?.syncAccountIds ?? [],
+    ),
     crawlConcurrency: concurrencyValue(
       input.crawlConcurrency,
       "采集并行数",
@@ -184,6 +230,11 @@ function normalizeScheduleSettings(input) {
     normalized.syncGameIds.length === 0
   ) {
     const error = new Error("自选游戏强制发布至少需要选择一个游戏");
+    error.statusCode = 422;
+    throw error;
+  }
+  if (normalized.syncEnabled && normalized.syncAccountIds.length === 0) {
+    const error = new Error("启用闲鱼同步前至少选择一个发布账号");
     error.statusCode = 422;
     throw error;
   }
@@ -291,6 +342,21 @@ function triggerSync(
   ) {
     return null;
   }
+  const accountIds = syncAccountIdsValue(
+    resolvedOptions.accountIds ?? schedulerSettings.syncAccountIds,
+  );
+  if (accountIds.length === 0) {
+    if (reason.startsWith("schedule")) {
+      log("schedule_skipped", {
+        reason,
+        message: "未选择发布账号，已跳过闲鱼同步任务",
+      });
+      return null;
+    }
+    const error = new Error("请先在任务页面选择至少一个发布账号");
+    error.statusCode = 422;
+    throw error;
+  }
   if (activeSync) {
     log("sync_skipped", {
       reason,
@@ -302,7 +368,7 @@ function triggerSync(
     deferredSync = {
       reason: `${reason}-deferred`,
       mode,
-      options,
+      options: { ...resolvedOptions, accountIds },
     };
     log("sync_deferred", {
       reason,
@@ -319,23 +385,41 @@ function triggerSync(
     currentGameId: null,
     currentTitle: null,
     phase: "preparing",
+    accountIds,
+    accountId: accountIds[0],
+    accountIndex: 1,
+    accountCount: accountIds.length,
   };
-  activeSync = syncService
-    .run({
-      trigger: reason,
-      mode,
-      gameIds: resolvedOptions.gameIds ?? null,
-      control,
-      materialConcurrency: schedulerSettings.materialConcurrency,
-      publishBatchSize: schedulerSettings.publishBatchSize,
-      candidateSort: schedulerSettings.syncSort,
-      publishLimit: reason.startsWith("schedule")
-        ? schedulerSettings.publishLimit
-        : 0,
-      onProgress: (progress) => {
-        syncProgress = progress;
-      },
-    })
+  activeSync = (async () => {
+    const results = [];
+    for (let index = 0; index < accountIds.length; index += 1) {
+      const accountId = accountIds[index];
+      const result = await syncService.run({
+        trigger: reason,
+        mode,
+        gameIds: resolvedOptions.gameIds ?? null,
+        accountId,
+        control,
+        materialConcurrency: schedulerSettings.materialConcurrency,
+        publishBatchSize: schedulerSettings.publishBatchSize,
+        candidateSort: schedulerSettings.syncSort,
+        publishLimit: reason.startsWith("schedule")
+          ? schedulerSettings.publishLimit
+          : 0,
+        onProgress: (progress) => {
+          syncProgress = {
+            ...progress,
+            accountIds,
+            accountId,
+            accountIndex: index + 1,
+            accountCount: accountIds.length,
+          };
+        },
+      });
+      results.push(result);
+    }
+    return { accountIds, accounts: results, status: "success" };
+  })()
     .then((result) => {
       log("xianyu_sync_completed", result);
       return result;
@@ -425,6 +509,7 @@ function updateScheduleSettings(input) {
     syncCronSchedule: schedulerSettings.syncCronSchedule,
     syncEnabled: schedulerSettings.syncEnabled,
     syncMode: schedulerSettings.syncMode,
+    syncAccountIds: schedulerSettings.syncAccountIds,
     crawlConcurrency: schedulerSettings.crawlConcurrency,
     materialConcurrency: schedulerSettings.materialConcurrency,
     publishBatchSize: schedulerSettings.publishBatchSize,
@@ -557,6 +642,7 @@ function scheduleRuntime() {
       sort: schedulerSettings.syncSort,
       mode: schedulerSettings.syncMode,
       gameIds: schedulerSettings.syncGameIds,
+      accountIds: schedulerSettings.syncAccountIds,
       progress: syncProgress,
     },
   };
@@ -580,6 +666,9 @@ schedulerSettings = settingsFromRow(
       syncEnabled: config.syncEnabled,
       syncMode: "all",
       syncGameIds: [],
+      syncAccountIds: [database.getXianyuSyncSettings().account_id].filter(
+        Boolean,
+      ),
       crawlConcurrency: config.detailConcurrency,
       materialConcurrency: materialSyncConcurrency,
       publishBatchSize,
@@ -598,7 +687,10 @@ dashboard = await startDashboardServer(config, scheduleRuntime, {
   listXianyuAccounts: () => syncService.listAccounts(),
   validateXianyuAccount: (accountId) =>
     syncService.validateAccount(accountId),
-  syncXianyuPublishedItems: () => syncService.syncAccountPublishedItems(),
+  syncXianyuPublishedItems: () =>
+    syncService.syncAccountPublishedItems({
+      accountIds: schedulerSettings.syncAccountIds,
+    }),
   updateScheduleSettings,
   updateXianyuApiKey,
   triggerCrawl: (reason) => {
@@ -611,6 +703,7 @@ dashboard = await startDashboardServer(config, scheduleRuntime, {
       active: true,
       mode,
       gameIds: options.gameIds ?? null,
+      accountIds: options.accountIds ?? schedulerSettings.syncAccountIds,
     };
   },
   controlTask,

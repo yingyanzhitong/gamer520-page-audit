@@ -98,6 +98,12 @@
     height: 1px;
     background: hsl(var(--border));
   }
+
+  .game-detail-copyable :where(h1, h2, h3, p, a, code) {
+    -webkit-touch-callout: default;
+    -webkit-user-select: text;
+    user-select: text;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -650,7 +650,10 @@ function SyncRail({ dashboard }) {
           <div>
             <CardTitle>自动发货链路</CardTitle>
             <CardDescription className="mt-1">
-              当前账号：{dashboard?.xianyu?.accountId ?? "未配置"}
+              任务账号：
+              {dashboard?.xianyu?.accountIds?.length
+                ? dashboard.xianyu.accountIds.join("、")
+                : "未选择"}
             </CardDescription>
           </div>
           <StatusBadge
@@ -986,7 +989,11 @@ function TaskProgress({ schedule, crawlRun, onViewLogs }) {
             <StatusBadge status="running" />
           </div>
         </div>
-        <CardDescription>{progress.currentTitle ?? "正在准备"}</CardDescription>
+        <CardDescription>
+          账号 {progress.accountIndex ?? 1}/{progress.accountCount ?? 1}
+          {progress.accountId ? ` · ${progress.accountId}` : ""}
+          {` · ${progress.currentTitle ?? "正在准备"}`}
+        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5 md:grid-cols-2">
         <div className="space-y-2">
@@ -1030,6 +1037,7 @@ function SelectedGamesDialog({
   notify,
   onStarted,
   initialGameIds = [],
+  accountIds = [],
   onSelected = null,
 }) {
   const [query, setQuery] = useState("");
@@ -1116,7 +1124,7 @@ function SelectedGamesDialog({
     try {
       const result = await api("/api/games/sync-selected", {
         method: "POST",
-        body: jsonBody({ gameIds }),
+        body: jsonBody({ gameIds, accountIds }),
       });
       notify(result.message ?? `已启动 ${gameIds.length} 个有效游戏的同步任务`);
       closeDialog();
@@ -1281,6 +1289,7 @@ function SelectedGamesDialog({
 
 function TasksPage({ notify }) {
   const [schedule, setSchedule] = useState(null);
+  const [accounts, setAccounts] = useState([]);
   const [runs, setRuns] = useState([]);
   const [logs, setLogs] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -1292,12 +1301,15 @@ function TasksPage({ notify }) {
   const scheduleRevisionRef = useRef(0);
 
   const load = useCallback(async () => {
-    const [nextSchedule, nextRuns, nextLogs] = await Promise.all([
-      api("/api/settings/schedule"),
-      api("/api/runs?limit=50"),
-      api("/api/logs?limit=80"),
-    ]);
+    const [nextSchedule, nextRuns, nextLogs, accountPayload] =
+      await Promise.all([
+        api("/api/settings/schedule"),
+        api("/api/runs?limit=50"),
+        api("/api/logs?limit=80"),
+        api("/api/xianyu/accounts").catch(() => null),
+      ]);
     if (!scheduleDirtyRef.current) setSchedule(nextSchedule);
+    if (accountPayload) setAccounts(accountPayload.items ?? []);
     setRuns(nextRuns);
     setLogs(nextLogs);
   }, []);
@@ -1340,6 +1352,7 @@ function TasksPage({ notify }) {
             publish_limit: Number(schedule.sync.publishLimit),
             sort: schedule.sync.sort,
             selected_game_ids: schedule.sync.gameIds ?? [],
+            account_ids: schedule.sync.accountIds ?? [],
           },
         }),
       });
@@ -1359,7 +1372,11 @@ function TasksPage({ notify }) {
     try {
       await api(kind === "crawl" ? "/api/crawl/run" : "/api/sync/run", {
         method: "POST",
-        body: jsonBody(kind === "sync" ? { mode } : {}),
+        body: jsonBody(
+          kind === "sync"
+            ? { mode, account_ids: schedule?.sync?.accountIds ?? [] }
+            : {},
+        ),
       });
       notify(kind === "crawl" ? "采集任务已启动" : "同步任务已启动");
       await load();
@@ -1403,7 +1420,10 @@ function TasksPage({ notify }) {
               <CloudDownload className="h-4 w-4" />
               立即采集
             </Button>
-            <Button onClick={() => runTask("sync", "pending")}>
+            <Button
+              onClick={() => runTask("sync", "pending")}
+              disabled={!schedule?.sync?.accountIds?.length}
+            >
               <Play className="h-4 w-4" />
               同步未发布
             </Button>
@@ -1491,6 +1511,70 @@ function TasksPage({ notify }) {
                 ) : null}
                 {kind === "sync" ? (
                   <>
+                    <div className="space-y-2">
+                      <Label>发布账号（可多选）</Label>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {accounts.length ? (
+                          accounts.map((account) => {
+                            const checked = Boolean(
+                              schedule?.sync?.accountIds?.includes(
+                                account.accountId,
+                              ),
+                            );
+                            return (
+                              <label
+                                key={account.accountId}
+                                className={cn(
+                                  "flex items-start gap-3 rounded-lg border p-3 text-sm transition",
+                                  checked && "border-blue-300 bg-blue-50/60",
+                                  !account.enabled && "cursor-not-allowed opacity-50",
+                                )}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5"
+                                  checked={checked}
+                                  disabled={!account.enabled}
+                                  onChange={(event) => {
+                                    const current =
+                                      schedule?.sync?.accountIds ?? [];
+                                    updateSchedule(
+                                      ["sync", "accountIds"],
+                                      event.target.checked
+                                        ? [
+                                            ...new Set([
+                                              ...current,
+                                              account.accountId,
+                                            ]),
+                                          ]
+                                        : current.filter(
+                                            (accountId) =>
+                                              accountId !== account.accountId,
+                                          ),
+                                    );
+                                  }}
+                                />
+                                <span className="min-w-0">
+                                  <span className="block font-medium">
+                                    {account.remark || account.accountId}
+                                  </span>
+                                  <span className="font-data mt-1 block truncate text-[10px] text-muted-foreground">
+                                    {account.accountId}
+                                  </span>
+                                </span>
+                              </label>
+                            );
+                          })
+                        ) : (
+                          <p className="text-sm text-muted-foreground">
+                            暂无可用账号，请先配置闲鱼 API Key。
+                          </p>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        一次同步会依次发布到所有已选账号；每个账号使用商品配置页中自己的售价、库存、发布方式和模板。
+                      </p>
+                    </div>
                     <Select
                       value={schedule?.sync?.mode ?? "pending"}
                       onChange={(event) =>
@@ -1571,7 +1655,7 @@ function TasksPage({ notify }) {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>单次定时发布成功上限</Label>
+                        <Label>每账号定时发布成功上限</Label>
                         <Input
                           type="number"
                           min="0"
@@ -1587,7 +1671,7 @@ function TasksPage({ notify }) {
                       </div>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      素材导入和发布独立运行；发布线程发现可发布素材后立即提交，每批最多 1–20 件。单次定时发布成功上限仅对定时任务生效，只有已确认发布成功的商品计入上限；失败、跳过和待确认均不占额度，填 0 表示不限制。
+                      素材导入和发布独立运行；发布线程发现可发布素材后立即提交，每批最多 1–20 件。每账号定时发布成功上限仅对定时任务生效，只有已确认发布成功的商品计入上限；失败、跳过和待确认均不占额度，填 0 表示不限制。
                     </p>
                   </>
                 ) : null}
@@ -1609,22 +1693,31 @@ function TasksPage({ notify }) {
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <Button variant="outline" onClick={() => runTask("sync", "all")}>
+              <Button
+                variant="outline"
+                onClick={() => runTask("sync", "all")}
+                disabled={!schedule?.sync?.accountIds?.length}
+              >
                 全部待处理商品
               </Button>
               <Button
                 variant="outline"
                 onClick={() => runTask("sync", "pending")}
+                disabled={!schedule?.sync?.accountIds?.length}
               >
                 未发布商品
               </Button>
               <Button
                 variant="outline"
                 onClick={() => runTask("sync", "updated")}
+                disabled={!schedule?.sync?.accountIds?.length}
               >
                 已更新商品
               </Button>
-              <Button onClick={() => setSelectedGamesOpen(true)}>
+              <Button
+                onClick={() => setSelectedGamesOpen(true)}
+                disabled={!schedule?.sync?.accountIds?.length}
+              >
                 <Check className="h-4 w-4" />
                 自选有效游戏
               </Button>
@@ -1732,6 +1825,7 @@ function TasksPage({ notify }) {
                     </div>
                     <div className="font-data mt-1 text-[10px] text-muted-foreground">
                       {run.triggerType}
+                      {run.accountId ? ` · ${run.accountId}` : ""}
                     </div>
                   </TableCell>
                   <TableCell>
@@ -1802,6 +1896,7 @@ function TasksPage({ notify }) {
         onOpenChange={setSelectedGamesOpen}
         notify={notify}
         onStarted={load}
+        accountIds={schedule?.sync?.accountIds ?? []}
       />
       <SelectedGamesDialog
         open={scheduledGamesOpen}
@@ -1828,11 +1923,38 @@ function TasksPage({ notify }) {
 function ProductConfigPage({ notify }) {
   const [settings, setSettings] = useState(null);
   const [accounts, setAccounts] = useState([]);
+  const [accountSettings, setAccountSettings] = useState([]);
+  const [defaultSettings, setDefaultSettings] = useState(null);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [previewImageFailed, setPreviewImageFailed] = useState(false);
 
-  const load = useCallback(async () => {
-    setSettings(await api("/api/settings/xianyu"));
+  const load = useCallback(async (preferredAccountId = null) => {
+    const [payload, accountPayload] = await Promise.all([
+      api("/api/settings/xianyu"),
+      api("/api/xianyu/accounts"),
+    ]);
+    const nextAccounts = accountPayload.items ?? [];
+    const savedSettings = payload.items ?? [];
+    setAccounts(nextAccounts);
+    setAccountSettings(savedSettings);
+    setDefaultSettings(payload.defaults);
+    setSettings((current) => {
+      const accountId =
+        (typeof preferredAccountId === "string" && preferredAccountId) ||
+        current?.accountId ||
+        savedSettings[0]?.accountId ||
+        nextAccounts.find((account) => account.enabled)?.accountId ||
+        "";
+      const accountConfig = savedSettings.find(
+        (item) => item.accountId === accountId,
+      );
+      return {
+        ...payload.defaults,
+        ...accountConfig,
+        accountId,
+        preview: payload.preview,
+      };
+    });
   }, []);
   useEffect(() => {
     void load();
@@ -1855,6 +1977,18 @@ function ProductConfigPage({ notify }) {
     setSettings((current) => ({ ...current, [key]: value }));
   }
 
+  function selectAccount(accountId) {
+    const accountConfig = accountSettings.find(
+      (item) => item.accountId === accountId,
+    );
+    setSettings((current) => ({
+      ...defaultSettings,
+      ...accountConfig,
+      accountId,
+      preview: current?.preview ?? null,
+    }));
+  }
+
   async function save() {
     try {
       await api("/api/settings/xianyu", {
@@ -1870,7 +2004,7 @@ function ProductConfigPage({ notify }) {
         }),
       });
       notify("商品配置已保存");
-      await load();
+      await load(settings.accountId);
     } catch (caught) {
       notify(errorMessage(caught), "error");
     }
@@ -1910,7 +2044,7 @@ function ProductConfigPage({ notify }) {
       <PageHeading
         eyebrow="Listing rules"
         title="商品配置"
-        description="配置发布账号、默认售价、库存和素材模板。已有商品编号或已有素材的游戏会跳过。"
+        description="为每个闲鱼账号分别配置售价、库存、发布方式和素材模板；任务使用哪些账号请在任务页面选择。"
         actions={
           <>
             <Button variant="outline" onClick={loadAccounts}>
@@ -1919,7 +2053,7 @@ function ProductConfigPage({ notify }) {
               />
               刷新账号
             </Button>
-            <Button onClick={save}>
+            <Button onClick={save} disabled={!settings?.accountId}>
               <Save className="h-4 w-4" />
               保存配置
             </Button>
@@ -1935,12 +2069,12 @@ function ProductConfigPage({ notify }) {
           <CardContent className="space-y-5">
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2">
-                <Label>发布账号 account_id</Label>
+                <Label>配置账号 account_id</Label>
                 <Select
                   value={settings?.accountId ?? ""}
-                  onChange={(event) => update("accountId", event.target.value)}
+                  onChange={(event) => selectAccount(event.target.value)}
                 >
-                  <option value="">请选择发布账号</option>
+                  <option value="">请选择要配置的账号</option>
                   {accounts.map((account) => (
                     <option
                       key={account.accountId}
@@ -2082,7 +2216,7 @@ function ProductConfigPage({ notify }) {
   );
 }
 
-function GameDetail({ gameId, open, onOpenChange }) {
+function GameDetail({ gameId, open, onOpenChange, notify }) {
   const [detail, setDetail] = useState(null);
   const [imagePreviewFailed, setImagePreviewFailed] = useState(false);
   useEffect(() => {
@@ -2092,13 +2226,33 @@ function GameDetail({ gameId, open, onOpenChange }) {
   useEffect(() => {
     setImagePreviewFailed(false);
   }, [detail?.game?.imageUrl]);
+
+  async function copyDeliveryInfo() {
+    const deliveryInfo = [
+      `解压密码：${detail?.game?.archivePassword ?? ""}`,
+      ...(detail?.downloads ?? []).map((download) => {
+        const extractionCode = download.extractionCode ?? download.password;
+        return `${download.provider}：${download.url}${
+          extractionCode ? ` 提取码：${extractionCode}` : ""
+        }`;
+      }),
+    ].join("\n");
+
+    try {
+      await navigator.clipboard.writeText(deliveryInfo);
+      notify("手动发货信息已复制");
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="game-detail-copyable max-w-3xl">
         <DialogHeader>
           <DialogTitle>{detail?.game?.title ?? `游戏 ${gameId}`}</DialogTitle>
           <DialogDescription>
-            游戏凭证、图片链接、下载源与资源详情页
+            游戏凭证、图片链接、下载源与资源详情页；移动端可长按文字复制。
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -2170,17 +2324,25 @@ function GameDetail({ gameId, open, onOpenChange }) {
             </div>
           ))}
         </div>
-        {detail?.game?.detailPageUrl ? (
-          <Button asChild variant="outline">
-            <a
-              href={detail.game.detailPageUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <ExternalLink className="h-4 w-4" />
-              打开资源详情页
-            </a>
-          </Button>
+        {detail?.game ? (
+          <div className="flex flex-col items-start gap-2">
+            <Button onClick={copyDeliveryInfo}>
+              <Truck className="h-4 w-4" />
+              手动发货
+            </Button>
+            {detail.game.detailPageUrl ? (
+              <Button asChild variant="outline">
+                <a
+                  href={detail.game.detailPageUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  打开资源详情页
+                </a>
+              </Button>
+            ) : null}
+          </div>
         ) : null}
       </DialogContent>
     </Dialog>
@@ -2548,6 +2710,7 @@ function GamesPage({ notify }) {
       <GameDetail
         gameId={detailId}
         open={Boolean(detailId)}
+        notify={notify}
         onOpenChange={(open) => {
           if (!open) setDetailId(null);
         }}

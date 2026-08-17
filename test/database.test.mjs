@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
@@ -538,6 +539,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         syncEnabled: true,
         syncMode: "all",
         syncGameIds: [],
+        syncAccountIds: ["account-a"],
         crawlConcurrency: 3,
         materialConcurrency: 4,
         publishBatchSize: 20,
@@ -551,6 +553,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(initial.sync_enabled, 1);
     assert.equal(initial.sync_mode, "all");
     assert.equal(initial.sync_game_ids, "[]");
+    assert.equal(initial.sync_account_ids, '["account-a"]');
     assert.equal(initial.crawl_concurrency, 3);
     assert.equal(initial.material_concurrency, 4);
     assert.equal(initial.publish_batch_size, 20);
@@ -567,6 +570,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         syncEnabled: true,
         syncMode: "updated",
         syncGameIds: [118842],
+        syncAccountIds: ["account-a", "account-b"],
         crawlConcurrency: 5,
         materialConcurrency: 6,
         publishBatchSize: 8,
@@ -581,6 +585,10 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.sync_cron_schedule, "15 */8 * * *");
     assert.equal(updated.sync_mode, "updated");
     assert.equal(updated.sync_game_ids, "[118842]");
+    assert.equal(
+      updated.sync_account_ids,
+      '["account-a","account-b"]',
+    );
     assert.equal(updated.crawl_concurrency, 5);
     assert.equal(updated.material_concurrency, 6);
     assert.equal(updated.publish_batch_size, 8);
@@ -589,7 +597,147 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.publish_concurrency, 2);
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      18,
+      19,
+    );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("不同闲鱼账号保存并读取独立发布配置", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-account-settings-test-"),
+  );
+  const database = new CrawlerDatabase(
+    path.join(directory, "account-settings.sqlite"),
+  );
+  try {
+    database.setXianyuSettings(
+      "account-a",
+      2.5,
+      "2026-08-17T00:00:00.000Z",
+      {
+        titleTemplate: "A-{title}",
+        descriptionTemplate: "A-{description}",
+        imageTemplate: "{image_url}",
+      },
+      10,
+      "batch",
+    );
+    database.setXianyuSettings(
+      "account-b",
+      8.8,
+      "2026-08-17T00:01:00.000Z",
+      {
+        titleTemplate: "B-{title}",
+        descriptionTemplate: "B-{description}",
+        imageTemplate: "https://cdn.example/{id}.jpg",
+      },
+      20,
+      "shop-batch",
+    );
+
+    assert.deepEqual(
+      database.listXianyuAccountSettings().map((item) => item.account_id),
+      ["account-b", "account-a"],
+    );
+    assert.equal(database.getXianyuSyncSettings("account-a").default_price, 2.5);
+    assert.equal(database.getXianyuSyncSettings("account-a").default_stock, 10);
+    assert.equal(
+      database.getXianyuSyncSettings("account-a").title_template,
+      "A-{title}",
+    );
+    assert.equal(database.getXianyuSyncSettings("account-b").default_price, 8.8);
+    assert.equal(database.getXianyuSyncSettings("account-b").default_stock, 20);
+    assert.equal(
+      database.getXianyuSyncSettings("account-b").publish_mode,
+      "shop-batch",
+    );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("旧单账号配置自动迁移为账号配置和任务账号", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-account-migration-test-"),
+  );
+  const databasePath = path.join(directory, "migration.sqlite");
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    CREATE TABLE xianyu_sync_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      account_id TEXT,
+      default_price REAL NOT NULL DEFAULT 1,
+      default_stock INTEGER NOT NULL DEFAULT 999,
+      publish_mode TEXT NOT NULL DEFAULT 'batch',
+      title_template TEXT,
+      description_template TEXT,
+      image_template TEXT,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO xianyu_sync_settings VALUES (
+      1,
+      'legacy-account',
+      6.6,
+      66,
+      'shop-batch',
+      '旧-{title}',
+      '旧-{description}',
+      '{image_url}',
+      '2026-08-16T00:00:00.000Z'
+    );
+    CREATE TABLE scheduler_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      cron_timezone TEXT NOT NULL,
+      crawl_cron_schedule TEXT NOT NULL,
+      crawl_enabled INTEGER NOT NULL DEFAULT 1,
+      sync_cron_schedule TEXT NOT NULL,
+      sync_enabled INTEGER NOT NULL DEFAULT 1,
+      sync_mode TEXT NOT NULL DEFAULT 'all',
+      sync_game_ids TEXT NOT NULL DEFAULT '[]',
+      crawl_concurrency INTEGER NOT NULL DEFAULT 3,
+      material_concurrency INTEGER NOT NULL DEFAULT 4,
+      publish_batch_size INTEGER NOT NULL DEFAULT 20,
+      sync_publish_limit INTEGER NOT NULL DEFAULT 0,
+      sync_sort TEXT NOT NULL DEFAULT 'created',
+      publish_concurrency INTEGER NOT NULL DEFAULT 4,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO scheduler_settings VALUES (
+      1,
+      'Asia/Shanghai',
+      '0 3 * * *',
+      1,
+      '0 */6 * * *',
+      1,
+      'all',
+      '[]',
+      3,
+      4,
+      20,
+      0,
+      'created',
+      4,
+      '2026-08-16T00:00:00.000Z'
+    );
+  `);
+  legacy.close();
+
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    const migrated = database.getXianyuSyncSettings("legacy-account");
+    assert.equal(migrated.default_price, 6.6);
+    assert.equal(migrated.default_stock, 66);
+    assert.equal(migrated.publish_mode, "shop-batch");
+    assert.equal(migrated.title_template, "旧-{title}");
+    assert.equal(
+      database.queryOne(
+        "SELECT sync_account_ids FROM scheduler_settings WHERE id = 1",
+      ).sync_account_ids,
+      '["legacy-account"]',
     );
   } finally {
     database.close();

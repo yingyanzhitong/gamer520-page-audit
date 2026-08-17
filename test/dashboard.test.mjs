@@ -217,6 +217,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         publishBatchSize: 20,
         publishLimit: 0,
         mode: "all",
+        accountIds: ["account-a", "account-b"],
         progress: {
           runId: syncRunId,
           total: 10,
@@ -240,13 +241,18 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           remark: "主账号",
         },
         {
+          accountId: "account-b",
+          enabled: true,
+          remark: "副账号",
+        },
+        {
           accountId: "account-disabled",
           enabled: false,
           remark: "停用",
         },
       ],
       validateXianyuAccount: async (accountId) => {
-        if (accountId !== "account-a") {
+        if (!["account-a", "account-b"].includes(accountId)) {
           const error = new Error("账号不存在或无权访问");
           error.statusCode = 403;
           throw error;
@@ -409,7 +415,11 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     const accountBDashboard = await fetch(`${baseUrl}/api/dashboard`).then(
       (response) => response.json(),
     );
-    assert.equal(accountBDashboard.totals.publishedGames, 0);
+    assert.equal(accountBDashboard.totals.publishedGames, 1);
+    assert.deepEqual(accountBDashboard.xianyu.accountIds, [
+      "account-a",
+      "account-b",
+    ]);
     const restoreAccountDatabase = new CrawlerDatabase(databasePath);
     restoreAccountDatabase.setXianyuAccountId(
       "account-a",
@@ -832,7 +842,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     const accounts = await fetch(`${baseUrl}/api/xianyu/accounts`, {
       headers: { "X-API-Key": "xianyu-secret" },
     }).then((response) => response.json());
-    assert.equal(accounts.items.length, 2);
+    assert.equal(accounts.items.length, 3);
     assert.equal(accounts.items[0].accountId, "account-a");
 
     const rejectedAccount = await fetch(
@@ -890,6 +900,12 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(
       settings.imageTemplate,
       "https://cdn.example/{id}.jpg",
+    );
+    assert.equal(settings.items.length, 2);
+    assert.equal(
+      settings.items.find((item) => item.accountId === "account-a")
+        .titleTemplate,
+      "现货 {title}",
     );
 
     const invalidTemplate = await fetch(
@@ -996,6 +1012,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
             enabled: true,
             mode: "selected-force",
             selected_game_ids: [118842],
+            account_ids: ["account-a", "account-b"],
             material_concurrency: 6,
             publish_batch_size: 8,
             publish_limit: 42,
@@ -1010,6 +1027,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(savedSchedule.syncCronSchedule, "15 */8 * * *");
     assert.equal(savedSchedule.syncMode, "selected-force");
     assert.deepEqual(savedSchedule.syncGameIds, [118842]);
+    assert.deepEqual(savedSchedule.syncAccountIds, [
+      "account-a",
+      "account-b",
+    ]);
     assert.equal(savedSchedule.materialConcurrency, 6);
     assert.equal(savedSchedule.publishBatchSize, 8);
     assert.equal(savedSchedule.publishLimit, 42);
@@ -1033,14 +1054,17 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         "content-type": "application/json",
         "X-API-Key": "xianyu-secret",
       },
-      body: JSON.stringify({ mode: "pending" }),
+      body: JSON.stringify({
+        mode: "pending",
+        account_ids: ["account-a", "account-b"],
+      }),
     });
     assert.equal(sync.status, 202);
     assert.equal((await sync.json()).mode, "pending");
     assert.deepEqual(syncTrigger, {
       trigger: "manual",
       mode: "pending",
-      options: {},
+      options: { accountIds: ["account-a", "account-b"] },
     });
 
     const singleSync = await fetch(

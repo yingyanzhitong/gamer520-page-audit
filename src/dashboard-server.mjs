@@ -74,6 +74,23 @@ function mapRun(row) {
   };
 }
 
+function mapXianyuSettings(row) {
+  return {
+    accountId: row?.account_id ?? null,
+    defaultPrice: Number(row?.default_price ?? 1),
+    defaultStock: Number(row?.default_stock ?? 999),
+    publishMode: row?.publish_mode ?? "batch",
+    titleTemplate:
+      row?.title_template ?? DEFAULT_XIANYU_TEMPLATES.titleTemplate,
+    descriptionTemplate:
+      row?.description_template ??
+      DEFAULT_XIANYU_TEMPLATES.descriptionTemplate,
+    imageTemplate:
+      row?.image_template ?? DEFAULT_XIANYU_TEMPLATES.imageTemplate,
+    updatedAt: row?.updated_at ?? null,
+  };
+}
+
 function mapGame(row) {
   return {
     id: row.id,
@@ -334,7 +351,39 @@ function withDatabase(databasePath, callback) {
   }
 }
 
+function taskAccountIds(database) {
+  const stored = database
+    .prepare("SELECT sync_account_ids FROM scheduler_settings WHERE id = 1")
+    .get()?.sync_account_ids;
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        const accountIds = [
+          ...new Set(
+            parsed
+              .map((accountId) => String(accountId ?? "").trim())
+              .filter(Boolean),
+          ),
+        ];
+        if (accountIds.length > 0) return accountIds;
+      }
+    } catch {
+      // 旧的异常配置回退到兼容单账号。
+    }
+  }
+  const fallback = String(
+    database
+      .prepare("SELECT account_id FROM xianyu_sync_settings WHERE id = 1")
+      .get()?.account_id ?? "",
+  ).trim();
+  return fallback ? [fallback] : [];
+}
+
 function dashboardPayload(database, config, runtimeState) {
+  const runtime = runtimeState();
+  const primaryAccountId =
+    runtime.sync?.accountIds?.[0] ?? taskAccountIds(database)[0] ?? null;
   const currentRun = database
     .prepare(
       "SELECT * FROM crawl_runs WHERE status = 'running' ORDER BY id DESC LIMIT 1",
@@ -355,14 +404,14 @@ function dashboardPayload(database, config, runtimeState) {
           THEN 1 ELSE 0 END) AS valid_games,
         (SELECT COUNT(*) FROM xianyu_material_sync WHERE status = 'synced') AS material_synced,
         (SELECT COUNT(*) FROM xianyu_publications
-          WHERE account_id = (SELECT account_id FROM xianyu_sync_settings WHERE id = 1)
+          WHERE account_id = ?
             AND status = 'success') AS published_games,
         (SELECT COUNT(*) FROM xianyu_publications
-          WHERE account_id = (SELECT account_id FROM xianyu_sync_settings WHERE id = 1)
+          WHERE account_id = ?
             AND status IN ('failed', 'unknown')) AS publish_attention
       FROM games
     `)
-    .get();
+    .get(primaryAccountId, primaryAccountId);
   const errors = database
     .prepare(`
       SELECT
@@ -392,21 +441,23 @@ function dashboardPayload(database, config, runtimeState) {
       createdAt: row.created_at,
     }));
   const syncSettings =
-    database
-      .prepare(
-        `SELECT
-           account_id,
-           default_price,
-           default_stock,
-           publish_mode,
-           title_template,
-           description_template,
-           image_template,
-           updated_at
-         FROM xianyu_sync_settings
-         WHERE id = 1`,
-      )
-      .get() ?? {
+    (primaryAccountId
+      ? database
+          .prepare(
+            `SELECT
+               account_id,
+               default_price,
+               default_stock,
+               publish_mode,
+               title_template,
+               description_template,
+               image_template,
+               updated_at
+             FROM xianyu_account_settings
+             WHERE account_id = ?`,
+          )
+          .get(primaryAccountId)
+      : null) ?? {
         account_id: null,
         default_price: 1,
         default_stock: 999,
@@ -418,7 +469,7 @@ function dashboardPayload(database, config, runtimeState) {
 
   return {
     generatedAt: new Date().toISOString(),
-    scheduler: runtimeState(),
+    scheduler: runtime,
     pageCount: config.pageCount,
     currentRun: mapRun(currentRun),
     latestRun: mapRun(latestRun),
@@ -437,6 +488,7 @@ function dashboardPayload(database, config, runtimeState) {
     recentErrors: errors,
     xianyu: {
       accountId: syncSettings.account_id,
+      accountIds: runtime.sync?.accountIds ?? [],
       defaultPrice: Number(syncSettings.default_price ?? 1),
       defaultStock: Number(syncSettings.default_stock ?? 999),
       publishMode: syncSettings.publish_mode ?? "batch",
@@ -456,6 +508,7 @@ function dashboardPayload(database, config, runtimeState) {
 }
 
 function listGames(database, requestUrl) {
+  const primaryAccountId = taskAccountIds(database)[0] ?? null;
   const page = integerParameter(requestUrl.searchParams.get("page"), 1, 1, 100_000);
   const pageSize = integerParameter(
     requestUrl.searchParams.get("pageSize"),
@@ -495,16 +548,15 @@ function listGames(database, requestUrl) {
   const parameters = [];
   const joinedTables = `
     FROM games
-    LEFT JOIN xianyu_sync_settings AS settings
-      ON settings.id = 1
+    LEFT JOIN xianyu_account_settings AS settings
+      ON settings.account_id = ?
     LEFT JOIN xianyu_material_sync AS material
       ON material.game_id = games.id
     LEFT JOIN xianyu_publications AS publication
       ON publication.game_id = games.id
-     AND publication.account_id = (
-       SELECT account_id FROM xianyu_sync_settings WHERE id = 1
-     )
+     AND publication.account_id = ?
   `;
+  const joinParameters = [primaryAccountId, primaryAccountId];
 
   if (query) {
     conditions.push(
@@ -547,7 +599,7 @@ function listGames(database, requestUrl) {
       ${joinedTables}
       ${whereClause}
     `)
-    .get(...parameters).count;
+    .get(...joinParameters, ...parameters).count;
   const rows = database
     .prepare(`
       SELECT
@@ -571,7 +623,12 @@ function listGames(database, requestUrl) {
       ORDER BY ${sortClause}
       LIMIT ? OFFSET ?
     `)
-    .all(...parameters, pageSize, (page - 1) * pageSize);
+    .all(
+      ...joinParameters,
+      ...parameters,
+      pageSize,
+      (page - 1) * pageSize,
+    );
 
   return {
     page,
@@ -584,6 +641,7 @@ function listGames(database, requestUrl) {
 }
 
 function gameDetail(database, gameId) {
+  const primaryAccountId = taskAccountIds(database)[0] ?? null;
   const row = database
     .prepare(`
       SELECT
@@ -603,18 +661,16 @@ function gameDetail(database, gameId) {
         publication.item_url AS publication_item_url,
         publication.published_at AS publication_published_at
       FROM games
-      LEFT JOIN xianyu_sync_settings AS settings
-        ON settings.id = 1
+      LEFT JOIN xianyu_account_settings AS settings
+        ON settings.account_id = ?
       LEFT JOIN xianyu_material_sync AS material
         ON material.game_id = games.id
       LEFT JOIN xianyu_publications AS publication
         ON publication.game_id = games.id
-       AND publication.account_id = (
-         SELECT account_id FROM xianyu_sync_settings WHERE id = 1
-       )
+       AND publication.account_id = ?
       WHERE games.id = ?
     `)
-    .get(gameId);
+    .get(primaryAccountId, primaryAccountId, gameId);
   if (!row) return null;
 
   return {
@@ -1342,6 +1398,21 @@ export async function startDashboardServer(
                WHERE id = 1`,
             )
             .get();
+          const items = database
+            .prepare(
+              `SELECT
+                 account_id,
+                 default_price,
+                 default_stock,
+                 publish_mode,
+                 title_template,
+                 description_template,
+                 image_template,
+                 updated_at
+               FROM xianyu_account_settings
+               ORDER BY updated_at DESC, account_id ASC`,
+            )
+            .all();
           const preview = database
             .prepare(`
               SELECT
@@ -1358,25 +1429,14 @@ export async function startDashboardServer(
               LIMIT 1
             `)
             .get();
-          return { settings, preview };
+          return { settings, items, preview };
         });
         const settings = settingsPayload.settings;
         const preview = settingsPayload.preview;
         sendJson(response, 200, {
-          accountId: settings?.account_id ?? null,
-          defaultPrice: Number(settings?.default_price ?? 1),
-          defaultStock: Number(settings?.default_stock ?? 999),
-          publishMode: settings?.publish_mode ?? "batch",
-          titleTemplate:
-            settings?.title_template ??
-            DEFAULT_XIANYU_TEMPLATES.titleTemplate,
-          descriptionTemplate:
-            settings?.description_template ??
-            DEFAULT_XIANYU_TEMPLATES.descriptionTemplate,
-          imageTemplate:
-            settings?.image_template ??
-            DEFAULT_XIANYU_TEMPLATES.imageTemplate,
-          updatedAt: settings?.updated_at ?? null,
+          ...mapXianyuSettings(settings),
+          defaults: mapXianyuSettings(null),
+          items: settingsPayload.items.map(mapXianyuSettings),
           configured: Boolean(settings?.account_id),
           preview: preview
             ? {
@@ -1415,6 +1475,7 @@ export async function startDashboardServer(
             cronSchedule: state.sync?.cronSchedule,
             mode: state.sync?.mode ?? "all",
             gameIds: state.sync?.gameIds ?? [],
+            accountIds: state.sync?.accountIds ?? [],
             nextRun: state.sync?.nextRun ?? null,
             active: Boolean(state.sync?.active),
             interrupted: Boolean(state.sync?.interrupted),
@@ -1459,6 +1520,7 @@ export async function startDashboardServer(
           syncEnabled: body.sync?.enabled,
           syncMode: syncMode(body.sync?.mode),
           syncGameIds: body.sync?.selected_game_ids,
+          syncAccountIds: body.sync?.account_ids,
           materialConcurrency: body.sync?.material_concurrency,
           publishBatchSize: body.sync?.publish_batch_size,
           publishLimit: body.sync?.publish_limit,
@@ -1540,7 +1602,7 @@ export async function startDashboardServer(
         }
         const body = await readJsonBody(request);
         const accountId = String(body.account_id ?? "").trim();
-        const defaultPrice = salePrice(body.default_price ?? 1);
+        let defaultPrice;
         if (!accountId || accountId.length > 80) {
           sendError(response, 422, "account_id 不能为空且不能超过 80 个字符");
           return;
@@ -1555,7 +1617,10 @@ export async function startDashboardServer(
         let defaultStock;
         let publishMode;
         try {
-          const current = database.getXianyuSyncSettings();
+          const current = database.getXianyuSyncSettings(accountId);
+          defaultPrice = salePrice(
+            body.default_price ?? current.default_price,
+          );
           defaultStock = stockQuantity(
             body.default_stock ?? current.default_stock,
           );
@@ -1654,6 +1719,11 @@ export async function startDashboardServer(
           return;
         }
         const mode = syncMode(body.mode);
+        const accountIds = body.account_ids ?? state.sync?.accountIds ?? [];
+        const accountOptions =
+          Array.isArray(accountIds) && accountIds.length > 0
+            ? { accountIds }
+            : {};
         if (
           mode === "selected-force" &&
           (!Array.isArray(state.sync?.gameIds) ||
@@ -1666,8 +1736,8 @@ export async function startDashboardServer(
           "manual",
           mode,
           mode === "selected-force"
-            ? { gameIds: state.sync.gameIds }
-            : {},
+            ? { ...accountOptions, gameIds: state.sync.gameIds }
+            : accountOptions,
         );
         sendJson(response, 202, {
           success: true,
@@ -1692,6 +1762,7 @@ export async function startDashboardServer(
         }
         const body = await readJsonBody(request);
         const gameIds = selectedGameIds(body.gameIds ?? body.game_ids);
+        const accountIds = body.accountIds ?? body.account_ids;
         const validIds = withDatabase(config.dbPath, (database) =>
           database
             .prepare(
@@ -1724,6 +1795,9 @@ export async function startDashboardServer(
         }
         const accepted = handlers.triggerSync("manual-selected", "all", {
           gameIds,
+          ...(Array.isArray(accountIds) && accountIds.length > 0
+            ? { accountIds }
+            : {}),
         });
         sendJson(response, 202, {
           success: true,

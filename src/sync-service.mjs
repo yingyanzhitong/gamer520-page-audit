@@ -159,40 +159,87 @@ export class XianyuSyncService {
     return account;
   }
 
-  async syncAccountPublishedItems({ signal = null } = {}) {
+  async syncAccountPublishedItems({ accountIds = null, signal = null } = {}) {
     const database = new CrawlerDatabase(this.config.dbPath);
     try {
-      const settings = database.getXianyuSyncSettings();
-      const accountId = String(settings.account_id ?? "").trim();
-      if (!accountId) {
-        const error = new Error("请先在页面配置发布账号");
+      const fallbackAccountId = String(
+        database.getXianyuSyncSettings().account_id ?? "",
+      ).trim();
+      const resolvedAccountIds = [
+        ...new Set(
+          (Array.isArray(accountIds) ? accountIds : [fallbackAccountId])
+            .map((accountId) => String(accountId ?? "").trim())
+            .filter(Boolean),
+        ),
+      ];
+      if (resolvedAccountIds.length === 0) {
+        const error = new Error("请先在任务页面选择发布账号");
         error.statusCode = 422;
         throw error;
       }
-      await this.validateAccount(accountId, { signal });
       const materials = await this.client.listMaterials({ signal });
       const materialState = database.reconcileRemoteMaterials(
         materials,
         nowIso(),
       );
-      await this.client.refreshAccountItems(accountId, { signal });
-      const items = await this.client.listAccountItems(accountId, { signal });
-      return {
-        accountId,
-        ...materialState,
-        ...database.reconcileAccountPublishedItems(
+      const accounts = [];
+      for (const accountId of resolvedAccountIds) {
+        await this.validateAccount(accountId, { signal });
+        const settings = database.getXianyuSyncSettings(accountId);
+        await this.client.refreshAccountItems(accountId, { signal });
+        const items = await this.client.listAccountItems(accountId, { signal });
+        accounts.push({
           accountId,
-          items,
-          nowIso(),
-          {
-            titleForGame: (game) =>
-              renderXianyuListing(game, {
-                titleTemplate: settings.title_template,
-                descriptionTemplate: settings.description_template,
-                imageTemplate: settings.image_template,
-              }).title,
-          },
+          ...database.reconcileAccountPublishedItems(
+            accountId,
+            items,
+            nowIso(),
+            {
+              titleForGame: (game) =>
+                renderXianyuListing(game, {
+                  titleTemplate: settings.title_template,
+                  descriptionTemplate: settings.description_template,
+                  imageTemplate: settings.image_template,
+                }).title,
+            },
+          ),
+        });
+      }
+      const aggregate = {
+        ...materialState,
+        accountItemCount: accounts.reduce(
+          (total, account) => total + account.accountItemCount,
+          0,
         ),
+        localItemCount: accounts.reduce(
+          (total, account) => total + account.localItemCount,
+          0,
+        ),
+        confirmedCount: accounts.reduce(
+          (total, account) => total + account.confirmedCount,
+          0,
+        ),
+        titleMatchedCount: accounts.reduce(
+          (total, account) => total + account.titleMatchedCount,
+          0,
+        ),
+        materialFallbackCount: accounts.reduce(
+          (total, account) => total + account.materialFallbackCount,
+          0,
+        ),
+      };
+      if (accounts.length === 1) {
+        return {
+          accountId: accounts[0].accountId,
+          ...materialState,
+          ...accounts[0],
+        };
+      }
+      return {
+        accountId: resolvedAccountIds[0],
+        accountIds: resolvedAccountIds,
+        accounts,
+        ...aggregate,
       };
     } finally {
       database.close();
@@ -203,6 +250,7 @@ export class XianyuSyncService {
     trigger = "manual",
     mode = "all",
     gameIds = null,
+    accountId: configuredAccountId = null,
     control = null,
     materialConcurrency = materialSyncConcurrency,
     publishBatchSize: configuredPublishBatchSize = publishBatchSize,
@@ -226,7 +274,11 @@ export class XianyuSyncService {
       throw error;
     }
     const database = new CrawlerDatabase(this.config.dbPath);
-    const settings = database.getXianyuSyncSettings();
+    const fallbackSettings = database.getXianyuSyncSettings();
+    const accountId = String(
+      configuredAccountId ?? fallbackSettings.account_id ?? "",
+    ).trim();
+    const settings = database.getXianyuSyncSettings(accountId);
     const resolvedMaterialConcurrency = Math.min(
       12,
       Math.max(1, Number.parseInt(materialConcurrency, 10) || materialSyncConcurrency),
@@ -248,10 +300,9 @@ export class XianyuSyncService {
     )
       ? candidateSort
       : "created";
-    const accountId = settings.account_id;
     if (!accountId) {
       database.close();
-      const error = new Error("请先在页面配置发布账号");
+      const error = new Error("请先在任务页面选择发布账号");
       error.statusCode = 422;
       throw error;
     }
