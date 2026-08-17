@@ -1323,6 +1323,7 @@ test("自定义模板用于素材、封面和卡券标题，修改后不重复�
     assert.equal(updated.publishSubmitted, 0);
     assert.equal(client.publishCalls.length, 1);
     assert.equal(client.upsertCalls.length, 2);
+    assert.equal(client.upsertCalls[1][0].title, "秒发 游戏 88");
     const verifiedDatabase = new CrawlerDatabase(databasePath);
     try {
       assert.equal(
@@ -2013,7 +2014,7 @@ test("缺少 games.image_url 时即使使用固定模板也不会进入同步队
   }
 });
 
-test("指定账号运行同步时使用各自独立的发布配置", async () => {
+test("指定多个账号运行同步时共用商品配置", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-multi-account-config-test-"),
   );
@@ -2036,18 +2037,6 @@ test("指定账号运行同步时使用各自独立的发布配置", async () =>
       10,
       "batch",
     );
-    database.setXianyuSettings(
-      "account-b",
-      8.8,
-      "2026-08-17T00:01:00.000Z",
-      {
-        titleTemplate: "B-{title}",
-        descriptionTemplate: "B-{description}",
-        imageTemplate: "{image_url}",
-      },
-      20,
-      "shop-batch",
-    );
   } finally {
     database.close();
   }
@@ -2058,7 +2047,7 @@ test("指定账号运行同步时使用各自独立的发布配置", async () =>
     await service.run({ trigger: "test", accountId: "account-a" });
     await service.run({ trigger: "test", accountId: "account-b" });
 
-    assert.equal(client.upsertCalls.length, 2);
+    assert.equal(client.upsertCalls.length, 1);
     assert.deepEqual(
       client.upsertCalls.map(([payload]) => ({
         title: payload.title,
@@ -2067,7 +2056,6 @@ test("指定账号运行同步时使用各自独立的发布配置", async () =>
       })),
       [
         { title: "A-游戏 901", price: 2.5, stock: 10 },
-        { title: "B-游戏 901", price: 8.8, stock: 20 },
       ],
     );
     assert.deepEqual(
@@ -2077,7 +2065,7 @@ test("指定账号运行同步时使用各自独立的发布配置", async () =>
       })),
       [
         { accountId: "account-a", shop: false },
-        { accountId: "account-b", shop: true },
+        { accountId: "account-b", shop: false },
       ],
     );
   } finally {

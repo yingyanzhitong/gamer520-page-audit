@@ -210,14 +210,35 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         active: false,
         interrupted: false,
         enabled: true,
-        cronSchedule: "0 */6 * * *",
         cronTimezone: "Asia/Shanghai",
         nextRun: "2026-07-28T18:00:00.000Z",
-        materialConcurrency: 4,
-        publishBatchSize: 20,
-        publishLimit: 0,
-        mode: "all",
         accountIds: ["account-a", "account-b"],
+        tasks: [
+          {
+            accountId: "account-a",
+            enabled: true,
+            cronSchedule: "0 */6 * * *",
+            mode: "all",
+            gameIds: [],
+            nextRun: "2026-07-28T18:00:00.000Z",
+            materialConcurrency: 4,
+            publishBatchSize: 20,
+            publishLimit: 0,
+            sort: "created",
+          },
+          {
+            accountId: "account-b",
+            enabled: false,
+            cronSchedule: "30 9 * * *",
+            mode: "pending",
+            gameIds: [],
+            nextRun: null,
+            materialConcurrency: 2,
+            publishBatchSize: 5,
+            publishLimit: 10,
+            sort: "hot",
+          },
+        ],
         progress: {
           runId: syncRunId,
           total: 10,
@@ -251,14 +272,6 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           remark: "停用",
         },
       ],
-      validateXianyuAccount: async (accountId) => {
-        if (!["account-a", "account-b"].includes(accountId)) {
-          const error = new Error("账号不存在或无权访问");
-          error.statusCode = 403;
-          throw error;
-        }
-        return { accountId, enabled: true, remark: "主账号" };
-      },
       syncXianyuPublishedItems: async () => {
         xianyuItemSyncCalls += 1;
         return {
@@ -282,15 +295,17 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           sync: {
             active: false,
             interrupted: false,
-            enabled: settings.syncEnabled,
-            cronSchedule: settings.syncCronSchedule,
+            enabled: settings.syncTasks.some((task) => task.enabled),
             cronTimezone: settings.cronTimezone,
-            materialConcurrency: settings.materialConcurrency,
-            publishBatchSize: settings.publishBatchSize,
-            publishLimit: settings.publishLimit,
             nextRun: "2026-07-29T16:15:00.000Z",
-            mode: settings.syncMode,
-            gameIds: settings.syncGameIds,
+            accountIds: settings.syncTasks.map((task) => task.accountId),
+            tasks: settings.syncTasks.map((task, index) => ({
+              ...task,
+              nextRun:
+                task.enabled && index === 0
+                  ? "2026-07-29T16:15:00.000Z"
+                  : null,
+            })),
           },
         };
       },
@@ -343,10 +358,11 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(schedule.crawl.cronSchedule, "0 3 * * *");
     assert.equal(schedule.crawl.concurrency, 3);
     assert.equal(schedule.sync.enabled, true);
-    assert.equal(schedule.sync.mode, "all");
-    assert.equal(schedule.sync.materialConcurrency, 4);
-    assert.equal(schedule.sync.publishBatchSize, 20);
-    assert.equal(schedule.sync.publishLimit, 0);
+    assert.equal(schedule.sync.tasks.length, 2);
+    assert.equal(schedule.sync.tasks[0].mode, "all");
+    assert.equal(schedule.sync.tasks[0].materialConcurrency, 4);
+    assert.equal(schedule.sync.tasks[1].cronSchedule, "30 9 * * *");
+    assert.equal(schedule.sync.tasks[1].publishLimit, 10);
     assert.equal(schedule.sync.progress.completed, 4);
     assert.equal(schedule.sync.progress.materialSkipped, 2);
     assert.equal(schedule.sync.progress.materialCompleted, 4);
@@ -366,6 +382,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /运营看板/);
     assert.match(appSource, /任务记录/);
     assert.match(appSource, /商品配置/);
+    assert.match(appSource, /每个发布账号有一条独立的定时任务/);
+    assert.doesNotMatch(appSource, /配置账号 account_id/);
     assert.match(appSource, /鱼小铺批量发布/);
     assert.match(appSource, /游戏数据/);
     assert.match(appSource, /API Key 管理/);
@@ -845,20 +863,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(accounts.items.length, 3);
     assert.equal(accounts.items[0].accountId, "account-a");
 
-    const rejectedAccount = await fetch(
-      `${baseUrl}/api/settings/xianyu`,
-      {
-        method: "PUT",
-        headers: {
-          "content-type": "application/json",
-          "X-API-Key": "xianyu-secret",
-        },
-        body: JSON.stringify({ account_id: "other-account" }),
-      },
-    );
-    assert.equal(rejectedAccount.status, 403);
-
-    const savedAccount = await fetch(
+    const savedSettings = await fetch(
       `${baseUrl}/api/settings/xianyu`,
       {
         method: "PUT",
@@ -867,7 +872,6 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           "X-API-Key": "xianyu-secret",
         },
         body: JSON.stringify({
-          account_id: "account-a",
           default_price: 3.5,
           default_stock: 88,
           publish_mode: "shop-batch",
@@ -877,18 +881,17 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         }),
       },
     );
-    assert.equal(savedAccount.status, 200);
-    const savedAccountPayload = await savedAccount.json();
-    assert.equal(savedAccountPayload.accountId, "account-a");
-    assert.equal(savedAccountPayload.defaultPrice, 3.5);
-    assert.equal(savedAccountPayload.defaultStock, 88);
-    assert.equal(savedAccountPayload.publishMode, "shop-batch");
-    assert.equal(savedAccountPayload.titleTemplate, "现货 {title}");
+    assert.equal(savedSettings.status, 200);
+    const savedSettingsPayload = await savedSettings.json();
+    assert.equal(savedSettingsPayload.defaultPrice, 3.5);
+    assert.equal(savedSettingsPayload.defaultStock, 88);
+    assert.equal(savedSettingsPayload.publishMode, "shop-batch");
+    assert.equal(savedSettingsPayload.titleTemplate, "现货 {title}");
 
     const settings = await fetch(
       `${baseUrl}/api/settings/xianyu`,
     ).then((response) => response.json());
-    assert.equal(settings.accountId, "account-a");
+    assert.equal(settings.accountId, undefined);
     assert.equal(settings.defaultPrice, 3.5);
     assert.equal(settings.defaultStock, 88);
     assert.equal(settings.publishMode, "shop-batch");
@@ -901,12 +904,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       settings.imageTemplate,
       "https://cdn.example/{id}.jpg",
     );
-    assert.equal(settings.items.length, 2);
-    assert.equal(
-      settings.items.find((item) => item.accountId === "account-a")
-        .titleTemplate,
-      "现货 {title}",
-    );
+    assert.equal(settings.items, undefined);
 
     const invalidTemplate = await fetch(
       `${baseUrl}/api/settings/xianyu`,
@@ -917,7 +915,6 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           "X-API-Key": "xianyu-secret",
         },
         body: JSON.stringify({
-          account_id: "account-a",
           default_price: 3.5,
           title_template: "{missing_variable}",
         }),
@@ -934,7 +931,6 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           "X-API-Key": "xianyu-secret",
         },
         body: JSON.stringify({
-          account_id: "account-a",
           default_price: 3.5,
           default_stock: 0,
         }),
@@ -1008,15 +1004,30 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
             concurrency: 5,
           },
           sync: {
-            cron_schedule: "15 */8 * * *",
-            enabled: true,
-            mode: "selected-force",
-            selected_game_ids: [118842],
-            account_ids: ["account-a", "account-b"],
-            material_concurrency: 6,
-            publish_batch_size: 8,
-            publish_limit: 42,
-            sort: "created",
+            tasks: [
+              {
+                account_id: "account-a",
+                cron_schedule: "15 */8 * * *",
+                enabled: true,
+                mode: "selected-force",
+                selected_game_ids: [118842],
+                material_concurrency: 6,
+                publish_batch_size: 8,
+                publish_limit: 42,
+                sort: "created",
+              },
+              {
+                account_id: "account-b",
+                cron_schedule: "30 9 * * *",
+                enabled: false,
+                mode: "pending",
+                selected_game_ids: [],
+                material_concurrency: 2,
+                publish_batch_size: 5,
+                publish_limit: 10,
+                sort: "hot",
+              },
+            ],
           },
         }),
       },
@@ -1024,17 +1035,22 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(updatedSchedule.success, true);
     assert.equal(savedSchedule.crawlEnabled, false);
     assert.equal(savedSchedule.crawlConcurrency, 5);
-    assert.equal(savedSchedule.syncCronSchedule, "15 */8 * * *");
-    assert.equal(savedSchedule.syncMode, "selected-force");
-    assert.deepEqual(savedSchedule.syncGameIds, [118842]);
-    assert.deepEqual(savedSchedule.syncAccountIds, [
-      "account-a",
-      "account-b",
-    ]);
-    assert.equal(savedSchedule.materialConcurrency, 6);
-    assert.equal(savedSchedule.publishBatchSize, 8);
-    assert.equal(savedSchedule.publishLimit, 42);
-    assert.equal(savedSchedule.syncSort, "created");
+    assert.equal(savedSchedule.syncTasks.length, 2);
+    assert.deepEqual(savedSchedule.syncTasks[0], {
+      accountId: "account-a",
+      cronSchedule: "15 */8 * * *",
+      enabled: true,
+      mode: "selected-force",
+      gameIds: [118842],
+      materialConcurrency: 6,
+      publishBatchSize: 8,
+      publishLimit: 42,
+      sort: "created",
+    });
+    assert.equal(savedSchedule.syncTasks[1].accountId, "account-b");
+    assert.equal(savedSchedule.syncTasks[1].cronSchedule, "30 9 * * *");
+    assert.equal(savedSchedule.syncTasks[1].publishBatchSize, 5);
+    assert.equal(savedSchedule.syncTasks[1].sort, "hot");
     assert.equal(savedSchedule.publishConcurrency, undefined);
 
     const crawl = await fetch(`${baseUrl}/api/crawl/run`, {

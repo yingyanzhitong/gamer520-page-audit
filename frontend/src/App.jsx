@@ -1287,6 +1287,47 @@ function SelectedGamesDialog({
   );
 }
 
+function syncTaskDraft(accountId, template = {}) {
+  return {
+    accountId,
+    enabled: false,
+    cronSchedule: template.cronSchedule ?? "0 8 * * *",
+    mode: template.mode ?? "pending",
+    gameIds: [],
+    materialConcurrency: template.materialConcurrency ?? 4,
+    publishBatchSize: template.publishBatchSize ?? 20,
+    publishLimit: template.publishLimit ?? 0,
+    sort: template.sort ?? "created",
+    nextRun: null,
+  };
+}
+
+function mergeAccountSyncTasks(schedule, accounts) {
+  if (!schedule?.sync) return schedule;
+  const savedTasks = schedule.sync.tasks ?? [];
+  const savedByAccount = new Map(
+    savedTasks.map((task) => [task.accountId, task]),
+  );
+  const template = savedTasks[0] ?? {};
+  const accountIds = [
+    ...new Set([
+      ...accounts.map((account) => account.accountId),
+      ...savedTasks.map((task) => task.accountId),
+    ]),
+  ].filter(Boolean);
+  return {
+    ...schedule,
+    sync: {
+      ...schedule.sync,
+      accountIds,
+      tasks: accountIds.map(
+        (accountId) =>
+          savedByAccount.get(accountId) ?? syncTaskDraft(accountId, template),
+      ),
+    },
+  };
+}
+
 function TasksPage({ notify }) {
   const [schedule, setSchedule] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -1297,6 +1338,8 @@ function TasksPage({ notify }) {
   const [controlAction, setControlAction] = useState(null);
   const [selectedGamesOpen, setSelectedGamesOpen] = useState(false);
   const [scheduledGamesOpen, setScheduledGamesOpen] = useState(false);
+  const [selectedScheduleAccountId, setSelectedScheduleAccountId] =
+    useState("");
   const scheduleDirtyRef = useRef(false);
   const scheduleRevisionRef = useRef(0);
 
@@ -1308,8 +1351,21 @@ function TasksPage({ notify }) {
         api("/api/logs?limit=80"),
         api("/api/xianyu/accounts").catch(() => null),
       ]);
-    if (!scheduleDirtyRef.current) setSchedule(nextSchedule);
-    if (accountPayload) setAccounts(accountPayload.items ?? []);
+    const nextAccounts = accountPayload?.items ?? [];
+    if (!scheduleDirtyRef.current) {
+      const mergedSchedule = mergeAccountSyncTasks(
+        nextSchedule,
+        nextAccounts,
+      );
+      setSchedule(mergedSchedule);
+      setSelectedScheduleAccountId((current) => {
+        const taskIds = mergedSchedule?.sync?.tasks?.map(
+          (task) => task.accountId,
+        ) ?? [];
+        return taskIds.includes(current) ? current : taskIds[0] ?? "";
+      });
+    }
+    if (accountPayload) setAccounts(nextAccounts);
     setRuns(nextRuns);
     setLogs(nextLogs);
   }, []);
@@ -1326,6 +1382,20 @@ function TasksPage({ notify }) {
     });
   }
 
+  function updateSyncTask(accountId, key, value) {
+    scheduleDirtyRef.current = true;
+    scheduleRevisionRef.current += 1;
+    setSchedule((current) => ({
+      ...current,
+      sync: {
+        ...current.sync,
+        tasks: current.sync.tasks.map((task) =>
+          task.accountId === accountId ? { ...task, [key]: value } : task,
+        ),
+      },
+    }));
+  }
+
   async function saveSchedule() {
     const savedRevision = scheduleRevisionRef.current;
     setSaving(true);
@@ -1340,19 +1410,17 @@ function TasksPage({ notify }) {
             concurrency: Number(schedule.crawl.concurrency),
           },
           sync: {
-            enabled: schedule.sync.enabled,
-            cron_schedule: schedule.sync.cronSchedule,
-            mode: schedule.sync.mode,
-            material_concurrency: Number(
-              schedule.sync.materialConcurrency,
-            ),
-            publish_batch_size: Number(
-              schedule.sync.publishBatchSize,
-            ),
-            publish_limit: Number(schedule.sync.publishLimit),
-            sort: schedule.sync.sort,
-            selected_game_ids: schedule.sync.gameIds ?? [],
-            account_ids: schedule.sync.accountIds ?? [],
+            tasks: (schedule.sync.tasks ?? []).map((task) => ({
+              account_id: task.accountId,
+              enabled: task.enabled,
+              cron_schedule: task.cronSchedule,
+              mode: task.mode,
+              material_concurrency: Number(task.materialConcurrency),
+              publish_batch_size: Number(task.publishBatchSize),
+              publish_limit: Number(task.publishLimit),
+              sort: task.sort,
+              selected_game_ids: task.gameIds ?? [],
+            })),
           },
         }),
       });
@@ -1374,7 +1442,12 @@ function TasksPage({ notify }) {
         method: "POST",
         body: jsonBody(
           kind === "sync"
-            ? { mode, account_ids: schedule?.sync?.accountIds ?? [] }
+            ? {
+                mode,
+                account_ids: selectedScheduleAccountId
+                  ? [selectedScheduleAccountId]
+                  : [],
+              }
             : {},
         ),
       });
@@ -1408,6 +1481,14 @@ function TasksPage({ notify }) {
     }
   }
 
+  const selectedSyncTask = schedule?.sync?.tasks?.find(
+    (task) => task.accountId === selectedScheduleAccountId,
+  );
+  const selectedSyncAccount = accounts.find(
+    (account) => account.accountId === selectedScheduleAccountId,
+  );
+  const selectedSyncAccountUsable = selectedSyncAccount?.enabled !== false;
+
   return (
     <>
       <PageHeading
@@ -1422,7 +1503,7 @@ function TasksPage({ notify }) {
             </Button>
             <Button
               onClick={() => runTask("sync", "pending")}
-              disabled={!schedule?.sync?.accountIds?.length}
+              disabled={!selectedSyncTask || !selectedSyncAccountUsable}
             >
               <Play className="h-4 w-4" />
               同步未发布
@@ -1454,229 +1535,252 @@ function TasksPage({ notify }) {
               />
             </div>
             <Separator />
-            {[
-              ["crawl", "采集任务"],
-              ["sync", "闲鱼同步"],
-            ].map(([kind, label]) => (
-              <div key={kind} className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-semibold">{label}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      下次执行 {formatDate(schedule?.[kind]?.nextRun)}
-                    </p>
-                  </div>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(schedule?.[kind]?.enabled)}
-                      onChange={(event) =>
-                        updateSchedule([kind, "enabled"], event.target.checked)
-                      }
-                    />
-                    启用
-                  </label>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold">采集任务</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    下次执行 {formatDate(schedule?.crawl?.nextRun)}
+                  </p>
                 </div>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(schedule?.crawl?.enabled)}
+                    onChange={(event) =>
+                      updateSchedule(["crawl", "enabled"], event.target.checked)
+                    }
+                  />
+                  启用
+                </label>
+              </div>
+              <Input
+                className="font-data"
+                value={schedule?.crawl?.cronSchedule ?? ""}
+                onChange={(event) =>
+                  updateSchedule(["crawl", "cronSchedule"], event.target.value)
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                Cron 格式为“分 时 日 月 周”。每天 08:00 执行一次请填写
+                <span className="font-data"> 0 8 * * *</span>；
+                <span className="font-data"> * 8 * * *</span> 会在 08:00–08:59 每分钟执行一次。
+              </p>
+              <div className="space-y-2">
+                <Label>详情采集并行数</Label>
                 <Input
-                  className="font-data"
-                  value={schedule?.[kind]?.cronSchedule ?? ""}
+                  type="number"
+                  min="1"
+                  max="12"
+                  value={schedule?.crawl?.concurrency ?? 3}
                   onChange={(event) =>
-                    updateSchedule([kind, "cronSchedule"], event.target.value)
+                    updateSchedule(["crawl", "concurrency"], event.target.value)
                   }
                 />
                 <p className="text-xs text-muted-foreground">
-                  Cron 格式为“分 时 日 月 周”。每天 08:00 执行一次请填写
-                  <span className="font-data"> 0 8 * * *</span>；
-                  <span className="font-data"> * 8 * * *</span> 会在 08:00–08:59 每分钟执行一次。
+                  可配置 1–12，调高会增加目标站点访问压力。
                 </p>
-                {kind === "crawl" ? (
+              </div>
+            </div>
+            <Separator />
+            <div className="space-y-4">
+              <div>
+                <p className="text-sm font-semibold">账号同步任务</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  每个发布账号有一条独立的定时任务；点击账号后配置该账号的运行时间和同步参数。
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(schedule?.sync?.tasks ?? []).map((task) => {
+                  const account = accounts.find(
+                    (item) => item.accountId === task.accountId,
+                  );
+                  const selected = task.accountId === selectedScheduleAccountId;
+                  return (
+                    <button
+                      type="button"
+                      key={task.accountId}
+                      className={cn(
+                        "rounded-lg border p-3 text-left text-sm transition",
+                        selected && "border-blue-300 bg-blue-50/60",
+                        account && !account.enabled && "opacity-50",
+                      )}
+                      onClick={() => setSelectedScheduleAccountId(task.accountId)}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="font-medium">
+                          {account?.remark || task.accountId}
+                        </span>
+                        <Badge tone={task.enabled ? "success" : "neutral"}>
+                          {task.enabled ? "已启用" : "未启用"}
+                        </Badge>
+                      </span>
+                      <span className="font-data mt-1 block truncate text-[10px] text-muted-foreground">
+                        {task.accountId}
+                      </span>
+                      <span className="mt-2 block text-xs text-muted-foreground">
+                        下次执行 {formatDate(task.nextRun)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {!selectedSyncTask ? (
+                <p className="text-sm text-muted-foreground">
+                  暂无账号任务，请先配置闲鱼 API Key。
+                </p>
+              ) : (
+                <div className="space-y-4 rounded-xl border bg-slate-50/50 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold">
+                        {selectedSyncAccount?.remark || selectedSyncTask.accountId}
+                      </p>
+                      <p className="font-data mt-1 text-[10px] text-muted-foreground">
+                        {selectedSyncTask.accountId}
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selectedSyncTask.enabled)}
+                        disabled={
+                          selectedSyncAccount?.enabled === false &&
+                          !selectedSyncTask.enabled
+                        }
+                        onChange={(event) =>
+                          updateSyncTask(
+                            selectedSyncTask.accountId,
+                            "enabled",
+                            event.target.checked,
+                          )
+                        }
+                      />
+                      启用
+                    </label>
+                  </div>
+                  <Input
+                    className="font-data"
+                    value={selectedSyncTask.cronSchedule}
+                    onChange={(event) =>
+                      updateSyncTask(
+                        selectedSyncTask.accountId,
+                        "cronSchedule",
+                        event.target.value,
+                      )
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Cron 格式为“分 时 日 月 周”，只影响当前账号任务。
+                  </p>
+                  <Select
+                    value={selectedSyncTask.mode}
+                    onChange={(event) =>
+                      updateSyncTask(
+                        selectedSyncTask.accountId,
+                        "mode",
+                        event.target.value,
+                      )
+                    }
+                  >
+                    <option value="pending">未发布商品</option>
+                    <option value="all">全部待处理商品</option>
+                    <option value="updated">已更新商品</option>
+                    <option value="selected-force">自选游戏强制发布</option>
+                  </Select>
+                  {selectedSyncTask.mode === "selected-force" ? (
+                    <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <Label>定时自选游戏</Label>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            已选 {selectedSyncTask.gameIds?.length ?? 0} 个，仅用于当前账号任务。
+                          </p>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setScheduledGamesOpen(true)}
+                        >
+                          <Check className="h-4 w-4" />
+                          选择游戏
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="space-y-2">
-                    <Label>详情采集并行数</Label>
-                    <Input
-                      type="number"
-                      min="1"
-                      max="12"
-                      value={schedule?.crawl?.concurrency ?? 3}
+                    <Label>同步排序</Label>
+                    <Select
+                      value={selectedSyncTask.sort}
                       onChange={(event) =>
-                        updateSchedule(
-                          ["crawl", "concurrency"],
+                        updateSyncTask(
+                          selectedSyncTask.accountId,
+                          "sort",
                           event.target.value,
                         )
                       }
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      可配置 1–12，调高会增加目标站点访问压力。
-                    </p>
-                  </div>
-                ) : null}
-                {kind === "sync" ? (
-                  <>
-                    <div className="space-y-2">
-                      <Label>发布账号（可多选）</Label>
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        {accounts.length ? (
-                          accounts.map((account) => {
-                            const checked = Boolean(
-                              schedule?.sync?.accountIds?.includes(
-                                account.accountId,
-                              ),
-                            );
-                            return (
-                              <label
-                                key={account.accountId}
-                                className={cn(
-                                  "flex items-start gap-3 rounded-lg border p-3 text-sm transition",
-                                  checked && "border-blue-300 bg-blue-50/60",
-                                  !account.enabled && "cursor-not-allowed opacity-50",
-                                )}
-                              >
-                                <input
-                                  type="checkbox"
-                                  className="mt-0.5"
-                                  checked={checked}
-                                  disabled={!account.enabled}
-                                  onChange={(event) => {
-                                    const current =
-                                      schedule?.sync?.accountIds ?? [];
-                                    updateSchedule(
-                                      ["sync", "accountIds"],
-                                      event.target.checked
-                                        ? [
-                                            ...new Set([
-                                              ...current,
-                                              account.accountId,
-                                            ]),
-                                          ]
-                                        : current.filter(
-                                            (accountId) =>
-                                              accountId !== account.accountId,
-                                          ),
-                                    );
-                                  }}
-                                />
-                                <span className="min-w-0">
-                                  <span className="block font-medium">
-                                    {account.remark || account.accountId}
-                                  </span>
-                                  <span className="font-data mt-1 block truncate text-[10px] text-muted-foreground">
-                                    {account.accountId}
-                                  </span>
-                                </span>
-                              </label>
-                            );
-                          })
-                        ) : (
-                          <p className="text-sm text-muted-foreground">
-                            暂无可用账号，请先配置闲鱼 API Key。
-                          </p>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        一次同步会依次发布到所有已选账号；每个账号使用商品配置页中自己的售价、库存、发布方式和模板。
-                      </p>
-                    </div>
-                    <Select
-                      value={schedule?.sync?.mode ?? "pending"}
-                      onChange={(event) =>
-                        updateSchedule(["sync", "mode"], event.target.value)
-                      }
                     >
-                      <option value="pending">未发布商品</option>
-                      <option value="all">全部待处理商品</option>
-                      <option value="updated">已更新商品</option>
-                      <option value="selected-force">自选游戏强制发布</option>
+                      <option value="created">创建时间从早到晚</option>
+                      <option value="updated">更新时间从早到晚</option>
+                      <option value="hot">热度从高到低</option>
                     </Select>
-                    {schedule?.sync?.mode === "selected-force" ? (
-                      <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <Label>定时自选游戏</Label>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              已选 {schedule?.sync?.gameIds?.length ?? 0} 个。每次执行会先刷新闲鱼实际商品列表；仅在未找到对应商品时发布。
-                            </p>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setScheduledGamesOpen(true)}
-                          >
-                            <Check className="h-4 w-4" />
-                            选择游戏
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-3">
                     <div className="space-y-2">
-                      <Label>同步排序</Label>
-                      <Select
-                        value={schedule?.sync?.sort ?? "created"}
+                      <Label>素材导入并行数</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        max="12"
+                        value={selectedSyncTask.materialConcurrency}
                         onChange={(event) =>
-                          updateSchedule(["sync", "sort"], event.target.value)
+                          updateSyncTask(
+                            selectedSyncTask.accountId,
+                            "materialConcurrency",
+                            event.target.value,
+                          )
                         }
-                      >
-                        <option value="created">创建时间从早到晚</option>
-                        <option value="updated">更新时间从早到晚</option>
-                        <option value="hot">热度从高到低</option>
-                      </Select>
+                      />
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <div className="space-y-2">
-                        <Label>素材导入并行数</Label>
-                        <Input
-                          type="number"
-                          min="1"
-                          max="12"
-                          value={
-                            schedule?.sync?.materialConcurrency ?? 4
-                          }
-                          onChange={(event) =>
-                            updateSchedule(
-                              ["sync", "materialConcurrency"],
-                              event.target.value,
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>每批发布商品数</Label>
-                        <Input
-                          type="number"
-                          min="1"
-                          max="20"
-                          value={
-                            schedule?.sync?.publishBatchSize ?? 20
-                          }
-                          onChange={(event) =>
-                            updateSchedule(
-                              ["sync", "publishBatchSize"],
-                              event.target.value,
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>每账号定时发布成功上限</Label>
-                        <Input
-                          type="number"
-                          min="0"
-                          max="100000"
-                          value={schedule?.sync?.publishLimit ?? 0}
-                          onChange={(event) =>
-                            updateSchedule(
-                              ["sync", "publishLimit"],
-                              event.target.value,
-                            )
-                          }
-                        />
-                      </div>
+                    <div className="space-y-2">
+                      <Label>每批发布商品数</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        max="20"
+                        value={selectedSyncTask.publishBatchSize}
+                        onChange={(event) =>
+                          updateSyncTask(
+                            selectedSyncTask.accountId,
+                            "publishBatchSize",
+                            event.target.value,
+                          )
+                        }
+                      />
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      素材导入和发布独立运行；发布线程发现可发布素材后立即提交，每批最多 1–20 件。每账号定时发布成功上限仅对定时任务生效，只有已确认发布成功的商品计入上限；失败、跳过和待确认均不占额度，填 0 表示不限制。
-                    </p>
-                  </>
-                ) : null}
-              </div>
-            ))}
+                    <div className="space-y-2">
+                      <Label>定时发布成功上限</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="100000"
+                        value={selectedSyncTask.publishLimit}
+                        onChange={(event) =>
+                          updateSyncTask(
+                            selectedSyncTask.accountId,
+                            "publishLimit",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    所有账号共用商品配置；Cron、同步范围、排序、并行数、批量数量和发布上限按账号分别保存。发布上限填 0 表示不限制。
+                  </p>
+                </div>
+              )}
+            </div>
             <Button className="w-full" onClick={saveSchedule} disabled={saving}>
               <Save className="h-4 w-4" />
               {saving ? "正在保存" : "保存定时配置"}
@@ -1688,7 +1792,7 @@ function TasksPage({ notify }) {
           <CardHeader>
             <CardTitle>手动操作</CardTitle>
             <CardDescription>
-              可选择范围或自选有效游戏启动同步。暂停后可以恢复；终止会真正结束当前任务且不能恢复。
+              对当前选中的账号启动同步。暂停后可以恢复；终止会真正结束当前任务且不能恢复。
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -1696,27 +1800,27 @@ function TasksPage({ notify }) {
               <Button
                 variant="outline"
                 onClick={() => runTask("sync", "all")}
-                disabled={!schedule?.sync?.accountIds?.length}
+                disabled={!selectedSyncTask || !selectedSyncAccountUsable}
               >
                 全部待处理商品
               </Button>
               <Button
                 variant="outline"
                 onClick={() => runTask("sync", "pending")}
-                disabled={!schedule?.sync?.accountIds?.length}
+                disabled={!selectedSyncTask || !selectedSyncAccountUsable}
               >
                 未发布商品
               </Button>
               <Button
                 variant="outline"
                 onClick={() => runTask("sync", "updated")}
-                disabled={!schedule?.sync?.accountIds?.length}
+                disabled={!selectedSyncTask || !selectedSyncAccountUsable}
               >
                 已更新商品
               </Button>
               <Button
                 onClick={() => setSelectedGamesOpen(true)}
-                disabled={!schedule?.sync?.accountIds?.length}
+                disabled={!selectedSyncTask || !selectedSyncAccountUsable}
               >
                 <Check className="h-4 w-4" />
                 自选有效游戏
@@ -1896,17 +2000,19 @@ function TasksPage({ notify }) {
         onOpenChange={setSelectedGamesOpen}
         notify={notify}
         onStarted={load}
-        accountIds={schedule?.sync?.accountIds ?? []}
+        accountIds={selectedScheduleAccountId ? [selectedScheduleAccountId] : []}
       />
       <SelectedGamesDialog
         open={scheduledGamesOpen}
         onOpenChange={setScheduledGamesOpen}
         notify={notify}
         onStarted={load}
-        initialGameIds={schedule?.sync?.gameIds ?? []}
+        initialGameIds={selectedSyncTask?.gameIds ?? []}
         onSelected={(gameIds) => {
-          updateSchedule(["sync", "gameIds"], gameIds);
-          notify("定时自选游戏已更新，请保存定时配置");
+          if (selectedSyncTask) {
+            updateSyncTask(selectedSyncTask.accountId, "gameIds", gameIds);
+            notify("当前账号的定时自选游戏已更新，请保存定时配置");
+          }
         }}
       />
       <TaskLogDialog
@@ -1922,71 +2028,18 @@ function TasksPage({ notify }) {
 
 function ProductConfigPage({ notify }) {
   const [settings, setSettings] = useState(null);
-  const [accounts, setAccounts] = useState([]);
-  const [accountSettings, setAccountSettings] = useState([]);
-  const [defaultSettings, setDefaultSettings] = useState(null);
-  const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [previewImageFailed, setPreviewImageFailed] = useState(false);
 
-  const load = useCallback(async (preferredAccountId = null) => {
-    const [payload, accountPayload] = await Promise.all([
-      api("/api/settings/xianyu"),
-      api("/api/xianyu/accounts"),
-    ]);
-    const nextAccounts = accountPayload.items ?? [];
-    const savedSettings = payload.items ?? [];
-    setAccounts(nextAccounts);
-    setAccountSettings(savedSettings);
-    setDefaultSettings(payload.defaults);
-    setSettings((current) => {
-      const accountId =
-        (typeof preferredAccountId === "string" && preferredAccountId) ||
-        current?.accountId ||
-        savedSettings[0]?.accountId ||
-        nextAccounts.find((account) => account.enabled)?.accountId ||
-        "";
-      const accountConfig = savedSettings.find(
-        (item) => item.accountId === accountId,
-      );
-      return {
-        ...payload.defaults,
-        ...accountConfig,
-        accountId,
-        preview: payload.preview,
-      };
-    });
+  const load = useCallback(async () => {
+    const payload = await api("/api/settings/xianyu");
+    setSettings(payload);
   }, []);
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function loadAccounts() {
-    setLoadingAccounts(true);
-    try {
-      const payload = await api("/api/xianyu/accounts");
-      setAccounts(payload.items ?? []);
-      notify("发布账号列表已刷新");
-    } catch (caught) {
-      notify(errorMessage(caught), "error");
-    } finally {
-      setLoadingAccounts(false);
-    }
-  }
-
   function update(key, value) {
     setSettings((current) => ({ ...current, [key]: value }));
-  }
-
-  function selectAccount(accountId) {
-    const accountConfig = accountSettings.find(
-      (item) => item.accountId === accountId,
-    );
-    setSettings((current) => ({
-      ...defaultSettings,
-      ...accountConfig,
-      accountId,
-      preview: current?.preview ?? null,
-    }));
   }
 
   async function save() {
@@ -1994,7 +2047,6 @@ function ProductConfigPage({ notify }) {
       await api("/api/settings/xianyu", {
         method: "PUT",
         body: jsonBody({
-          account_id: settings.accountId,
           default_price: Number(settings.defaultPrice),
           default_stock: Number(settings.defaultStock),
           publish_mode: settings.publishMode,
@@ -2004,7 +2056,7 @@ function ProductConfigPage({ notify }) {
         }),
       });
       notify("商品配置已保存");
-      await load(settings.accountId);
+      await load();
     } catch (caught) {
       notify(errorMessage(caught), "error");
     }
@@ -2044,20 +2096,12 @@ function ProductConfigPage({ notify }) {
       <PageHeading
         eyebrow="Listing rules"
         title="商品配置"
-        description="为每个闲鱼账号分别配置售价、库存、发布方式和素材模板；任务使用哪些账号请在任务页面选择。"
+        description="统一配置售价、库存、发布方式和素材模板；发布账号请在任务页面选择。"
         actions={
-          <>
-            <Button variant="outline" onClick={loadAccounts}>
-              <RefreshCw
-                className={cn("h-4 w-4", loadingAccounts && "animate-spin")}
-              />
-              刷新账号
-            </Button>
-            <Button onClick={save} disabled={!settings?.accountId}>
-              <Save className="h-4 w-4" />
-              保存配置
-            </Button>
-          </>
+          <Button onClick={save} disabled={!settings}>
+            <Save className="h-4 w-4" />
+            保存配置
+          </Button>
         }
       />
       <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
@@ -2067,31 +2111,7 @@ function ProductConfigPage({ notify }) {
             <CardDescription>占位符会在同步素材时替换。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="space-y-2">
-                <Label>配置账号 account_id</Label>
-                <Select
-                  value={settings?.accountId ?? ""}
-                  onChange={(event) => selectAccount(event.target.value)}
-                >
-                  <option value="">请选择要配置的账号</option>
-                  {accounts.map((account) => (
-                    <option
-                      key={account.accountId}
-                      value={account.accountId}
-                      disabled={!account.enabled}
-                    >
-                      {account.remark || account.accountId} · {account.accountId}
-                    </option>
-                  ))}
-                  {settings?.accountId &&
-                  !accounts.some(
-                    (account) => account.accountId === settings.accountId,
-                  ) ? (
-                    <option value={settings.accountId}>{settings.accountId}</option>
-                  ) : null}
-                </Select>
-              </div>
+            <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <Label>默认售价</Label>
                 <Input

@@ -18,12 +18,12 @@ let activeSync = null;
 let crawlControl = null;
 let syncControl = null;
 let syncProgress = null;
-let deferredSync = null;
+let deferredSyncs = [];
 let deferredCrawl = null;
 let stopping = false;
 let dashboard;
 let crawlJob = null;
-let syncJob = null;
+let syncJobs = new Map();
 let schedulerSettings;
 let syncService;
 
@@ -65,6 +65,41 @@ function parseSyncAccountIds(value) {
   ];
 }
 
+function parseSyncTasks(value, legacy = {}) {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      parsed = [];
+    }
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    parsed = parseSyncAccountIds(legacy.accountIds).map((accountId) => ({
+      accountId,
+      enabled: legacy.enabled,
+      cronSchedule: legacy.cronSchedule,
+      mode: legacy.mode,
+      gameIds: legacy.gameIds,
+      materialConcurrency: legacy.materialConcurrency,
+      publishBatchSize: legacy.publishBatchSize,
+      publishLimit: legacy.publishLimit,
+      sort: legacy.sort,
+    }));
+  }
+  return parsed.map((task) => ({
+    accountId: String(task?.accountId ?? "").trim(),
+    enabled: Boolean(task?.enabled),
+    cronSchedule: String(task?.cronSchedule ?? "").trim(),
+    mode: String(task?.mode ?? "all").trim(),
+    gameIds: parseSyncGameIds(task?.gameIds),
+    materialConcurrency: Number(task?.materialConcurrency ?? 4),
+    publishBatchSize: Number(task?.publishBatchSize ?? publishBatchSize),
+    publishLimit: Number(task?.publishLimit ?? 0),
+    sort: String(task?.sort ?? "created").trim(),
+  }));
+}
+
 function syncGameIdsValue(value) {
   if (!Array.isArray(value)) {
     const error = new Error("自选游戏必须是游戏 ID 数组");
@@ -101,7 +136,7 @@ function syncAccountIdsValue(value) {
     throw error;
   }
   if (accountIds.length > 20) {
-    const error = new Error("单个同步任务最多选择 20 个发布账号");
+    const error = new Error("一次手动同步最多选择 20 个发布账号");
     error.statusCode = 422;
     throw error;
   }
@@ -119,20 +154,34 @@ function log(event, fields = {}) {
 }
 
 function settingsFromRow(row) {
+  const legacySync = {
+    accountIds: row.sync_account_ids,
+    enabled: Boolean(row.sync_enabled),
+    cronSchedule: row.sync_cron_schedule,
+    mode: row.sync_mode ?? "all",
+    gameIds: parseSyncGameIds(row.sync_game_ids),
+    materialConcurrency: Number(row.material_concurrency),
+    publishBatchSize: Number(row.publish_batch_size),
+    publishLimit: Number(row.sync_publish_limit ?? 0),
+    sort: row.sync_sort ?? "created",
+  };
+  const syncTasks = parseSyncTasks(row.sync_tasks, legacySync);
+  const primarySyncTask = syncTasks[0] ?? legacySync;
   return {
     cronTimezone: row.cron_timezone,
     crawlCronSchedule: row.crawl_cron_schedule,
     crawlEnabled: Boolean(row.crawl_enabled),
-    syncCronSchedule: row.sync_cron_schedule,
-    syncEnabled: Boolean(row.sync_enabled),
-    syncMode: row.sync_mode ?? "all",
-    syncGameIds: parseSyncGameIds(row.sync_game_ids),
-    syncAccountIds: parseSyncAccountIds(row.sync_account_ids),
+    syncCronSchedule: primarySyncTask.cronSchedule,
+    syncEnabled: syncTasks.some((task) => task.enabled),
+    syncMode: primarySyncTask.mode,
+    syncGameIds: primarySyncTask.gameIds,
+    syncAccountIds: syncTasks.map((task) => task.accountId),
+    syncTasks,
     crawlConcurrency: Number(row.crawl_concurrency),
-    materialConcurrency: Number(row.material_concurrency),
-    publishBatchSize: Number(row.publish_batch_size),
-    publishLimit: Number(row.sync_publish_limit ?? 0),
-    syncSort: row.sync_sort ?? "created",
+    materialConcurrency: primarySyncTask.materialConcurrency,
+    publishBatchSize: primarySyncTask.publishBatchSize,
+    publishLimit: primarySyncTask.publishLimit,
+    syncSort: primarySyncTask.sort,
     publishConcurrency: Number(row.publish_concurrency),
     updatedAt: row.updated_at,
   };
@@ -168,37 +217,129 @@ function publishLimitValue(value) {
   return parsed;
 }
 
+function syncTasksValue(value) {
+  if (!Array.isArray(value)) {
+    const error = new Error("账号同步任务必须是数组");
+    error.statusCode = 422;
+    throw error;
+  }
+  if (value.length > 20) {
+    const error = new Error("最多配置 20 个账号同步任务");
+    error.statusCode = 422;
+    throw error;
+  }
+  const tasks = value.map((task) => {
+    const accountId = String(task?.accountId ?? "").trim();
+    const enabled = task?.enabled;
+    const cronSchedule = String(task?.cronSchedule ?? "").trim();
+    const mode = String(task?.mode ?? "").trim();
+    const gameIds = syncGameIdsValue(task?.gameIds ?? []);
+    const sort = String(task?.sort ?? "created").trim();
+    if (!accountId || accountId.length > 80) {
+      const error = new Error("发布账号 ID 不能为空且不能超过 80 个字符");
+      error.statusCode = 422;
+      throw error;
+    }
+    if (typeof enabled !== "boolean") {
+      const error = new Error(`账号 ${accountId} 的任务启用状态必须是布尔值`);
+      error.statusCode = 422;
+      throw error;
+    }
+    if (!cronSchedule || cronSchedule.length > 100) {
+      const error = new Error(`账号 ${accountId} 的 Cron 表达式不能为空且不能超过 100 个字符`);
+      error.statusCode = 422;
+      throw error;
+    }
+    if (!new Set(["all", "pending", "updated", "selected-force"]).has(mode)) {
+      const error = new Error(
+        `账号 ${accountId} 的同步范围必须是 all、pending、updated 或 selected-force`,
+      );
+      error.statusCode = 422;
+      throw error;
+    }
+    if (mode === "selected-force" && gameIds.length === 0) {
+      const error = new Error(`账号 ${accountId} 的自选游戏任务至少需要选择一个游戏`);
+      error.statusCode = 422;
+      throw error;
+    }
+    if (!new Set(["created", "updated", "hot"]).has(sort)) {
+      const error = new Error(
+        `账号 ${accountId} 的同步排序必须是 created、updated 或 hot`,
+      );
+      error.statusCode = 422;
+      throw error;
+    }
+    return {
+      accountId,
+      enabled,
+      cronSchedule,
+      mode,
+      gameIds,
+      materialConcurrency: concurrencyValue(
+        task?.materialConcurrency,
+        `账号 ${accountId} 的素材导入并行数`,
+      ),
+      publishBatchSize: publishBatchSizeValue(task?.publishBatchSize),
+      publishLimit: publishLimitValue(task?.publishLimit),
+      sort,
+    };
+  });
+  const accountIds = tasks.map((task) => task.accountId);
+  if (new Set(accountIds).size !== accountIds.length) {
+    const error = new Error("同一发布账号只能配置一个同步任务");
+    error.statusCode = 422;
+    throw error;
+  }
+  return tasks;
+}
+
 function normalizeScheduleSettings(input) {
+  const legacyAccountIds = input.syncAccountIds
+    ? syncAccountIdsValue(input.syncAccountIds)
+    : [];
+  const syncTasks = syncTasksValue(
+    input.syncTasks ??
+      (legacyAccountIds.length > 0
+        ? legacyAccountIds.map((accountId) => ({
+            accountId,
+            enabled: input.syncEnabled,
+            cronSchedule: input.syncCronSchedule,
+            mode: input.syncMode,
+            gameIds: input.syncGameIds,
+            materialConcurrency: input.materialConcurrency,
+            publishBatchSize: input.publishBatchSize,
+            publishLimit: input.publishLimit,
+            sort: input.syncSort,
+          }))
+        : schedulerSettings?.syncTasks ?? []),
+  );
+  const primarySyncTask = syncTasks[0] ?? {
+    cronSchedule: config.syncCronSchedule,
+    mode: "all",
+    gameIds: [],
+    materialConcurrency: materialSyncConcurrency,
+    publishBatchSize,
+    publishLimit: 0,
+    sort: "created",
+  };
   const normalized = {
     cronTimezone: String(input.cronTimezone ?? "").trim(),
     crawlCronSchedule: String(input.crawlCronSchedule ?? "").trim(),
     crawlEnabled: input.crawlEnabled,
-    syncCronSchedule: String(input.syncCronSchedule ?? "").trim(),
-    syncEnabled: input.syncEnabled,
-    syncMode: String(input.syncMode ?? "").trim(),
-    syncGameIds: syncGameIdsValue(
-      input.syncGameIds ?? schedulerSettings?.syncGameIds ?? [],
-    ),
-    syncAccountIds: syncAccountIdsValue(
-      input.syncAccountIds ?? schedulerSettings?.syncAccountIds ?? [],
-    ),
+    syncCronSchedule: primarySyncTask.cronSchedule,
+    syncEnabled: syncTasks.some((task) => task.enabled),
+    syncMode: primarySyncTask.mode,
+    syncGameIds: primarySyncTask.gameIds,
+    syncAccountIds: syncTasks.map((task) => task.accountId),
+    syncTasks,
     crawlConcurrency: concurrencyValue(
       input.crawlConcurrency,
       "采集并行数",
     ),
-    materialConcurrency: concurrencyValue(
-      input.materialConcurrency,
-      "素材导入并行数",
-    ),
-    publishBatchSize: publishBatchSizeValue(
-      input.publishBatchSize ??
-        schedulerSettings?.publishBatchSize ??
-        publishBatchSize,
-    ),
-    publishLimit: publishLimitValue(
-      input.publishLimit ?? schedulerSettings?.publishLimit ?? 0,
-    ),
-    syncSort: String(input.syncSort ?? schedulerSettings?.syncSort ?? "created").trim(),
+    materialConcurrency: primarySyncTask.materialConcurrency,
+    publishBatchSize: primarySyncTask.publishBatchSize,
+    publishLimit: primarySyncTask.publishLimit,
+    syncSort: primarySyncTask.sort,
     publishConcurrency: concurrencyValue(
       input.publishConcurrency ??
         schedulerSettings?.publishConcurrency ??
@@ -215,47 +356,15 @@ function normalizeScheduleSettings(input) {
     throw error;
   }
   if (
-    !new Set(["all", "pending", "updated", "selected-force"]).has(
-      normalized.syncMode,
-    )
-  ) {
-    const error = new Error(
-      "定时同步范围必须是 all、pending、updated 或 selected-force",
-    );
-    error.statusCode = 422;
-    throw error;
-  }
-  if (
-    normalized.syncMode === "selected-force" &&
-    normalized.syncGameIds.length === 0
-  ) {
-    const error = new Error("自选游戏强制发布至少需要选择一个游戏");
-    error.statusCode = 422;
-    throw error;
-  }
-  if (normalized.syncEnabled && normalized.syncAccountIds.length === 0) {
-    const error = new Error("启用闲鱼同步前至少选择一个发布账号");
-    error.statusCode = 422;
-    throw error;
-  }
-  if (!new Set(["created", "updated", "hot"]).has(normalized.syncSort)) {
-    const error = new Error("同步排序必须是 created、updated 或 hot");
-    error.statusCode = 422;
-    throw error;
-  }
-  if (
     !normalized.crawlCronSchedule ||
-    normalized.crawlCronSchedule.length > 100 ||
-    !normalized.syncCronSchedule ||
-    normalized.syncCronSchedule.length > 100
+    normalized.crawlCronSchedule.length > 100
   ) {
     const error = new Error("Cron 表达式不能为空且不能超过 100 个字符");
     error.statusCode = 422;
     throw error;
   }
   if (
-    typeof normalized.crawlEnabled !== "boolean" ||
-    typeof normalized.syncEnabled !== "boolean"
+    typeof normalized.crawlEnabled !== "boolean"
   ) {
     const error = new Error("任务启用状态必须是布尔值");
     error.statusCode = 422;
@@ -314,9 +423,8 @@ function triggerCrawl(reason) {
     .finally(() => {
       activeRun = null;
       if (crawlControl === control) crawlControl = null;
-      if (deferredSync && !stopping) {
-        const deferred = deferredSync;
-        deferredSync = null;
+      if (deferredSyncs.length > 0 && !stopping) {
+        const deferred = deferredSyncs.shift();
         void triggerSync(
           deferred.reason,
           deferred.mode,
@@ -332,18 +440,11 @@ function triggerSync(
   mode = schedulerSettings.syncMode,
   options = {},
 ) {
-  const resolvedOptions =
-    mode === "selected-force" && !Array.isArray(options.gameIds)
-      ? { ...options, gameIds: schedulerSettings.syncGameIds }
-      : options;
-  if (
-    stopping ||
-    (reason.startsWith("schedule") && !schedulerSettings.syncEnabled)
-  ) {
+  if (stopping) {
     return null;
   }
   const accountIds = syncAccountIdsValue(
-    resolvedOptions.accountIds ?? schedulerSettings.syncAccountIds,
+    options.accountIds ?? schedulerSettings.syncAccountIds,
   );
   if (accountIds.length === 0) {
     if (reason.startsWith("schedule")) {
@@ -357,24 +458,61 @@ function triggerSync(
     error.statusCode = 422;
     throw error;
   }
-  if (activeSync) {
-    log("sync_skipped", {
-      reason,
-      message: "已有闲鱼同步任务正在运行",
-    });
-    return activeSync;
-  }
-  if (activeRun) {
-    deferredSync = {
-      reason: `${reason}-deferred`,
-      mode,
-      options: { ...resolvedOptions, accountIds },
-    };
+  if (activeSync || activeRun) {
+    const duplicate = deferredSyncs.some(
+      (deferred) =>
+        deferred.reason === reason &&
+        deferred.options.accountIds.join("\u0000") === accountIds.join("\u0000"),
+    );
+    if (!duplicate) {
+      deferredSyncs.push({
+        reason,
+        mode,
+        options: { ...options, accountIds },
+      });
+    }
     log("sync_deferred", {
       reason,
-      message: "采集任务正在运行，闲鱼同步将在采集结束后补跑",
+      accountIds,
+      queueLength: deferredSyncs.length,
+      message: activeRun
+        ? "采集任务正在运行，账号同步任务已进入队列"
+        : "其他账号同步任务正在运行，当前账号任务已进入队列",
     });
-    return activeRun;
+    return activeSync ?? activeRun;
+  }
+
+  const configuredTasks = new Map(
+    schedulerSettings.syncTasks.map((task) => [task.accountId, task]),
+  );
+  for (const task of options.tasks ?? []) {
+    configuredTasks.set(task.accountId, task);
+  }
+  const fallbackTask = schedulerSettings.syncTasks[0] ?? {
+    enabled: false,
+    cronSchedule: schedulerSettings.syncCronSchedule,
+    mode: schedulerSettings.syncMode,
+    gameIds: schedulerSettings.syncGameIds,
+    materialConcurrency: schedulerSettings.materialConcurrency,
+    publishBatchSize: schedulerSettings.publishBatchSize,
+    publishLimit: schedulerSettings.publishLimit,
+    sort: schedulerSettings.syncSort,
+  };
+  const accountTasks = accountIds.map((accountId) => ({
+    ...fallbackTask,
+    ...configuredTasks.get(accountId),
+    accountId,
+  }));
+  if (
+    reason.startsWith("schedule") &&
+    accountTasks.every((task) => !task.enabled)
+  ) {
+    log("schedule_skipped", {
+      reason,
+      accountIds,
+      message: "账号同步任务已停用",
+    });
+    return null;
   }
 
   syncControl = new TaskControl();
@@ -394,17 +532,24 @@ function triggerSync(
     const results = [];
     for (let index = 0; index < accountIds.length; index += 1) {
       const accountId = accountIds[index];
+      const task = accountTasks[index];
+      const resolvedMode = reason.startsWith("schedule") ? task.mode : mode;
+      const gameIds = Array.isArray(options.gameIds)
+        ? options.gameIds
+        : resolvedMode === "selected-force"
+          ? task.gameIds
+          : null;
       const result = await syncService.run({
         trigger: reason,
-        mode,
-        gameIds: resolvedOptions.gameIds ?? null,
+        mode: resolvedMode,
+        gameIds,
         accountId,
         control,
-        materialConcurrency: schedulerSettings.materialConcurrency,
-        publishBatchSize: schedulerSettings.publishBatchSize,
-        candidateSort: schedulerSettings.syncSort,
+        materialConcurrency: task.materialConcurrency,
+        publishBatchSize: task.publishBatchSize,
+        candidateSort: task.sort,
         publishLimit: reason.startsWith("schedule")
-          ? schedulerSettings.publishLimit
+          ? task.publishLimit
           : 0,
         onProgress: (progress) => {
           syncProgress = {
@@ -438,6 +583,13 @@ function triggerSync(
         const deferred = deferredCrawl;
         deferredCrawl = null;
         void triggerCrawl(deferred);
+      } else if (deferredSyncs.length > 0 && !stopping) {
+        const deferred = deferredSyncs.shift();
+        void triggerSync(
+          deferred.reason,
+          deferred.mode,
+          deferred.options,
+        );
       }
     });
   return activeSync;
@@ -445,7 +597,7 @@ function triggerSync(
 
 function buildScheduledJobs(settings) {
   let nextCrawlJob = null;
-  let nextSyncJob = null;
+  const nextSyncJobs = new Map();
   try {
     if (settings.crawlEnabled) {
       nextCrawlJob = new Cron(
@@ -456,22 +608,29 @@ function buildScheduledJobs(settings) {
         },
       );
     }
-    if (settings.syncEnabled) {
-      nextSyncJob = new Cron(
-        settings.syncCronSchedule,
-        { timezone: settings.cronTimezone },
-        () => {
-          void triggerSync("schedule", settings.syncMode);
-        },
+    for (const task of settings.syncTasks) {
+      if (!task.enabled) continue;
+      nextSyncJobs.set(
+        task.accountId,
+        new Cron(
+          task.cronSchedule,
+          { timezone: settings.cronTimezone },
+          () => {
+            void triggerSync(`schedule:${task.accountId}`, task.mode, {
+              accountIds: [task.accountId],
+              tasks: [task],
+            });
+          },
+        ),
       );
     }
     return {
       crawlJob: nextCrawlJob,
-      syncJob: nextSyncJob,
+      syncJobs: nextSyncJobs,
     };
   } catch (cause) {
     nextCrawlJob?.stop();
-    nextSyncJob?.stop();
+    for (const job of nextSyncJobs.values()) job.stop();
     const error = new Error(`Cron 配置无效：${cause.message}`);
     error.statusCode = 422;
     throw error;
@@ -480,9 +639,9 @@ function buildScheduledJobs(settings) {
 
 function replaceScheduledJobs(settings, jobs = buildScheduledJobs(settings)) {
   crawlJob?.stop();
-  syncJob?.stop();
+  for (const job of syncJobs.values()) job.stop();
   crawlJob = jobs.crawlJob;
-  syncJob = jobs.syncJob;
+  syncJobs = jobs.syncJobs;
   schedulerSettings = settings;
 }
 
@@ -496,7 +655,7 @@ function updateScheduleSettings(input) {
     saved = database.setSchedulerSettings(normalized, updatedAt);
   } catch (error) {
     jobs.crawlJob?.stop();
-    jobs.syncJob?.stop();
+    for (const job of jobs.syncJobs.values()) job.stop();
     throw error;
   } finally {
     database.close();
@@ -506,15 +665,8 @@ function updateScheduleSettings(input) {
     cronTimezone: schedulerSettings.cronTimezone,
     crawlCronSchedule: schedulerSettings.crawlCronSchedule,
     crawlEnabled: schedulerSettings.crawlEnabled,
-    syncCronSchedule: schedulerSettings.syncCronSchedule,
-    syncEnabled: schedulerSettings.syncEnabled,
-    syncMode: schedulerSettings.syncMode,
-    syncAccountIds: schedulerSettings.syncAccountIds,
+    syncTasks: schedulerSettings.syncTasks,
     crawlConcurrency: schedulerSettings.crawlConcurrency,
-    materialConcurrency: schedulerSettings.materialConcurrency,
-    publishBatchSize: schedulerSettings.publishBatchSize,
-    publishLimit: schedulerSettings.publishLimit,
-    syncSort: schedulerSettings.syncSort,
   });
   return scheduleRuntime();
 }
@@ -561,7 +713,7 @@ async function controlTask(task, action) {
   } else if (action === "resume") {
     control.resume();
   } else if (action === "terminate") {
-    deferredSync = null;
+    deferredSyncs = [];
     deferredCrawl = null;
     control.terminate();
   } else {
@@ -618,6 +770,15 @@ async function controlTask(task, action) {
 }
 
 function scheduleRuntime() {
+  const syncTasks = schedulerSettings.syncTasks.map((task) => ({
+    ...task,
+    nextRun:
+      syncJobs.get(task.accountId)?.nextRun()?.toISOString() ?? null,
+  }));
+  const syncNextRun = syncTasks
+    .map((task) => task.nextRun)
+    .filter(Boolean)
+    .sort()[0] ?? null;
   return {
     active: Boolean(activeRun),
     interrupted: Boolean(crawlControl?.interrupted),
@@ -631,18 +792,20 @@ function scheduleRuntime() {
     sync: {
       active: Boolean(activeSync),
       interrupted: Boolean(syncControl?.interrupted),
-      enabled: schedulerSettings.syncEnabled,
-      deferred: Boolean(deferredSync),
+      enabled: syncTasks.some((task) => task.enabled),
+      deferred: deferredSyncs.length > 0,
+      deferredCount: deferredSyncs.length,
       cronSchedule: schedulerSettings.syncCronSchedule,
       cronTimezone: schedulerSettings.cronTimezone,
-      nextRun: syncJob?.nextRun()?.toISOString() ?? null,
+      nextRun: syncNextRun,
       materialConcurrency: schedulerSettings.materialConcurrency,
       publishBatchSize: schedulerSettings.publishBatchSize,
       publishLimit: schedulerSettings.publishLimit,
       sort: schedulerSettings.syncSort,
       mode: schedulerSettings.syncMode,
       gameIds: schedulerSettings.syncGameIds,
-      accountIds: schedulerSettings.syncAccountIds,
+      accountIds: syncTasks.map((task) => task.accountId),
+      tasks: syncTasks,
       progress: syncProgress,
     },
   };
@@ -685,8 +848,6 @@ replaceScheduledJobs(schedulerSettings);
 
 dashboard = await startDashboardServer(config, scheduleRuntime, {
   listXianyuAccounts: () => syncService.listAccounts(),
-  validateXianyuAccount: (accountId) =>
-    syncService.validateAccount(accountId),
   syncXianyuPublishedItems: () =>
     syncService.syncAccountPublishedItems({
       accountIds: schedulerSettings.syncAccountIds,
@@ -713,7 +874,7 @@ async function shutdown(signal) {
   if (stopping) return;
   stopping = true;
   crawlJob?.stop();
-  syncJob?.stop();
+  for (const job of syncJobs.values()) job.stop();
   crawlControl?.terminate();
   syncControl?.terminate();
   log("scheduler_stopping", { signal });
@@ -737,9 +898,12 @@ log("scheduler_started", {
   crawlEnabled: schedulerSettings.crawlEnabled,
   runOnStart: config.runOnStart,
   nextRun: crawlJob?.nextRun()?.toISOString() ?? null,
-  syncEnabled: schedulerSettings.syncEnabled,
-  syncCronSchedule: schedulerSettings.syncCronSchedule,
-  syncNextRun: syncJob?.nextRun()?.toISOString() ?? null,
+  syncTasks: scheduleRuntime().sync.tasks.map((task) => ({
+    accountId: task.accountId,
+    enabled: task.enabled,
+    cronSchedule: task.cronSchedule,
+    nextRun: task.nextRun,
+  })),
   dashboard: `http://${config.dashboardHost}:${config.dashboardPort}`,
 });
 

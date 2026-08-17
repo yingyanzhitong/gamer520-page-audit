@@ -535,11 +535,19 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         cronTimezone: "Asia/Shanghai",
         crawlCronSchedule: "0 3 * * *",
         crawlEnabled: true,
-        syncCronSchedule: "0 */6 * * *",
-        syncEnabled: true,
-        syncMode: "all",
-        syncGameIds: [],
-        syncAccountIds: ["account-a"],
+        syncTasks: [
+          {
+            accountId: "account-a",
+            enabled: true,
+            cronSchedule: "0 */6 * * *",
+            mode: "all",
+            gameIds: [],
+            materialConcurrency: 4,
+            publishBatchSize: 20,
+            publishLimit: 0,
+            sort: "created",
+          },
+        ],
         crawlConcurrency: 3,
         materialConcurrency: 4,
         publishBatchSize: 20,
@@ -566,11 +574,30 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
         cronTimezone: "Asia/Shanghai",
         crawlCronSchedule: "30 4 * * *",
         crawlEnabled: false,
-        syncCronSchedule: "15 */8 * * *",
-        syncEnabled: true,
-        syncMode: "updated",
-        syncGameIds: [118842],
-        syncAccountIds: ["account-a", "account-b"],
+        syncTasks: [
+          {
+            accountId: "account-a",
+            enabled: true,
+            cronSchedule: "15 */8 * * *",
+            mode: "updated",
+            gameIds: [118842],
+            materialConcurrency: 6,
+            publishBatchSize: 8,
+            publishLimit: 42,
+            sort: "updated",
+          },
+          {
+            accountId: "account-b",
+            enabled: false,
+            cronSchedule: "30 9 * * *",
+            mode: "pending",
+            gameIds: [],
+            materialConcurrency: 2,
+            publishBatchSize: 5,
+            publishLimit: 10,
+            sort: "hot",
+          },
+        ],
         crawlConcurrency: 5,
         materialConcurrency: 6,
         publishBatchSize: 8,
@@ -595,9 +622,22 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.sync_publish_limit, 42);
     assert.equal(updated.sync_sort, "updated");
     assert.equal(updated.publish_concurrency, 2);
+    const updatedTasks = JSON.parse(updated.sync_tasks);
+    assert.equal(updatedTasks.length, 2);
+    assert.deepEqual(updatedTasks[1], {
+      accountId: "account-b",
+      enabled: false,
+      cronSchedule: "30 9 * * *",
+      mode: "pending",
+      gameIds: [],
+      materialConcurrency: 2,
+      publishBatchSize: 5,
+      publishLimit: 10,
+      sort: "hot",
+    });
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      19,
+      20,
     );
   } finally {
     database.close();
@@ -605,7 +645,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
   }
 });
 
-test("不同闲鱼账号保存并读取独立发布配置", () => {
+test("所有闲鱼账号读取同一套商品配置", () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-account-settings-test-"),
   );
@@ -625,34 +665,21 @@ test("不同闲鱼账号保存并读取独立发布配置", () => {
       10,
       "batch",
     );
-    database.setXianyuSettings(
-      "account-b",
-      8.8,
-      "2026-08-17T00:01:00.000Z",
-      {
-        titleTemplate: "B-{title}",
-        descriptionTemplate: "B-{description}",
-        imageTemplate: "https://cdn.example/{id}.jpg",
-      },
-      20,
-      "shop-batch",
-    );
-
-    assert.deepEqual(
-      database.listXianyuAccountSettings().map((item) => item.account_id),
-      ["account-b", "account-a"],
-    );
     assert.equal(database.getXianyuSyncSettings("account-a").default_price, 2.5);
     assert.equal(database.getXianyuSyncSettings("account-a").default_stock, 10);
     assert.equal(
       database.getXianyuSyncSettings("account-a").title_template,
       "A-{title}",
     );
-    assert.equal(database.getXianyuSyncSettings("account-b").default_price, 8.8);
-    assert.equal(database.getXianyuSyncSettings("account-b").default_stock, 20);
+    assert.equal(database.getXianyuSyncSettings("account-b").default_price, 2.5);
+    assert.equal(database.getXianyuSyncSettings("account-b").default_stock, 10);
     assert.equal(
       database.getXianyuSyncSettings("account-b").publish_mode,
-      "shop-batch",
+      "batch",
+    );
+    assert.equal(
+      database.getXianyuSyncSettings("account-b").account_id,
+      "account-b",
     );
   } finally {
     database.close();
@@ -660,7 +687,7 @@ test("不同闲鱼账号保存并读取独立发布配置", () => {
   }
 });
 
-test("旧单账号配置自动迁移为账号配置和任务账号", () => {
+test("旧单账号配置继续作为全局商品配置和任务账号", () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-account-migration-test-"),
   );
@@ -739,6 +766,24 @@ test("旧单账号配置自动迁移为账号配置和任务账号", () => {
       ).sync_account_ids,
       '["legacy-account"]',
     );
+    const migratedTasks = JSON.parse(
+      database.queryOne(
+        "SELECT sync_tasks FROM scheduler_settings WHERE id = 1",
+      ).sync_tasks,
+    );
+    assert.deepEqual(migratedTasks, [
+      {
+        accountId: "legacy-account",
+        enabled: true,
+        cronSchedule: "0 */6 * * *",
+        mode: "all",
+        gameIds: [],
+        materialConcurrency: 4,
+        publishBatchSize: 20,
+        publishLimit: 0,
+        sort: "created",
+      },
+    ]);
   } finally {
     database.close();
     fs.rmSync(directory, { recursive: true, force: true });

@@ -98,6 +98,36 @@ function normalizeSyncSort(sort) {
   return syncSorts.has(sort) ? sort : "created";
 }
 
+function schedulerSyncTasks(settings) {
+  const legacyAccountIds = Array.isArray(settings.syncAccountIds)
+    ? settings.syncAccountIds
+    : [];
+  const tasks = Array.isArray(settings.syncTasks)
+    ? settings.syncTasks
+    : legacyAccountIds.map((accountId) => ({
+        accountId,
+        enabled: settings.syncEnabled,
+        cronSchedule: settings.syncCronSchedule,
+        mode: settings.syncMode,
+        gameIds: settings.syncGameIds,
+        materialConcurrency: settings.materialConcurrency,
+        publishBatchSize: settings.publishBatchSize,
+        publishLimit: settings.publishLimit,
+        sort: settings.syncSort,
+      }));
+  return tasks.map((task) => ({
+    accountId: String(task.accountId ?? "").trim(),
+    enabled: Boolean(task.enabled),
+    cronSchedule: String(task.cronSchedule ?? "").trim(),
+    mode: normalizeSyncMode(task.mode),
+    gameIds: Array.isArray(task.gameIds) ? task.gameIds : [],
+    materialConcurrency: Number(task.materialConcurrency ?? 4),
+    publishBatchSize: Number(task.publishBatchSize ?? 20),
+    publishLimit: Number(task.publishLimit ?? 0),
+    sort: normalizeSyncSort(task.sort),
+  }));
+}
+
 function normalizeXianyuPublishMode(mode) {
   return xianyuPublishModes.has(mode) ? mode : "batch";
 }
@@ -294,6 +324,7 @@ export class CrawlerDatabase {
         sync_mode TEXT NOT NULL DEFAULT 'all',
         sync_game_ids TEXT NOT NULL DEFAULT '[]',
         sync_account_ids TEXT NOT NULL DEFAULT '[]',
+        sync_tasks TEXT NOT NULL DEFAULT '[]',
         crawl_concurrency INTEGER NOT NULL DEFAULT 3,
         material_concurrency INTEGER NOT NULL DEFAULT 4,
         publish_batch_size INTEGER NOT NULL DEFAULT 20,
@@ -406,7 +437,7 @@ export class CrawlerDatabase {
     this.#backfillMissingGameStatuses();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 19;");
+    this.database.exec("PRAGMA user_version = 20;");
   }
 
   #migrateSchema() {
@@ -565,6 +596,44 @@ export class CrawlerDatabase {
         this.database.exec(
           `ALTER TABLE scheduler_settings ADD COLUMN ${name} ${definition}`,
         );
+      }
+    }
+    if (!schedulerColumns.has("sync_tasks")) {
+      this.database.exec(
+        "ALTER TABLE scheduler_settings ADD COLUMN sync_tasks TEXT NOT NULL DEFAULT '[]'",
+      );
+      const legacy = this.database
+        .prepare("SELECT * FROM scheduler_settings WHERE id = 1")
+        .get();
+      if (legacy) {
+        let accountIds = [];
+        let gameIds = [];
+        try {
+          accountIds = JSON.parse(legacy.sync_account_ids ?? "[]");
+        } catch {
+          accountIds = [];
+        }
+        try {
+          gameIds = JSON.parse(legacy.sync_game_ids ?? "[]");
+        } catch {
+          gameIds = [];
+        }
+        const syncTasks = schedulerSyncTasks({
+          syncAccountIds: Array.isArray(accountIds) ? accountIds : [],
+          syncEnabled: Boolean(legacy.sync_enabled),
+          syncCronSchedule: legacy.sync_cron_schedule,
+          syncMode: legacy.sync_mode,
+          syncGameIds: Array.isArray(gameIds) ? gameIds : [],
+          materialConcurrency: legacy.material_concurrency,
+          publishBatchSize: legacy.publish_batch_size,
+          publishLimit: legacy.sync_publish_limit,
+          syncSort: legacy.sync_sort,
+        });
+        this.database
+          .prepare(
+            "UPDATE scheduler_settings SET sync_tasks = ? WHERE id = 1",
+          )
+          .run(JSON.stringify(syncTasks));
       }
     }
 
@@ -1348,39 +1417,23 @@ export class CrawlerDatabase {
 
   getXianyuSyncSettings(accountId = null) {
     const normalizedAccountId = String(accountId ?? "").trim();
-    const row = normalizedAccountId
-      ? this.database
-          .prepare(
-            `SELECT
-               account_id,
-               default_price,
-               default_stock,
-               publish_mode,
-               title_template,
-               description_template,
-               image_template,
-               updated_at
-             FROM xianyu_account_settings
-             WHERE account_id = ?`,
-          )
-          .get(normalizedAccountId)
-      : this.database
-          .prepare(
-            `SELECT
-               account_id,
-               default_price,
-               default_stock,
-               publish_mode,
-               title_template,
-               description_template,
-               image_template,
-               updated_at
-             FROM xianyu_sync_settings
-             WHERE id = 1`,
-          )
-          .get();
+    const row = this.database
+      .prepare(
+        `SELECT
+           account_id,
+           default_price,
+           default_stock,
+           publish_mode,
+           title_template,
+           description_template,
+           image_template,
+           updated_at
+         FROM xianyu_sync_settings
+         WHERE id = 1`,
+      )
+      .get();
     return {
-      account_id: row?.account_id ?? (normalizedAccountId || null),
+      account_id: normalizedAccountId || row?.account_id || null,
       default_price: Number(row?.default_price ?? 1),
       default_stock: Number(row?.default_stock ?? 999),
       publish_mode: normalizeXianyuPublishMode(row?.publish_mode),
@@ -1395,38 +1448,6 @@ export class CrawlerDatabase {
     };
   }
 
-  listXianyuAccountSettings() {
-    return this.database
-      .prepare(
-        `SELECT
-           account_id,
-           default_price,
-           default_stock,
-           publish_mode,
-           title_template,
-           description_template,
-           image_template,
-           updated_at
-         FROM xianyu_account_settings
-         ORDER BY updated_at DESC, account_id ASC`,
-      )
-      .all()
-      .map((row) => ({
-        account_id: row.account_id,
-        default_price: Number(row.default_price ?? 1),
-        default_stock: Number(row.default_stock ?? 999),
-        publish_mode: normalizeXianyuPublishMode(row.publish_mode),
-        title_template:
-          row.title_template ?? DEFAULT_XIANYU_TEMPLATES.titleTemplate,
-        description_template:
-          row.description_template ??
-          DEFAULT_XIANYU_TEMPLATES.descriptionTemplate,
-        image_template:
-          row.image_template ?? DEFAULT_XIANYU_TEMPLATES.imageTemplate,
-        updated_at: row.updated_at,
-      }));
-  }
-
   setXianyuSettings(
     accountId,
     defaultPrice,
@@ -1436,7 +1457,9 @@ export class CrawlerDatabase {
     publishMode = null,
   ) {
     transaction(this.database, () => {
-      const previous = this.getXianyuSyncSettings(accountId);
+      const previous = this.getXianyuSyncSettings();
+      const resolvedAccountId =
+        String(accountId ?? "").trim() || previous.account_id || null;
       const resolvedDefaultStock = Number(
         defaultStock ?? previous.default_stock ?? 999,
       );
@@ -1450,37 +1473,6 @@ export class CrawlerDatabase {
           imageTemplate: previous.image_template,
         },
       );
-      this.database
-        .prepare(`
-          INSERT INTO xianyu_account_settings (
-            account_id,
-            default_price,
-            default_stock,
-            publish_mode,
-            title_template,
-            description_template,
-            image_template,
-            updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(account_id) DO UPDATE SET
-            default_price = excluded.default_price,
-            default_stock = excluded.default_stock,
-            publish_mode = excluded.publish_mode,
-            title_template = excluded.title_template,
-            description_template = excluded.description_template,
-            image_template = excluded.image_template,
-            updated_at = excluded.updated_at
-        `)
-        .run(
-          accountId,
-          defaultPrice,
-          resolvedDefaultStock,
-          resolvedPublishMode,
-          normalizedTemplates.titleTemplate,
-          normalizedTemplates.descriptionTemplate,
-          normalizedTemplates.imageTemplate,
-          updatedAt,
-        );
       this.database
         .prepare(`
           INSERT INTO xianyu_sync_settings (
@@ -1505,7 +1497,7 @@ export class CrawlerDatabase {
             updated_at = excluded.updated_at
         `)
         .run(
-          accountId,
+          resolvedAccountId,
           defaultPrice,
           resolvedDefaultStock,
           resolvedPublishMode,
@@ -1586,6 +1578,8 @@ export class CrawlerDatabase {
   }
 
   getSchedulerSettings(defaults, updatedAt) {
+    const syncTasks = schedulerSyncTasks(defaults);
+    const primarySyncTask = syncTasks[0] ?? null;
     this.database
       .prepare(`
         INSERT OR IGNORE INTO scheduler_settings (
@@ -1598,6 +1592,7 @@ export class CrawlerDatabase {
           sync_mode,
           sync_game_ids,
           sync_account_ids,
+          sync_tasks,
           crawl_concurrency,
           material_concurrency,
           publish_batch_size,
@@ -1605,22 +1600,27 @@ export class CrawlerDatabase {
           sync_sort,
           publish_concurrency,
           updated_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         defaults.cronTimezone,
         defaults.crawlCronSchedule,
         defaults.crawlEnabled ? 1 : 0,
-        defaults.syncCronSchedule,
-        defaults.syncEnabled ? 1 : 0,
-        defaults.syncMode ?? "all",
-        JSON.stringify(defaults.syncGameIds ?? []),
-        JSON.stringify(defaults.syncAccountIds ?? []),
+        primarySyncTask?.cronSchedule ??
+          defaults.syncCronSchedule ??
+          "0 */6 * * *",
+        syncTasks.some((task) => task.enabled) ? 1 : 0,
+        primarySyncTask?.mode ?? defaults.syncMode ?? "all",
+        JSON.stringify(primarySyncTask?.gameIds ?? defaults.syncGameIds ?? []),
+        JSON.stringify(syncTasks.map((task) => task.accountId)),
+        JSON.stringify(syncTasks),
         defaults.crawlConcurrency ?? 3,
-        defaults.materialConcurrency ?? 4,
-        defaults.publishBatchSize ?? 20,
-        defaults.publishLimit ?? 0,
-        normalizeSyncSort(defaults.syncSort),
+        primarySyncTask?.materialConcurrency ??
+          defaults.materialConcurrency ??
+          4,
+        primarySyncTask?.publishBatchSize ?? defaults.publishBatchSize ?? 20,
+        primarySyncTask?.publishLimit ?? defaults.publishLimit ?? 0,
+        primarySyncTask?.sort ?? normalizeSyncSort(defaults.syncSort),
         defaults.publishConcurrency ?? 4,
         updatedAt,
       );
@@ -1630,6 +1630,8 @@ export class CrawlerDatabase {
   }
 
   setSchedulerSettings(settings, updatedAt) {
+    const syncTasks = schedulerSyncTasks(settings);
+    const primarySyncTask = syncTasks[0] ?? null;
     this.database
       .prepare(`
         INSERT INTO scheduler_settings (
@@ -1642,6 +1644,7 @@ export class CrawlerDatabase {
           sync_mode,
           sync_game_ids,
           sync_account_ids,
+          sync_tasks,
           crawl_concurrency,
           material_concurrency,
           publish_batch_size,
@@ -1649,7 +1652,7 @@ export class CrawlerDatabase {
           sync_sort,
           publish_concurrency,
           updated_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           cron_timezone = excluded.cron_timezone,
           crawl_cron_schedule = excluded.crawl_cron_schedule,
@@ -1659,6 +1662,7 @@ export class CrawlerDatabase {
           sync_mode = excluded.sync_mode,
           sync_game_ids = excluded.sync_game_ids,
           sync_account_ids = excluded.sync_account_ids,
+          sync_tasks = excluded.sync_tasks,
           crawl_concurrency = excluded.crawl_concurrency,
           material_concurrency = excluded.material_concurrency,
           publish_batch_size = excluded.publish_batch_size,
@@ -1671,17 +1675,24 @@ export class CrawlerDatabase {
         settings.cronTimezone,
         settings.crawlCronSchedule,
         settings.crawlEnabled ? 1 : 0,
-        settings.syncCronSchedule,
-        settings.syncEnabled ? 1 : 0,
-        settings.syncMode ?? "all",
-        JSON.stringify(settings.syncGameIds ?? []),
-        JSON.stringify(settings.syncAccountIds ?? []),
-        settings.crawlConcurrency,
-        settings.materialConcurrency,
-        settings.publishBatchSize,
-        settings.publishLimit ?? 0,
-        normalizeSyncSort(settings.syncSort),
-        settings.publishConcurrency,
+        primarySyncTask?.cronSchedule ??
+          settings.syncCronSchedule ??
+          "0 */6 * * *",
+        syncTasks.some((task) => task.enabled) ? 1 : 0,
+        primarySyncTask?.mode ?? settings.syncMode ?? "all",
+        JSON.stringify(primarySyncTask?.gameIds ?? settings.syncGameIds ?? []),
+        JSON.stringify(syncTasks.map((task) => task.accountId)),
+        JSON.stringify(syncTasks),
+        settings.crawlConcurrency ?? 3,
+        primarySyncTask?.materialConcurrency ??
+          settings.materialConcurrency ??
+          4,
+        primarySyncTask?.publishBatchSize ??
+          settings.publishBatchSize ??
+          20,
+        primarySyncTask?.publishLimit ?? settings.publishLimit ?? 0,
+        primarySyncTask?.sort ?? normalizeSyncSort(settings.syncSort),
+        settings.publishConcurrency ?? 4,
         updatedAt,
       );
     return this.database
