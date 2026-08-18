@@ -2236,13 +2236,16 @@ function ProductConfigPage({ notify }) {
   );
 }
 
-function GameDetail({ gameId, open, onOpenChange, notify }) {
+function GameDetail({ gameId, accountId, open, onOpenChange, notify }) {
   const [detail, setDetail] = useState(null);
   const [imagePreviewFailed, setImagePreviewFailed] = useState(false);
   useEffect(() => {
     if (!open || !gameId) return;
-    void api(`/api/games/${gameId}`).then(setDetail);
-  }, [gameId, open]);
+    const parameters = new URLSearchParams();
+    if (accountId) parameters.set("accountId", accountId);
+    const suffix = parameters.size ? `?${parameters}` : "";
+    void api(`/api/games/${gameId}${suffix}`).then(setDetail);
+  }, [accountId, gameId, open]);
   useEffect(() => {
     setImagePreviewFailed(false);
   }, [detail?.game?.imageUrl]);
@@ -2413,6 +2416,8 @@ function GamesPage({ notify }) {
   const [sort, setSort] = useState("hot");
   const [page, setPage] = useState(1);
   const [data, setData] = useState({ items: [], total: 0, pageCount: 1 });
+  const [accounts, setAccounts] = useState([]);
+  const [selectedAccountId, setSelectedAccountId] = useState("");
   const [detailId, setDetailId] = useState(null);
   const [syncingGameId, setSyncingGameId] = useState(null);
   const [syncingXianyuItems, setSyncingXianyuItems] = useState(false);
@@ -2427,11 +2432,30 @@ function GamesPage({ notify }) {
       xianyuStatus,
       sort,
     });
+    if (selectedAccountId) parameters.set("accountId", selectedAccountId);
     setData(await api(`/api/games?${parameters}`));
-  }, [page, query, status, xianyuStatus, sort]);
+  }, [page, query, status, xianyuStatus, sort, selectedAccountId]);
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    let active = true;
+    void api("/api/xianyu/accounts")
+      .then((payload) => {
+        if (!active) return;
+        const enabledAccounts = (payload.items ?? []).filter(
+          (account) => account.enabled !== false,
+        );
+        setAccounts(enabledAccounts);
+        setSelectedAccountId((current) => current || enabledAccounts[0]?.accountId || "");
+      })
+      .catch((caught) => {
+        if (active) notify(errorMessage(caught), "error");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function syncGame(gameId) {
     setSyncingGameId(gameId);
@@ -2449,11 +2473,15 @@ function GamesPage({ notify }) {
   }
 
   async function syncXianyuItems() {
+    if (!selectedAccountId) {
+      notify("请先选择要核对发布状态的闲鱼账号", "error");
+      return;
+    }
     setSyncingXianyuItems(true);
     try {
       const result = await api("/api/xianyu/items/sync", {
         method: "POST",
-        body: jsonBody({}),
+        body: jsonBody({ account_id: selectedAccountId }),
       });
       notify(
         `闲鱼状态核对完成：素材确认 ${result.materialConfirmedCount ?? 0} 个，失效 ${result.materialResetCount ?? 0} 个；商品确认发布 ${result.confirmedCount} 个（名称匹配 ${result.titleMatchedCount} 个），回退素材库 ${result.materialFallbackCount} 个`,
@@ -2556,20 +2584,47 @@ function GamesPage({ notify }) {
           <div>
             <CardTitle>游戏列表</CardTitle>
             <CardDescription className="mt-1">
+              {selectedAccountId
+                ? `账号 ${selectedAccountId} · `
+                : "正在加载发布账号 · "}
               共 {formatNumber(data.total)} 条
             </CardDescription>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="whitespace-nowrap">发布状态账号</span>
+              <Select
+                className="h-9 w-52"
+                value={selectedAccountId}
+                disabled={accounts.length === 0}
+                onChange={(event) => {
+                  setSelectedAccountId(event.target.value);
+                  setPage(1);
+                }}
+              >
+                {accounts.length === 0 ? (
+                  <option value="">暂无可用账号</option>
+                ) : (
+                  accounts.map((account) => (
+                    <option key={account.accountId} value={account.accountId}>
+                      {account.remark
+                        ? `${account.remark}（${account.accountId}）`
+                        : account.accountId}
+                    </option>
+                  ))
+                )}
+              </Select>
+            </label>
             <Button
               variant="outline"
               size="sm"
-              disabled={syncingXianyuItems}
+              disabled={syncingXianyuItems || !selectedAccountId}
               onClick={syncXianyuItems}
             >
               <RefreshCw
                 className={cn("h-4 w-4", syncingXianyuItems && "animate-spin")}
               />
-              同步闲鱼商品
+              查询发布状态
             </Button>
             <Button variant="outline" size="sm" onClick={load}>
               <RefreshCw className="h-4 w-4" />
@@ -2729,6 +2784,7 @@ function GamesPage({ notify }) {
       </div>
       <GameDetail
         gameId={detailId}
+        accountId={selectedAccountId}
         open={Boolean(detailId)}
         notify={notify}
         onOpenChange={(open) => {

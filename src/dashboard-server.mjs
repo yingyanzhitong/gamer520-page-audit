@@ -503,7 +503,11 @@ function dashboardPayload(database, config, runtimeState) {
 }
 
 function listGames(database, requestUrl) {
-  const primaryAccountId = taskAccountIds(database)[0] ?? null;
+  const requestedAccountId = String(
+    requestUrl.searchParams.get("accountId") ?? "",
+  ).trim();
+  const primaryAccountId =
+    requestedAccountId || taskAccountIds(database)[0] || null;
   const page = integerParameter(requestUrl.searchParams.get("page"), 1, 1, 100_000);
   const pageSize = integerParameter(
     requestUrl.searchParams.get("pageSize"),
@@ -631,12 +635,16 @@ function listGames(database, requestUrl) {
     total,
     pageCount: Math.max(1, Math.ceil(total / pageSize)),
     sort,
+    accountId: primaryAccountId,
     items: rows.map(mapGame),
   };
 }
 
-function gameDetail(database, gameId) {
-  const primaryAccountId = taskAccountIds(database)[0] ?? null;
+function gameDetail(database, gameId, requestedAccountId = null) {
+  const primaryAccountId =
+    String(requestedAccountId ?? "").trim() ||
+    taskAccountIds(database)[0] ||
+    null;
   const row = database
     .prepare(`
       SELECT
@@ -1553,7 +1561,12 @@ export async function startDashboardServer(
         ) {
           return;
         }
-        await readJsonBody(request);
+        const body = await readJsonBody(request);
+        const accountId = String(body.account_id ?? "").trim();
+        if (!accountId) {
+          sendError(response, 422, "请选择要核对发布状态的闲鱼账号");
+          return;
+        }
         const state = runtimeState();
         if (state.active || state.sync?.active) {
           sendError(response, 409, "采集或同步任务正在运行");
@@ -1563,7 +1576,7 @@ export async function startDashboardServer(
           sendError(response, 503, "闲鱼商品同步服务尚未启用");
           return;
         }
-        const result = await handlers.syncXianyuPublishedItems();
+        const result = await handlers.syncXianyuPublishedItems(accountId);
         sendJson(response, 200, {
           success: true,
           message: `闲鱼状态核对完成：素材确认 ${result.materialConfirmedCount ?? 0} 个，失效 ${result.materialResetCount ?? 0} 个；商品确认发布 ${result.confirmedCount} 个（名称匹配 ${result.titleMatchedCount} 个），回退素材库 ${result.materialFallbackCount} 个`,
@@ -2007,7 +2020,11 @@ export async function startDashboardServer(
       );
       if (request.method === "GET" && gameMatch) {
         const detail = withDatabase(config.dbPath, (database) =>
-          gameDetail(database, Number(gameMatch[1])),
+          gameDetail(
+            database,
+            Number(gameMatch[1]),
+            requestUrl.searchParams.get("accountId"),
+          ),
         );
         if (!detail) {
           sendError(response, 404, "没有找到该游戏");

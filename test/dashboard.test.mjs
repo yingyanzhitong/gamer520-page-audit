@@ -272,10 +272,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           remark: "停用",
         },
       ],
-      syncXianyuPublishedItems: async () => {
+      syncXianyuPublishedItems: async (accountId) => {
         xianyuItemSyncCalls += 1;
         return {
-          accountId: "account-a",
+          accountId,
           accountItemCount: 3,
           localItemCount: 2,
           confirmedCount: 1,
@@ -389,7 +389,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /API Key 管理/);
     assert.match(appSource, /导入素材库/);
     assert.match(appSource, /发布成功/);
-    assert.match(appSource, /同步闲鱼商品/);
+    assert.match(appSource, /发布状态账号/);
+    assert.match(appSource, /查询发布状态/);
     assert.match(appSource, /同步排序/);
     assert.match(appSource, /热度从高到低/);
     assert.match(appSource, /按热度排序/);
@@ -425,9 +426,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     );
     accountSwitchDatabase.close();
     const accountBStates = await fetch(
-      `${baseUrl}/api/games?query=118842&xianyuStatus=none`,
+      `${baseUrl}/api/games?query=118842&xianyuStatus=none&accountId=account-b`,
     ).then((response) => response.json());
     assert.equal(accountBStates.total, 1);
+    assert.equal(accountBStates.accountId, "account-b");
     assert.equal(accountBStates.items[0].xianyuStatus, "none");
     assert.equal(accountBStates.items[0].xianyuItemId, null);
     const accountBDashboard = await fetch(`${baseUrl}/api/dashboard`).then(
@@ -470,10 +472,11 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           "content-type": "application/json",
           "X-API-Key": "xianyu-secret",
         },
-        body: "{}",
+        body: JSON.stringify({ account_id: "account-a" }),
       },
     ).then((response) => response.json());
     assert.equal(xianyuItemsSync.success, true);
+    assert.equal(xianyuItemsSync.accountId, "account-a");
     assert.equal(xianyuItemsSync.confirmedCount, 1);
     assert.equal(xianyuItemsSync.titleMatchedCount, 0);
     assert.equal(xianyuItemsSync.materialFallbackCount, 1);
