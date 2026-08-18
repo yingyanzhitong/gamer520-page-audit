@@ -2028,39 +2028,148 @@ function TasksPage({ notify }) {
 
 function ProductConfigPage({ notify }) {
   const [settings, setSettings] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+  const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [capability, setCapability] = useState(null);
+  const [fishSpecificationsText, setFishSpecificationsText] = useState("[]");
+  const [fishSkuRowsText, setFishSkuRowsText] = useState("[]");
+  const [platformAttributesText, setPlatformAttributesText] = useState("[]");
   const [previewImageFailed, setPreviewImageFailed] = useState(false);
 
   const load = useCallback(async () => {
-    const payload = await api("/api/settings/xianyu");
-    setSettings(payload);
+    const payload = await api("/api/xianyu/accounts");
+    const items = payload.items ?? [];
+    setAccounts(items);
+    setSelectedAccountId((current) =>
+      items.some((account) => account.accountId === current)
+        ? current
+        : items.find((account) => account.enabled)?.accountId ?? items[0]?.accountId ?? "",
+    );
   }, []);
   useEffect(() => {
-    void load();
+    void load().catch((caught) => notify(errorMessage(caught), "error"));
   }, [load]);
+
+  const loadAccountSettings = useCallback(async (accountId) => {
+    if (!accountId) {
+      setSettings(null);
+      setCapability(null);
+      return;
+    }
+    const [nextSettings, nextCapability] = await Promise.all([
+      api(`/api/settings/xianyu?accountId=${encodeURIComponent(accountId)}`),
+      api(`/api/xianyu/accounts/capability?accountId=${encodeURIComponent(accountId)}`),
+    ]);
+    setSettings(nextSettings);
+    setCapability(nextCapability);
+    setFishSpecificationsText(
+      JSON.stringify(nextSettings.publishOptions?.fish?.specifications ?? [], null, 2),
+    );
+    setFishSkuRowsText(
+      JSON.stringify(nextSettings.publishOptions?.fish?.skuRows ?? [], null, 2),
+    );
+    setPlatformAttributesText(
+      JSON.stringify(nextSettings.publishOptions?.platformAttributes ?? [], null, 2),
+    );
+  }, []);
+  useEffect(() => {
+    void loadAccountSettings(selectedAccountId).catch((caught) => {
+      setSettings(null);
+      setCapability(null);
+      notify(errorMessage(caught), "error");
+    });
+  }, [loadAccountSettings, selectedAccountId]);
 
   function update(key, value) {
     setSettings((current) => ({ ...current, [key]: value }));
   }
 
+  function updatePublishOption(key, value) {
+    setSettings((current) => ({
+      ...current,
+      publishOptions: {
+        ...current.publishOptions,
+        [key]: value,
+      },
+    }));
+  }
+
+  function updateFishOption(key, value) {
+    setSettings((current) => ({
+      ...current,
+      publishOptions: {
+        ...current.publishOptions,
+        fish: {
+          ...current.publishOptions.fish,
+          [key]: value,
+        },
+      },
+    }));
+  }
+
+  function parseJson(value, label) {
+    try {
+      const parsed = JSON.parse(value || "[]");
+      if (!Array.isArray(parsed)) throw new Error();
+      return parsed;
+    } catch {
+      throw new Error(`${label}必须是 JSON 数组`);
+    }
+  }
+
   async function save() {
     try {
+      const publishOptions = {
+        ...settings.publishOptions,
+        fish: {
+          ...settings.publishOptions.fish,
+          quantity: Number(settings.publishOptions.fish.quantity),
+          specifications: parseJson(fishSpecificationsText, "规格"),
+          skuRows: parseJson(fishSkuRowsText, "SKU"),
+        },
+        platformAttributes: parseJson(platformAttributesText, "平台属性"),
+      };
       await api("/api/settings/xianyu", {
         method: "PUT",
         body: jsonBody({
+          account_id: selectedAccountId,
           default_price: Number(settings.defaultPrice),
-          default_stock: Number(settings.defaultStock),
-          publish_mode: settings.publishMode,
+          default_stock: Number(publishOptions.fish.quantity),
           title_template: settings.titleTemplate,
           description_template: settings.descriptionTemplate,
           image_template: settings.imageTemplate,
+          publish_options: publishOptions,
         }),
       });
       notify("商品配置已保存");
-      await load();
+      await loadAccountSettings(selectedAccountId);
     } catch (caught) {
       notify(errorMessage(caught), "error");
     }
   }
+
+  const isFishShop = capability?.account_type === "fish-shop";
+  const publishOptions = settings?.publishOptions ?? {
+    originalPrice: null,
+    category: "虚拟商品",
+    condition: "全新",
+    deliveryMethod: "express",
+    shippingMethod: "free",
+    postage: 0,
+    address: "",
+    addressExpectedText: "",
+    supportPickup: false,
+    brand: "",
+    platformAttributes: [],
+    fish: { quantity: 999, specifications: [], skuRows: [] },
+  };
+  const shippingMethods = capability?.supports?.shipping_methods ?? ["free"];
+  const shippingLabels = {
+    free: "包邮",
+    distance: "按距离计费",
+    fixed: "固定邮费",
+    none: "无需物流",
+  };
 
   const preview = useMemo(() => {
     if (!settings) return null;
@@ -2096,9 +2205,9 @@ function ProductConfigPage({ notify }) {
       <PageHeading
         eyebrow="Listing rules"
         title="商品配置"
-        description="统一配置售价、库存、发布方式和素材模板；发布账号请在任务页面选择。"
+        description="每个账号单独保存可发布参数；分类会按该账号自动推荐并写入素材。"
         actions={
-          <Button onClick={save} disabled={!settings}>
+          <Button onClick={save} disabled={!settings || !selectedAccountId}>
             <Save className="h-4 w-4" />
             保存配置
           </Button>
@@ -2108,9 +2217,37 @@ function ProductConfigPage({ notify }) {
         <Card>
           <CardHeader>
             <CardTitle>发布设置</CardTitle>
-            <CardDescription>占位符会在同步素材时替换。</CardDescription>
+            <CardDescription>占位符会在同步素材时替换；字段以当前账号的批量发布能力为准。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>配置账号</Label>
+                <Select
+                  value={selectedAccountId}
+                  onChange={(event) => setSelectedAccountId(event.target.value)}
+                >
+                  <option value="">请选择账号</option>
+                  {accounts.map((account) => (
+                    <option key={account.accountId} value={account.accountId}>
+                      {account.remark || account.accountId}{account.enabled ? "" : "（已停用）"}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>账号类型</Label>
+                <div className="flex h-10 items-center rounded-md border px-3">
+                  {capability ? (
+                    <Badge tone={isFishShop ? "info" : "success"}>
+                      {isFishShop ? "鱼小铺账号" : "普通账号"}
+                    </Badge>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">选择账号后自动识别</span>
+                  )}
+                </div>
+              </div>
+            </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <Label>默认售价</Label>
@@ -2125,32 +2262,157 @@ function ProductConfigPage({ notify }) {
                 />
               </div>
               <div className="space-y-2">
-                <Label>默认库存</Label>
+                <Label>原价（可选）</Label>
                 <Input
                   type="number"
-                  min="1"
-                  max="999999"
-                  step="1"
-                  value={settings?.defaultStock ?? 999}
+                  min="0.01"
+                  step="0.01"
+                  value={publishOptions.originalPrice ?? ""}
                   onChange={(event) =>
-                    update("defaultStock", event.target.value)
+                    updatePublishOption("originalPrice", event.target.value)
                   }
                 />
               </div>
             </div>
-            <div className="space-y-2">
-              <Label>发布方式</Label>
-              <Select
-                value={settings?.publishMode ?? "batch"}
-                onChange={(event) => update("publishMode", event.target.value)}
-              >
-                <option value="batch">批量发布</option>
-                <option value="shop-batch">鱼小铺批量发布</option>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                鱼小铺批量发布支持库存、发货设置和粉丝价。
+            <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              <p className="font-medium text-foreground">发布通道</p>
+              <p className="mt-1">
+                {isFishShop
+                  ? "鱼小铺可设置库存、规格和 SKU；运费方式仅能使用包邮或无需物流。"
+                  : "普通账号按个人卖家通道发布，不会传递库存、规格或 SKU。"}
               </p>
             </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>业务分类</Label>
+                <Input
+                  value={publishOptions.category ?? ""}
+                  onChange={(event) => updatePublishOption("category", event.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>成色</Label>
+                <Input
+                  value={publishOptions.condition ?? "全新"}
+                  onChange={(event) => updatePublishOption("condition", event.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>发货方式</Label>
+                <Select
+                  value={publishOptions.deliveryMethod ?? "express"}
+                  onChange={(event) => updatePublishOption("deliveryMethod", event.target.value)}
+                >
+                  <option value="express">快递发货</option>
+                  <option value="pickup">上门自提</option>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>运费方式</Label>
+                <Select
+                  value={publishOptions.shippingMethod ?? "free"}
+                  onChange={(event) => updatePublishOption("shippingMethod", event.target.value)}
+                >
+                  {shippingMethods.map((method) => (
+                    <option key={method} value={method}>
+                      {shippingLabels[method] ?? method}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              {publishOptions.shippingMethod === "fixed" ? (
+                <div className="space-y-2">
+                  <Label>固定邮费</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={publishOptions.postage ?? 0}
+                    onChange={(event) => updatePublishOption("postage", event.target.value)}
+                  />
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <Label>宝贝所在地</Label>
+                <Input
+                  value={publishOptions.address ?? ""}
+                  placeholder="发布前必须填写可识别的所在地"
+                  onChange={(event) => updatePublishOption("address", event.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>所在地期望文本（可选）</Label>
+                <Input
+                  value={publishOptions.addressExpectedText ?? ""}
+                  onChange={(event) => updatePublishOption("addressExpectedText", event.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>品牌（可选）</Label>
+                <Input
+                  value={publishOptions.brand ?? ""}
+                  onChange={(event) => updatePublishOption("brand", event.target.value)}
+                />
+              </div>
+              {!isFishShop ? (
+                <label className="flex items-center gap-2 self-end pb-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-primary"
+                    checked={Boolean(publishOptions.supportPickup)}
+                    onChange={(event) => updatePublishOption("supportPickup", event.target.checked)}
+                  />
+                  支持自提
+                </label>
+              ) : null}
+            </div>
+            <div className="space-y-2">
+              <Label>平台属性（JSON 数组，可选）</Label>
+              <Textarea
+                rows={4}
+                value={platformAttributesText}
+                onChange={(event) => setPlatformAttributesText(event.target.value)}
+                placeholder={'[{"property_id":"","property_name":"","value_id":"","value_name":""}]'}
+              />
+              <p className="text-xs text-muted-foreground">
+                平台分类会自动推荐；仅在该分类要求额外属性时填写，字段将原样传给批量发布素材。
+              </p>
+            </div>
+            {isFishShop ? (
+              <div className="space-y-4 rounded-lg border border-sky-200 bg-sky-50/40 p-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>库存</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="999999"
+                      step="1"
+                      value={publishOptions.fish?.quantity ?? 999}
+                      onChange={(event) => updateFishOption("quantity", event.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>规格（JSON 数组）</Label>
+                  <Textarea
+                    rows={5}
+                    value={fishSpecificationsText}
+                    onChange={(event) => setFishSpecificationsText(event.target.value)}
+                    placeholder={'[{"name":"版本","values":[{"name":"标准版"}]}]'}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>SKU（JSON 数组）</Label>
+                  <Textarea
+                    rows={5}
+                    value={fishSkuRowsText}
+                    onChange={(event) => setFishSkuRowsText(event.target.value)}
+                    placeholder={'[{"specs":{"版本":"标准版"},"price":1,"stock":999}]'}
+                  />
+                </div>
+              </div>
+            ) : null}
             <div className="space-y-2">
               <Label>标题模板</Label>
               <Input
@@ -2219,7 +2481,11 @@ function ProductConfigPage({ notify }) {
               <div className="p-5">
                 <div className="flex flex-wrap gap-2">
                   <Badge tone="success">¥ {settings?.defaultPrice ?? 1}</Badge>
-                  <Badge tone="info">库存 {settings?.defaultStock ?? 999}</Badge>
+                  {isFishShop ? (
+                    <Badge tone="info">库存 {publishOptions.fish?.quantity ?? 999}</Badge>
+                  ) : (
+                    <Badge tone="info">普通账号</Badge>
+                  )}
                 </div>
                 <h3 className="mt-3 text-lg font-semibold">
                   {preview?.title ?? "等待配置"}

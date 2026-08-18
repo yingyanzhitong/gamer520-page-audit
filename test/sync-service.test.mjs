@@ -69,6 +69,7 @@ class FakeXianyuClient {
     this.accountItems = new Map();
     this.refreshAccountItemCalls = [];
     this.listMaterialCalls = 0;
+    this.capabilities = new Map();
   }
 
   async listAccounts() {
@@ -83,17 +84,6 @@ class FakeXianyuClient {
     this.events.push({ type: "material", count: items.length });
     return items.map((item) => {
       const previous = this.materials.get(item.external_id);
-      const duplicate = [...this.materials.values()].find(
-        (material) => material.title === item.title,
-      );
-      if (!previous && duplicate) {
-        return {
-          external_id: item.external_id,
-          material_id: duplicate.materialId,
-          action: "skipped",
-          reason: "素材库已存在同名商品",
-        };
-      }
       const materialId = previous?.materialId ?? this.materials.size + 1;
       const action = !previous
         ? "created"
@@ -124,6 +114,36 @@ class FakeXianyuClient {
     }));
   }
 
+  async getAccountPublishCapability(accountId) {
+    return this.capabilities.get(accountId) ?? {
+      account_id: accountId,
+      account_type: "personal",
+      supports: {
+        quantity: false,
+        specifications: false,
+        sku_rows: false,
+        shipping_methods: ["free", "distance", "fixed", "none"],
+      },
+    };
+  }
+
+  async recommendCategory() {
+    return {
+      candidates: [
+        {
+          cat_id: "500000",
+          cat_name: "虚拟商品",
+          channel_cat_id: "500001",
+          channel_cat_name: "虚拟服务",
+          leaf_id: "500002",
+          tb_cat_id: "500003",
+          path: [{ id: "500001", name: "虚拟服务" }],
+          is_selected: true,
+        },
+      ],
+    };
+  }
+
   async publishBatch(payload) {
     this.publishCalls.push(payload);
     this.events.push({
@@ -131,16 +151,6 @@ class FakeXianyuClient {
       count: payload.materialIds.length,
     });
     return { batch_id: payload.requestId };
-  }
-
-  async publishShopBatch(payload) {
-    const batchId = `shop-${this.publishCalls.length + 1}`;
-    this.publishCalls.push({ ...payload, requestId: batchId, shop: true });
-    this.events.push({
-      type: "publish",
-      count: payload.materialIds.length,
-    });
-    return { batch_id: batchId };
   }
 
   async getBatchStatus(batchId) {
@@ -172,10 +182,6 @@ class FakeXianyuClient {
         item_url: `https://www.goofish.com/item?id=${materialId}`,
       })),
     };
-  }
-
-  async getShopBatchStatus(batchId) {
-    return this.getBatchStatus(batchId);
   }
 
   async refreshAccountItems(accountId) {
@@ -221,7 +227,7 @@ class TrackingXianyuClient extends FakeXianyuClient {
 
 class MaterialFailureClient extends TrackingXianyuClient {
   async upsertMaterials(items) {
-    if (items[0]?.external_id === "3") {
+    if (items[0]?.external_id === "account-a:3") {
       this.upsertCalls.push(items);
       throw new Error("测试素材同步失败");
     }
@@ -392,6 +398,7 @@ test("闲鱼商品核对按编号或唯一名称确认发布，未匹配项回�
       );
       database.markMaterialSynced(
         gameItem.id,
+        "account-a",
         gameItem.id * 10,
         stored.content_hash,
         timestamp,
@@ -530,6 +537,7 @@ test("手动闲鱼商品同步按素材库和商品管理回写当前状态", as
     ).content_hash;
     database.markMaterialSynced(
       deletedRemoteGame.id,
+      "account-a",
       4030,
       deletedContentHash,
       timestamp,
@@ -547,7 +555,7 @@ test("手动闲鱼商品同步按素材库和商品管理回写当前状态", as
   }
 
   const client = new FakeXianyuClient();
-  client.materials.set(String(materialOnlyGame.id), {
+  client.materials.set(`account-a:${materialOnlyGame.id}`, {
     materialId: 4010,
     contentHash: materialContentHash,
     title: "游戏 401",
@@ -579,8 +587,10 @@ test("手动闲鱼商品同步按素材库和商品管理回写当前状态", as
     assert.deepEqual(
       {
         ...checkedDatabase.queryOne(
-          "SELECT material_id, status FROM xianyu_material_sync WHERE game_id = ?",
+          `SELECT material_id, status FROM xianyu_account_material_sync
+           WHERE game_id = ? AND account_id = ?`,
           materialOnlyGame.id,
+          "account-a",
         ),
       },
       { material_id: 4010, status: "synced" },
@@ -598,8 +608,10 @@ test("手动闲鱼商品同步按素材库和商品管理回写当前状态", as
     assert.deepEqual(
       {
         ...checkedDatabase.queryOne(
-          "SELECT material_id, status FROM xianyu_material_sync WHERE game_id = ?",
+          `SELECT material_id, status FROM xianyu_account_material_sync
+           WHERE game_id = ? AND account_id = ?`,
           deletedRemoteGame.id,
+          "account-a",
         ),
       },
       { material_id: null, status: "pending" },
@@ -683,7 +695,7 @@ test("素材导入和商品发布独立运行，单批数量可配置", async ()
     assert.equal(client.cardBindCalls.length, 21);
     assert.equal(client.maxActiveUpserts, 5);
     assert.ok(client.upsertCalls.every((items) => items.length === 1));
-    assert.ok(client.upsertCalls.every((items) => items[0].stock === 999));
+    assert.ok(client.upsertCalls.every((items) => items[0].quantity === 1));
     assert.equal(
       client.publishCalls.reduce(
         (total, payload) => total + payload.materialIds.length,
@@ -726,11 +738,11 @@ test("素材导入和商品发布独立运行，单批数量可配置", async ()
     assert.equal(progressEvents.at(-1).publishCompleted, 21);
     for (const item of client.upsertCalls.flat()) {
       assert.deepEqual(item.images, [
-        `https://images.example/${item.external_id}.jpg`,
+        `https://images.example/${item.external_id.split(":").at(-1)}.jpg`,
       ]);
       assert.equal(
         item.price,
-        item.external_id === "1" ? 9.9 : 2.5,
+        item.external_id === "account-a:1" ? 9.9 : 2.5,
       );
       assert.match(item.title, /^【秒发】/);
       assert.match(item.description, /虚拟商品24小时自动发货/);
@@ -1172,7 +1184,8 @@ test("单个素材失败不会阻止其他商品进入发布线程", async () =>
        LIMIT 1`,
     );
     const material = checkedDatabase.queryOne(
-      "SELECT status, last_error FROM xianyu_material_sync WHERE game_id = 3",
+      `SELECT status, last_error FROM xianyu_account_material_sync
+       WHERE game_id = 3 AND account_id = 'account-a'`,
     );
     checkedDatabase.close();
     assert.equal(storedRun.processed_count, 5);
@@ -1296,7 +1309,7 @@ test("自定义模板用于素材、封面和卡券标题，修改后不重复�
     assert.deepEqual(client.upsertCalls[0][0].images, [
       "https://cdn.example/games/88.jpg",
     ]);
-    assert.equal(client.upsertCalls[0][0].stock, 88);
+    assert.equal(client.upsertCalls[0][0].quantity, 1);
     assert.equal(
       client.cardBindCalls[0].itemTitle,
       "现货 游戏 88 #88",
@@ -1350,7 +1363,7 @@ test("自定义模板用于素材、封面和卡券标题，修改后不重复�
   }
 });
 
-test("同名商品只创建和发布一次，其余记录标记跳过", async () => {
+test("同名商品会按外部来源 ID 分别创建和发布", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-name-test-"),
   );
@@ -1390,30 +1403,37 @@ test("同名商品只创建和发布一次，其余记录标记跳过", async ()
       onProgress: (progress) => progressEvents.push(progress),
     });
     assert.equal(sync.selectedCount, 2);
-    assert.equal(sync.materialSkipped, 1);
-    assert.equal(sync.publishSubmitted, 1);
-    assert.equal(client.publishCalls.length, 1);
-    assert.equal(client.publishCalls[0].materialIds.length, 1);
-    assert.equal(progressEvents.at(-1).materialSkipped, 1);
+    assert.equal(sync.materialSkipped, 0);
+    assert.equal(sync.publishSubmitted, 2);
+    assert.equal(client.publishCalls.length, 2);
+    assert.equal(
+      client.publishCalls.reduce(
+        (total, call) => total + call.materialIds.length,
+        0,
+      ),
+      2,
+    );
+    assert.equal(progressEvents.at(-1).materialSkipped, 0);
     const publishingProgress = progressEvents.find(
       (progress) =>
         progress.phase === "publishing",
     );
     assert.equal(publishingProgress.publishTotal, 2);
-    assert.ok(publishingProgress.publishCompleted <= 1);
-    assert.ok(publishingProgress.publishSkipped <= 1);
+    assert.ok(publishingProgress.publishCompleted <= 2);
+    assert.equal(publishingProgress.publishSkipped, 0);
     assert.equal(progressEvents.at(-1).publishTotal, 2);
     assert.equal(progressEvents.at(-1).publishCompleted, 2);
-    assert.equal(progressEvents.at(-1).publishSkipped, 1);
+    assert.equal(progressEvents.at(-1).publishSkipped, 0);
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const rows = checkedDatabase.queryAll(
-      "SELECT status FROM xianyu_material_sync ORDER BY game_id",
+      `SELECT status FROM xianyu_account_material_sync
+       WHERE account_id = 'account-a' ORDER BY game_id`,
     );
     checkedDatabase.close();
     assert.deepEqual(
       rows.map((row) => row.status),
-      ["synced", "skipped"],
+      ["synced", "synced"],
     );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -1445,6 +1465,7 @@ test("已有素材跳过上传但进入发布线程且不虚增发布进度", as
       .sync_content_hash;
     database.markMaterialSynced(
       71,
+      "account-a",
       7100,
       existingMaterialHash,
       timestamp,
@@ -1454,7 +1475,7 @@ test("已有素材跳过上传但进入发布线程且不虚增发布进度", as
   }
 
   const client = new FakeXianyuClient();
-  client.materials.set("71", {
+  client.materials.set("account-a:71", {
     materialId: 7100,
     contentHash: existingMaterialHash,
     title: "游戏 71",
@@ -1711,7 +1732,7 @@ test("未发布和已更新同步范围只处理对应商品", async () => {
     assert.equal(pending.publishSuccess, 1);
     assert.equal(
       client.upsertCalls.at(-1)[0].external_id,
-      String(secondGame.id),
+      `account-a:${secondGame.id}`,
     );
 
     const updated = await service.run({
@@ -1849,6 +1870,7 @@ test("同步范围按发布结果和内容变更筛选待处理商品", () => {
       const candidate = initialCandidates.find((item) => item.id === id);
       database.markMaterialSynced(
         id,
+        "account-a",
         id * 10,
         candidate.sync_content_hash,
         firstAt,
@@ -1944,7 +1966,7 @@ test("单游戏同步只处理指定游戏 ID", async () => {
     assert.equal(sync.selectedCount, 1);
     assert.equal(sync.publishSuccess, 1);
     assert.equal(client.upsertCalls.length, 1);
-    assert.equal(client.upsertCalls[0][0].external_id, "702");
+    assert.equal(client.upsertCalls[0][0].external_id, "account-a:702");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -2014,7 +2036,7 @@ test("缺少 games.image_url 时即使使用固定模板也不会进入同步队
   }
 });
 
-test("指定多个账号运行同步时共用商品配置", async () => {
+test("指定多个账号运行同步时使用统一自动分流批量接口", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-multi-account-config-test-"),
   );
@@ -2035,7 +2057,7 @@ test("指定多个账号运行同步时共用商品配置", async () => {
         imageTemplate: "{image_url}",
       },
       10,
-      "batch",
+      "shop-batch",
     );
   } finally {
     database.close();
@@ -2047,27 +2069,165 @@ test("指定多个账号运行同步时共用商品配置", async () => {
     await service.run({ trigger: "test", accountId: "account-a" });
     await service.run({ trigger: "test", accountId: "account-b" });
 
-    assert.equal(client.upsertCalls.length, 1);
+    assert.equal(client.upsertCalls.length, 2);
     assert.deepEqual(
       client.upsertCalls.map(([payload]) => ({
         title: payload.title,
         price: payload.price,
-        stock: payload.stock,
+        externalId: payload.external_id,
+        quantity: payload.quantity,
       })),
       [
-        { title: "A-游戏 901", price: 2.5, stock: 10 },
+        {
+          title: "A-游戏 901",
+          price: 2.5,
+          externalId: "account-a:901",
+          quantity: 1,
+        },
+        {
+          title: "A-游戏 901",
+          price: 2.5,
+          externalId: "account-b:901",
+          quantity: 1,
+        },
       ],
     );
     assert.deepEqual(
-      client.publishCalls.map((call) => ({
-        accountId: call.accountId,
-        shop: Boolean(call.shop),
-      })),
+      client.publishCalls.map((call) => call.accountId),
       [
-        { accountId: "account-a", shop: false },
-        { accountId: "account-b", shop: false },
+        "account-a",
+        "account-b",
       ],
     );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("鱼小铺账号将库存、规格和 SKU 写入独立素材", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-fish-shop-material-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-08-18T00:00:00.000Z";
+  const discovered = game(990);
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    database.upsertDiscoveredGames([discovered], timestamp);
+    database.saveGameSuccess(discovered, result(discovered.id), timestamp);
+    database.setXianyuSettings(
+      "account-a",
+      3.5,
+      timestamp,
+      null,
+      20,
+      "batch",
+      {
+        originalPrice: 9.9,
+        category: "虚拟商品",
+        condition: "全新",
+        shippingMethod: "none",
+        postage: 0,
+        address: "上海市",
+        addressExpectedText: "上海",
+        supportPickup: false,
+        brand: "Gamer520",
+        platformAttributes: [
+          {
+            property_id: "p1",
+            property_name: "版本",
+            value_id: "v1",
+            value_name: "标准版",
+          },
+        ],
+        fish: {
+          quantity: 20,
+          specifications: [
+            {
+              name: "版本",
+              values: [{ name: "标准版" }],
+              support_image: false,
+            },
+          ],
+          skuRows: [
+            {
+              specs: { 版本: "标准版" },
+              price: 3.5,
+              stock: 20,
+            },
+          ],
+        },
+      },
+    );
+  } finally {
+    database.close();
+  }
+
+  const client = new FakeXianyuClient();
+  client.capabilities.set("account-a", {
+    account_id: "account-a",
+    account_type: "fish-shop",
+    supports: {
+      quantity: true,
+      specifications: true,
+      sku_rows: true,
+      shipping_methods: ["free", "none"],
+    },
+  });
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const sync = await service.run({ trigger: "test" });
+    assert.equal(sync.publishSuccess, 1);
+    assert.deepEqual(client.upsertCalls[0][0], {
+      external_id: "account-a:990",
+      content_hash: client.upsertCalls[0][0].content_hash,
+      title: "【秒发】游戏 990",
+      description: client.upsertCalls[0][0].description,
+      price: 3.5,
+      original_price: 9.9,
+      images: ["https://images.example/990.jpg"],
+      category: "虚拟商品",
+      platform_category_id: "500000",
+      platform_category_name: "虚拟商品",
+      platform_channel_category_id: "500001",
+      platform_channel_category_name: "虚拟服务",
+      platform_leaf_id: "500002",
+      platform_tb_category_id: "500003",
+      platform_category_path: [{ id: "500001", name: "虚拟服务" }],
+      category_source: "recommendation",
+      platform_attributes: [
+        {
+          property_id: "p1",
+          property_name: "版本",
+          value_id: "v1",
+          value_name: "标准版",
+        },
+      ],
+      quantity: 20,
+      delivery_method: "express",
+      shipping_method: "none",
+      support_pickup: false,
+      postage: 0,
+      address: "上海市",
+      address_expected_text: "上海",
+      brand: "Gamer520",
+      condition: "全新",
+      specifications: [
+        {
+          name: "版本",
+          values: [{ name: "标准版" }],
+          support_image: false,
+        },
+      ],
+      sku_rows: [
+        {
+          specs: { 版本: "标准版" },
+          price: 3.5,
+          stock: 20,
+        },
+      ],
+      remark: "来源 gamer520，账号 account-a，商品ID 990",
+    });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

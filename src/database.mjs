@@ -89,6 +89,102 @@ export const VALID_GAME_DATA_CONDITION = `
 const syncModes = new Set(["all", "pending", "updated", "selected-force"]);
 const syncSorts = new Set(["created", "updated", "hot"]);
 const xianyuPublishModes = new Set(["batch", "shop-batch"]);
+const xianyuShippingMethods = new Set(["free", "distance", "fixed", "none"]);
+
+function publishOptionsError(message) {
+  const error = new Error(message);
+  error.statusCode = 422;
+  return error;
+}
+
+function parsePublishOptions(value) {
+  if (!value) return {};
+  if (typeof value === "object" && !Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function optionalText(value, maximum, fieldName) {
+  const normalized = String(value ?? "").trim();
+  if (normalized.length > maximum) {
+    throw publishOptionsError(`${fieldName}不能超过${maximum}个字符`);
+  }
+  return normalized || null;
+}
+
+function positiveOptionalNumber(value, fieldName) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    throw publishOptionsError(`${fieldName}必须是大于 0 的数字`);
+  }
+  return number;
+}
+
+function normalizeXianyuPublishOptions(value, defaultStock = 999) {
+  const options = parsePublishOptions(value);
+  const fish = parsePublishOptions(options.fish);
+  const shippingMethod = String(options.shippingMethod ?? "free").trim();
+  if (!xianyuShippingMethods.has(shippingMethod)) {
+    throw publishOptionsError("运费方式必须是 free、distance、fixed 或 none");
+  }
+  const postage = Number(options.postage ?? 0);
+  if (!Number.isFinite(postage) || postage < 0 || postage > 1000) {
+    throw publishOptionsError("邮费必须是 0 到 1000 之间的数字");
+  }
+  const quantity = Number.parseInt(fish.quantity ?? defaultStock, 10);
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999999) {
+    throw publishOptionsError("鱼小铺库存必须是 1 到 999999 的整数");
+  }
+  const specifications = Array.isArray(fish.specifications)
+    ? fish.specifications
+    : [];
+  const skuRows = Array.isArray(fish.skuRows) ? fish.skuRows : [];
+  const platformAttributes = Array.isArray(options.platformAttributes)
+    ? options.platformAttributes
+    : [];
+  const deliveryMethod = String(options.deliveryMethod ?? "express").trim();
+  if (!new Set(["express", "pickup"]).has(deliveryMethod)) {
+    throw publishOptionsError("配送方式必须是 express 或 pickup");
+  }
+  if (specifications.length > 2) {
+    throw publishOptionsError("鱼小铺最多支持 2 组规格");
+  }
+  if (skuRows.length > 200) {
+    throw publishOptionsError("鱼小铺最多支持 200 条 SKU");
+  }
+  if (platformAttributes.length > 30) {
+    throw publishOptionsError("平台属性最多支持 30 条");
+  }
+  return {
+    originalPrice: positiveOptionalNumber(options.originalPrice, "原价"),
+    category: optionalText(options.category ?? "虚拟商品", 100, "商品分类"),
+    condition: optionalText(options.condition ?? "全新", 20, "成色") ?? "全新",
+    deliveryMethod,
+    shippingMethod,
+    postage,
+    address: optionalText(options.address, 200, "宝贝所在地"),
+    addressExpectedText: optionalText(
+      options.addressExpectedText,
+      200,
+      "所在地期望文本",
+    ),
+    supportPickup: Boolean(options.supportPickup),
+    brand: optionalText(options.brand, 100, "品牌"),
+    platformAttributes,
+    fish: {
+      quantity,
+      specifications,
+      skuRows,
+    },
+  };
+}
 
 function normalizeSyncMode(mode) {
   return syncModes.has(mode) ? mode : "all";
@@ -311,6 +407,7 @@ export class CrawlerDatabase {
         title_template TEXT,
         description_template TEXT,
         image_template TEXT,
+        publish_options TEXT NOT NULL DEFAULT '{}',
         updated_at TEXT NOT NULL
       );
 
@@ -344,6 +441,22 @@ export class CrawlerDatabase {
         updated_at TEXT NOT NULL,
         FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
       );
+
+      CREATE TABLE IF NOT EXISTS xianyu_account_material_sync (
+        game_id INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        material_id INTEGER,
+        synced_content_hash TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        last_error TEXT,
+        last_synced_at TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (game_id, account_id),
+        FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS xianyu_account_material_sync_account_status_idx
+      ON xianyu_account_material_sync(account_id, status);
 
       CREATE TABLE IF NOT EXISTS xianyu_publications (
         game_id INTEGER NOT NULL,
@@ -437,7 +550,7 @@ export class CrawlerDatabase {
     this.#backfillMissingGameStatuses();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 20;");
+    this.database.exec("PRAGMA user_version = 21;");
   }
 
   #migrateSchema() {
@@ -524,6 +637,17 @@ export class CrawlerDatabase {
           `ALTER TABLE xianyu_sync_settings ADD COLUMN ${name} ${definition}`,
         );
       }
+    }
+    const xianyuAccountSettingsColumns = new Set(
+      this.database
+        .prepare("PRAGMA table_info(xianyu_account_settings)")
+        .all()
+        .map((column) => column.name),
+    );
+    if (!xianyuAccountSettingsColumns.has("publish_options")) {
+      this.database.exec(
+        "ALTER TABLE xianyu_account_settings ADD COLUMN publish_options TEXT NOT NULL DEFAULT '{}'",
+      );
     }
     this.database.exec(`
       INSERT OR IGNORE INTO xianyu_account_settings (
@@ -1417,7 +1541,7 @@ export class CrawlerDatabase {
 
   getXianyuSyncSettings(accountId = null) {
     const normalizedAccountId = String(accountId ?? "").trim();
-    const row = this.database
+    const globalRow = this.database
       .prepare(
         `SELECT
            account_id,
@@ -1432,10 +1556,30 @@ export class CrawlerDatabase {
          WHERE id = 1`,
       )
       .get();
+    const accountRow = normalizedAccountId
+      ? this.database
+          .prepare(
+            `SELECT
+               account_id,
+               default_price,
+               default_stock,
+               publish_mode,
+               title_template,
+               description_template,
+               image_template,
+               publish_options,
+               updated_at
+             FROM xianyu_account_settings
+             WHERE account_id = ?`,
+          )
+          .get(normalizedAccountId)
+      : null;
+    const row = accountRow ?? globalRow;
+    const defaultStock = Number(row?.default_stock ?? 999);
     return {
-      account_id: normalizedAccountId || row?.account_id || null,
+      account_id: normalizedAccountId || globalRow?.account_id || null,
       default_price: Number(row?.default_price ?? 1),
-      default_stock: Number(row?.default_stock ?? 999),
+      default_stock: defaultStock,
       publish_mode: normalizeXianyuPublishMode(row?.publish_mode),
       title_template:
         row?.title_template ?? DEFAULT_XIANYU_TEMPLATES.titleTemplate,
@@ -1444,6 +1588,10 @@ export class CrawlerDatabase {
         DEFAULT_XIANYU_TEMPLATES.descriptionTemplate,
       image_template:
         row?.image_template ?? DEFAULT_XIANYU_TEMPLATES.imageTemplate,
+      publish_options: normalizeXianyuPublishOptions(
+        accountRow?.publish_options,
+        defaultStock,
+      ),
       updated_at: row?.updated_at ?? null,
     };
   }
@@ -1455,11 +1603,14 @@ export class CrawlerDatabase {
     templates = null,
     defaultStock = null,
     publishMode = null,
+    publishOptions = null,
   ) {
     transaction(this.database, () => {
-      const previous = this.getXianyuSyncSettings();
       const resolvedAccountId =
-        String(accountId ?? "").trim() || previous.account_id || null;
+        String(accountId ?? "").trim() ||
+        this.getXianyuSyncSettings().account_id ||
+        null;
+      const previous = this.getXianyuSyncSettings(resolvedAccountId);
       const resolvedDefaultStock = Number(
         defaultStock ?? previous.default_stock ?? 999,
       );
@@ -1472,6 +1623,10 @@ export class CrawlerDatabase {
           descriptionTemplate: previous.description_template,
           imageTemplate: previous.image_template,
         },
+      );
+      const normalizedPublishOptions = normalizeXianyuPublishOptions(
+        publishOptions ?? previous.publish_options,
+        resolvedDefaultStock,
       );
       this.database
         .prepare(`
@@ -1506,40 +1661,59 @@ export class CrawlerDatabase {
           normalizedTemplates.imageTemplate,
           updatedAt,
         );
-      if (Number(previous.default_price) !== Number(defaultPrice)) {
+      if (resolvedAccountId) {
         this.database
           .prepare(`
-            UPDATE xianyu_material_sync
-            SET status = 'pending',
-                updated_at = ?
-            WHERE game_id IN (
-              SELECT id FROM games WHERE sale_price IS NULL
-            )
+            INSERT INTO xianyu_account_settings (
+              account_id,
+              default_price,
+              default_stock,
+              publish_mode,
+              title_template,
+              description_template,
+              image_template,
+              publish_options,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account_id) DO UPDATE SET
+              default_price = excluded.default_price,
+              default_stock = excluded.default_stock,
+              publish_mode = excluded.publish_mode,
+              title_template = excluded.title_template,
+              description_template = excluded.description_template,
+              image_template = excluded.image_template,
+              publish_options = excluded.publish_options,
+              updated_at = excluded.updated_at
           `)
-          .run(updatedAt);
+          .run(
+            resolvedAccountId,
+            defaultPrice,
+            resolvedDefaultStock,
+            resolvedPublishMode,
+            normalizedTemplates.titleTemplate,
+            normalizedTemplates.descriptionTemplate,
+            normalizedTemplates.imageTemplate,
+            JSON.stringify(normalizedPublishOptions),
+            updatedAt,
+          );
       }
-      if (Number(previous.default_stock) !== resolvedDefaultStock) {
-        this.database
-          .prepare(`
-            UPDATE xianyu_material_sync
-            SET status = 'pending',
-                updated_at = ?
-          `)
-          .run(updatedAt);
-      }
-      if (
+      const changed =
+        Number(previous.default_price) !== Number(defaultPrice) ||
+        Number(previous.default_stock) !== resolvedDefaultStock ||
         previous.title_template !== normalizedTemplates.titleTemplate ||
-        previous.description_template !==
-          normalizedTemplates.descriptionTemplate ||
-        previous.image_template !== normalizedTemplates.imageTemplate
-      ) {
+        previous.description_template !== normalizedTemplates.descriptionTemplate ||
+        previous.image_template !== normalizedTemplates.imageTemplate ||
+        JSON.stringify(previous.publish_options) !==
+          JSON.stringify(normalizedPublishOptions);
+      if (changed && resolvedAccountId) {
         this.database
           .prepare(`
-            UPDATE xianyu_material_sync
+            UPDATE xianyu_account_material_sync
             SET status = 'pending',
                 updated_at = ?
+            WHERE account_id = ?
           `)
-          .run(updatedAt);
+          .run(updatedAt, resolvedAccountId);
       }
     });
   }
@@ -1553,6 +1727,7 @@ export class CrawlerDatabase {
       null,
       Number(settings.default_stock ?? 999),
       settings.publish_mode,
+      settings.publish_options,
     );
   }
 
@@ -1568,7 +1743,7 @@ export class CrawlerDatabase {
     if (result.changes === 0) return false;
     this.database
       .prepare(`
-        UPDATE xianyu_material_sync
+        UPDATE xianyu_account_material_sync
         SET status = 'pending',
             updated_at = ?
         WHERE game_id = ?
@@ -1754,7 +1929,7 @@ export class CrawlerDatabase {
       VALID_GAME_DATA_CONDITION,
       ...syncScopeConditions(mode),
     ];
-    const parameters = [accountId];
+    const parameters = [accountId, accountId];
     const requestedGameIds = Array.isArray(gameIds)
       ? gameIds
           .map((gameId) => Number(gameId))
@@ -1796,8 +1971,9 @@ export class CrawlerDatabase {
             END
           ) AS publish_skipped
         FROM games
-        LEFT JOIN xianyu_material_sync AS material
+        LEFT JOIN xianyu_account_material_sync AS material
           ON material.game_id = games.id
+         AND material.account_id = ?
         LEFT JOIN xianyu_publications AS publication
           ON publication.game_id = games.id
          AND publication.account_id = ?
@@ -1846,8 +2022,9 @@ export class CrawlerDatabase {
           publication.card_bind_status AS publication_card_bind_status,
           publication.card_bind_error AS publication_card_bind_error
         FROM games
-        LEFT JOIN xianyu_material_sync AS material
+        LEFT JOIN xianyu_account_material_sync AS material
           ON material.game_id = games.id
+         AND material.account_id = ?
         LEFT JOIN xianyu_publications AS publication
           ON publication.game_id = games.id
          AND publication.account_id = ?
@@ -1857,7 +2034,7 @@ export class CrawlerDatabase {
           CASE WHEN publication.status = 'failed' THEN 0 ELSE 1 END,
           ${sortClause}
       `)
-      .all(settings.default_price, accountId);
+      .all(settings.default_price, accountId, accountId);
     const downloadStatement = this.database.prepare(
       `SELECT *
        FROM downloads
@@ -1880,7 +2057,8 @@ export class CrawlerDatabase {
               titleTemplate: settings.title_template,
               descriptionTemplate: settings.description_template,
               imageTemplate: settings.image_template,
-              copyVersion: 3,
+              publishOptions: settings.publish_options,
+              copyVersion: 4,
             }),
           )
           .digest("hex");
@@ -1916,19 +2094,20 @@ export class CrawlerDatabase {
       .slice(0, limit);
   }
 
-  markMaterialSynced(gameId, materialId, contentHash, syncedAt) {
+  markMaterialSynced(gameId, accountId, materialId, contentHash, syncedAt) {
     this.database
       .prepare(`
-        INSERT INTO xianyu_material_sync (
+        INSERT INTO xianyu_account_material_sync (
           game_id,
+          account_id,
           material_id,
           synced_content_hash,
           status,
           last_error,
           last_synced_at,
           updated_at
-        ) VALUES (?, ?, ?, 'synced', NULL, ?, ?)
-        ON CONFLICT(game_id) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, 'synced', NULL, ?, ?)
+        ON CONFLICT(game_id, account_id) DO UPDATE SET
           material_id = excluded.material_id,
           synced_content_hash = excluded.synced_content_hash,
           status = 'synced',
@@ -1936,28 +2115,30 @@ export class CrawlerDatabase {
           last_synced_at = excluded.last_synced_at,
           updated_at = excluded.updated_at
       `)
-      .run(gameId, materialId, contentHash, syncedAt, syncedAt);
+      .run(gameId, accountId, materialId, contentHash, syncedAt, syncedAt);
   }
 
-  markMaterialFailed(gameId, errorMessage, updatedAt) {
+  markMaterialFailed(gameId, accountId, errorMessage, updatedAt) {
     this.database
       .prepare(`
-        INSERT INTO xianyu_material_sync (
+        INSERT INTO xianyu_account_material_sync (
           game_id,
+          account_id,
           status,
           last_error,
           updated_at
-        ) VALUES (?, 'failed', ?, ?)
-        ON CONFLICT(game_id) DO UPDATE SET
+        ) VALUES (?, ?, 'failed', ?, ?)
+        ON CONFLICT(game_id, account_id) DO UPDATE SET
           status = 'failed',
           last_error = excluded.last_error,
           updated_at = excluded.updated_at
       `)
-      .run(gameId, String(errorMessage).slice(0, 4_000), updatedAt);
+      .run(gameId, accountId, String(errorMessage).slice(0, 4_000), updatedAt);
   }
 
   markMaterialSkipped(
     gameId,
+    accountId,
     materialId,
     contentHash,
     reason,
@@ -1965,16 +2146,17 @@ export class CrawlerDatabase {
   ) {
     this.database
       .prepare(`
-        INSERT INTO xianyu_material_sync (
+        INSERT INTO xianyu_account_material_sync (
           game_id,
+          account_id,
           material_id,
           synced_content_hash,
           status,
           last_error,
           last_synced_at,
           updated_at
-        ) VALUES (?, ?, ?, 'skipped', ?, ?, ?)
-        ON CONFLICT(game_id) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, 'skipped', ?, ?, ?)
+        ON CONFLICT(game_id, account_id) DO UPDATE SET
           material_id = excluded.material_id,
           synced_content_hash = excluded.synced_content_hash,
           status = 'skipped',
@@ -1984,6 +2166,7 @@ export class CrawlerDatabase {
       `)
       .run(
         gameId,
+        accountId,
         materialId,
         contentHash,
         String(reason).slice(0, 4_000),
@@ -2094,7 +2277,11 @@ export class CrawlerDatabase {
     });
   }
 
-  reconcileRemoteMaterials(materials, syncedAt) {
+  reconcileRemoteMaterials(accountId, materials, syncedAt) {
+    const normalizedAccountId = String(accountId ?? "").trim();
+    if (!normalizedAccountId) {
+      throw new Error("核对闲鱼素材时缺少账号 ID");
+    }
     const remoteByMaterialId = new Map();
     const remoteBySourceItemId = new Map();
     for (const material of materials ?? []) {
@@ -2124,24 +2311,25 @@ export class CrawlerDatabase {
     const localMaterials = this.database
       .prepare(`
         SELECT game_id, material_id, synced_content_hash, status
-        FROM xianyu_material_sync
-        WHERE material_id IS NOT NULL
+        FROM xianyu_account_material_sync
+        WHERE account_id = ? AND material_id IS NOT NULL
       `)
-      .all();
+      .all(normalizedAccountId);
     const gameExists = this.database.prepare(
       "SELECT id FROM games WHERE id = ?",
     );
     const upsertSynced = this.database.prepare(`
-      INSERT INTO xianyu_material_sync (
+      INSERT INTO xianyu_account_material_sync (
         game_id,
+        account_id,
         material_id,
         synced_content_hash,
         status,
         last_error,
         last_synced_at,
         updated_at
-      ) VALUES (?, ?, ?, 'synced', NULL, ?, ?)
-      ON CONFLICT(game_id) DO UPDATE SET
+      ) VALUES (?, ?, ?, ?, 'synced', NULL, ?, ?)
+      ON CONFLICT(game_id, account_id) DO UPDATE SET
         material_id = excluded.material_id,
         synced_content_hash = excluded.synced_content_hash,
         status = 'synced',
@@ -2150,16 +2338,17 @@ export class CrawlerDatabase {
         updated_at = excluded.updated_at
     `);
     const upsertSkipped = this.database.prepare(`
-      INSERT INTO xianyu_material_sync (
+      INSERT INTO xianyu_account_material_sync (
         game_id,
+        account_id,
         material_id,
         synced_content_hash,
         status,
         last_error,
         last_synced_at,
         updated_at
-      ) VALUES (?, ?, ?, 'skipped', ?, ?, ?)
-      ON CONFLICT(game_id) DO UPDATE SET
+      ) VALUES (?, ?, ?, ?, 'skipped', ?, ?, ?)
+      ON CONFLICT(game_id, account_id) DO UPDATE SET
         material_id = excluded.material_id,
         synced_content_hash = excluded.synced_content_hash,
         status = 'skipped',
@@ -2168,36 +2357,40 @@ export class CrawlerDatabase {
         updated_at = excluded.updated_at
     `);
     const resetMaterial = this.database.prepare(`
-      UPDATE xianyu_material_sync
+      UPDATE xianyu_account_material_sync
       SET material_id = NULL,
           synced_content_hash = NULL,
           status = 'pending',
           last_error = '闲鱼素材库未找到该素材，待重新导入',
           last_synced_at = NULL,
           updated_at = ?
-      WHERE game_id = ?
+      WHERE game_id = ? AND account_id = ?
     `);
     let materialConfirmedCount = 0;
     let materialResetCount = 0;
     let materialImportedCount = 0;
+    const sourcePrefix = `${normalizedAccountId}:`;
     const reconciledGameIds = new Set();
     transaction(this.database, () => {
       for (const localMaterial of localMaterials) {
         const remote =
-          remoteBySourceItemId.get(String(localMaterial.game_id)) ??
+          remoteBySourceItemId.get(
+            `${normalizedAccountId}:${localMaterial.game_id}`,
+          ) ??
           remoteByMaterialId.get(Number(localMaterial.material_id));
         if (!remote) {
-          resetMaterial.run(syncedAt, localMaterial.game_id);
+          resetMaterial.run(syncedAt, localMaterial.game_id, normalizedAccountId);
           materialResetCount += 1;
           continue;
         }
         reconciledGameIds.add(Number(localMaterial.game_id));
         if (
           remote.sourceType === "gamer520" &&
-          remote.sourceItemId === String(localMaterial.game_id)
+          remote.sourceItemId === `${normalizedAccountId}:${localMaterial.game_id}`
         ) {
           upsertSynced.run(
             localMaterial.game_id,
+            normalizedAccountId,
             remote.materialId,
             remote.sourceContentHash ?? localMaterial.synced_content_hash,
             syncedAt,
@@ -2206,6 +2399,7 @@ export class CrawlerDatabase {
         } else if (localMaterial.status === "skipped") {
           upsertSkipped.run(
             localMaterial.game_id,
+            normalizedAccountId,
             remote.materialId,
             localMaterial.synced_content_hash ?? remote.sourceContentHash,
             "闲鱼素材库仍存在同名素材",
@@ -2215,6 +2409,7 @@ export class CrawlerDatabase {
         } else {
           upsertSynced.run(
             localMaterial.game_id,
+            normalizedAccountId,
             remote.materialId,
             remote.sourceContentHash ?? localMaterial.synced_content_hash,
             syncedAt,
@@ -2224,7 +2419,8 @@ export class CrawlerDatabase {
         materialConfirmedCount += 1;
       }
       for (const [sourceItemId, remote] of remoteBySourceItemId) {
-        const gameId = Number(sourceItemId);
+        if (!sourceItemId.startsWith(sourcePrefix)) continue;
+        const gameId = Number(sourceItemId.slice(sourcePrefix.length));
         if (
           !Number.isSafeInteger(gameId) ||
           gameId <= 0 ||
@@ -2235,6 +2431,7 @@ export class CrawlerDatabase {
         }
         upsertSynced.run(
           gameId,
+          normalizedAccountId,
           remote.materialId,
           remote.sourceContentHash,
           syncedAt,
@@ -2284,10 +2481,11 @@ export class CrawlerDatabase {
         LEFT JOIN xianyu_publications AS publication
           ON publication.game_id = games.id
          AND publication.account_id = ?
-        LEFT JOIN xianyu_material_sync AS material
+        LEFT JOIN xianyu_account_material_sync AS material
           ON material.game_id = games.id
+         AND material.account_id = ?
       `)
-      .all(settings.default_price, accountId);
+      .all(settings.default_price, accountId, accountId);
     const upsertPublication = this.database.prepare(`
       INSERT INTO xianyu_publications (
         game_id,

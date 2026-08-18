@@ -87,6 +87,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
   );
   database.markMaterialSynced(
     game.id,
+    "account-a",
     842,
     storedGame.content_hash,
     timestamp,
@@ -272,6 +273,19 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           remark: "停用",
         },
       ],
+      getXianyuAccountPublishCapability: async (accountId) => ({
+        account_id: accountId,
+        account_type: accountId === "account-b" ? "fish-shop" : "personal",
+        supports: {
+          quantity: accountId === "account-b",
+          specifications: accountId === "account-b",
+          sku_rows: accountId === "account-b",
+          shipping_methods:
+            accountId === "account-b"
+              ? ["free", "none"]
+              : ["free", "distance", "fixed", "none"],
+        },
+      }),
       syncXianyuPublishedItems: async (accountId) => {
         xianyuItemSyncCalls += 1;
         return {
@@ -384,7 +398,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /商品配置/);
     assert.match(appSource, /每个发布账号有一条独立的定时任务/);
     assert.doesNotMatch(appSource, /配置账号 account_id/);
-    assert.match(appSource, /鱼小铺批量发布/);
+    assert.match(appSource, /每个账号单独保存可发布参数/);
     assert.match(appSource, /游戏数据/);
     assert.match(appSource, /API Key 管理/);
     assert.match(appSource, /导入素材库/);
@@ -614,6 +628,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     const statusDatabase = new CrawlerDatabase(databasePath);
     statusDatabase.markMaterialSynced(
       game.id,
+      "account-a",
       842,
       "current-material-hash",
       timestamp,
@@ -866,6 +881,13 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(accounts.items.length, 3);
     assert.equal(accounts.items[0].accountId, "account-a");
 
+    const capability = await fetch(
+      `${baseUrl}/api/xianyu/accounts/capability?accountId=account-b`,
+      { headers: { "X-API-Key": "xianyu-secret" } },
+    ).then((response) => response.json());
+    assert.equal(capability.account_type, "fish-shop");
+    assert.deepEqual(capability.supports.shipping_methods, ["free", "none"]);
+
     const savedSettings = await fetch(
       `${baseUrl}/api/settings/xianyu`,
       {
@@ -875,6 +897,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           "X-API-Key": "xianyu-secret",
         },
         body: JSON.stringify({
+          account_id: "account-a",
           default_price: 3.5,
           default_stock: 88,
           publish_mode: "shop-batch",
@@ -888,16 +911,16 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     const savedSettingsPayload = await savedSettings.json();
     assert.equal(savedSettingsPayload.defaultPrice, 3.5);
     assert.equal(savedSettingsPayload.defaultStock, 88);
-    assert.equal(savedSettingsPayload.publishMode, "shop-batch");
+    assert.equal(savedSettingsPayload.publishMode, "account-auto");
     assert.equal(savedSettingsPayload.titleTemplate, "现货 {title}");
 
     const settings = await fetch(
-      `${baseUrl}/api/settings/xianyu`,
+      `${baseUrl}/api/settings/xianyu?accountId=account-a`,
     ).then((response) => response.json());
-    assert.equal(settings.accountId, undefined);
+    assert.equal(settings.accountId, "account-a");
     assert.equal(settings.defaultPrice, 3.5);
     assert.equal(settings.defaultStock, 88);
-    assert.equal(settings.publishMode, "shop-batch");
+    assert.equal(settings.publishMode, "account-auto");
     assert.equal(settings.titleTemplate, "现货 {title}");
     assert.equal(
       settings.descriptionTemplate,
@@ -918,6 +941,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           "X-API-Key": "xianyu-secret",
         },
         body: JSON.stringify({
+          account_id: "account-a",
           default_price: 3.5,
           title_template: "{missing_variable}",
         }),
@@ -934,6 +958,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           "X-API-Key": "xianyu-secret",
         },
         body: JSON.stringify({
+          account_id: "account-a",
           default_price: 3.5,
           default_stock: 0,
         }),
@@ -968,7 +993,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       assert.equal(persisted.getXianyuSyncSettings().default_stock, 88);
       assert.equal(
         persisted.getXianyuSyncSettings().publish_mode,
-        "shop-batch",
+        "batch",
       );
       assert.equal(
         persisted.queryOne(

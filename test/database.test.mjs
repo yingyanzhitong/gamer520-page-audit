@@ -390,6 +390,7 @@ test("下载源消失时记录告警且不改动已发布商品", () => {
     );
     database.markMaterialSynced(
       discovered.id,
+      "account-a",
       200,
       stored.content_hash,
       firstAt,
@@ -637,7 +638,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     });
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      20,
+      21,
     );
   } finally {
     database.close();
@@ -981,6 +982,7 @@ test("发布成功后把闲鱼商品编号写回游戏数据", () => {
     );
     database.markMaterialSynced(
       discovered.id,
+      "account-a",
       900,
       stored.content_hash,
       timestamp,

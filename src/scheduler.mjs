@@ -848,6 +848,8 @@ replaceScheduledJobs(schedulerSettings);
 
 dashboard = await startDashboardServer(config, scheduleRuntime, {
   listXianyuAccounts: () => syncService.listAccounts(),
+  getXianyuAccountPublishCapability: (accountId) =>
+    syncService.getAccountPublishCapability(accountId),
   syncXianyuPublishedItems: (accountId) =>
     syncService.syncAccountPublishedItems({
       accountIds: [accountId],

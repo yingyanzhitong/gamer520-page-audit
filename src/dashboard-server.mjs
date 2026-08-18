@@ -75,10 +75,44 @@ function mapRun(row) {
 }
 
 function mapXianyuSettings(row) {
+  const defaultPublishOptions = {
+    originalPrice: null,
+    category: "虚拟商品",
+    condition: "全新",
+    deliveryMethod: "express",
+    shippingMethod: "free",
+    postage: 0,
+    address: null,
+    addressExpectedText: null,
+    supportPickup: false,
+    brand: null,
+    platformAttributes: [],
+    fish: { quantity: Number(row?.default_stock ?? 999), specifications: [], skuRows: [] },
+  };
+  let storedPublishOptions = row?.publish_options;
+  if (typeof storedPublishOptions === "string") {
+    try {
+      storedPublishOptions = JSON.parse(storedPublishOptions);
+    } catch {
+      storedPublishOptions = {};
+    }
+  }
+  const publishOptions =
+    storedPublishOptions && typeof storedPublishOptions === "object"
+      ? {
+          ...defaultPublishOptions,
+          ...storedPublishOptions,
+          fish: {
+            ...defaultPublishOptions.fish,
+            ...(storedPublishOptions.fish ?? {}),
+          },
+        }
+      : defaultPublishOptions;
   return {
+    accountId: row?.account_id ?? null,
     defaultPrice: Number(row?.default_price ?? 1),
     defaultStock: Number(row?.default_stock ?? 999),
-    publishMode: row?.publish_mode ?? "batch",
+    publishMode: "account-auto",
     titleTemplate:
       row?.title_template ?? DEFAULT_XIANYU_TEMPLATES.titleTemplate,
     descriptionTemplate:
@@ -86,6 +120,7 @@ function mapXianyuSettings(row) {
       DEFAULT_XIANYU_TEMPLATES.descriptionTemplate,
     imageTemplate:
       row?.image_template ?? DEFAULT_XIANYU_TEMPLATES.imageTemplate,
+    publishOptions,
     updatedAt: row?.updated_at ?? null,
   };
 }
@@ -401,7 +436,8 @@ function dashboardPayload(database, config, runtimeState) {
         (SELECT COUNT(*) FROM downloads) AS downloads,
         SUM(CASE WHEN ${VALID_GAME_DATA_CONDITION}
           THEN 1 ELSE 0 END) AS valid_games,
-        (SELECT COUNT(*) FROM xianyu_material_sync WHERE status = 'synced') AS material_synced,
+        (SELECT COUNT(*) FROM xianyu_account_material_sync
+          WHERE account_id = ? AND status = 'synced') AS material_synced,
         (SELECT COUNT(*) FROM xianyu_publications
           WHERE account_id = ?
             AND status = 'success') AS published_games,
@@ -410,7 +446,7 @@ function dashboardPayload(database, config, runtimeState) {
             AND status IN ('failed', 'unknown')) AS publish_attention
       FROM games
     `)
-    .get(primaryAccountId, primaryAccountId);
+    .get(primaryAccountId, primaryAccountId, primaryAccountId);
   const errors = database
     .prepare(`
       SELECT
@@ -439,25 +475,27 @@ function dashboardPayload(database, config, runtimeState) {
       errorMessage: row.error_message,
       createdAt: row.created_at,
     }));
-  const syncSettings = database
-    .prepare(
-      `SELECT
-         default_price,
-         default_stock,
-         publish_mode,
-         title_template,
-         description_template,
-         image_template,
-         updated_at
-       FROM xianyu_sync_settings
-       WHERE id = 1`,
-    )
-    .get() ?? {
-      account_id: null,
-      default_price: 1,
-      default_stock: 999,
-      updated_at: null,
-    };
+  const accountSyncSettings = primaryAccountId
+    ? database
+        .prepare(
+          `SELECT account_id, default_price, default_stock, publish_mode,
+                  title_template, description_template, image_template, updated_at
+           FROM xianyu_account_settings WHERE account_id = ?`,
+        )
+        .get(primaryAccountId)
+    : null;
+  const syncSettings = accountSyncSettings ?? database
+        .prepare(
+          `SELECT account_id, default_price, default_stock, publish_mode,
+                  title_template, description_template, image_template, updated_at
+           FROM xianyu_sync_settings WHERE id = 1`,
+        )
+        .get() ?? {
+          account_id: null,
+          default_price: 1,
+          default_stock: 999,
+          updated_at: null,
+        };
   const latestSyncRun = database
     .prepare("SELECT * FROM xianyu_sync_runs ORDER BY id DESC LIMIT 1")
     .get();
@@ -486,7 +524,7 @@ function dashboardPayload(database, config, runtimeState) {
       accountIds: runtime.sync?.accountIds ?? [],
       defaultPrice: Number(syncSettings.default_price ?? 1),
       defaultStock: Number(syncSettings.default_stock ?? 999),
-      publishMode: syncSettings.publish_mode ?? "batch",
+      publishMode: "account-auto",
       titleTemplate:
         syncSettings.title_template ??
         DEFAULT_XIANYU_TEMPLATES.titleTemplate,
@@ -549,13 +587,14 @@ function listGames(database, requestUrl) {
     FROM games
     LEFT JOIN xianyu_sync_settings AS settings
       ON settings.id = 1
-    LEFT JOIN xianyu_material_sync AS material
+    LEFT JOIN xianyu_account_material_sync AS material
       ON material.game_id = games.id
+     AND material.account_id = ?
     LEFT JOIN xianyu_publications AS publication
       ON publication.game_id = games.id
      AND publication.account_id = ?
   `;
-  const joinParameters = [primaryAccountId];
+  const joinParameters = [primaryAccountId, primaryAccountId];
 
   if (query) {
     conditions.push(
@@ -666,14 +705,15 @@ function gameDetail(database, gameId, requestedAccountId = null) {
       FROM games
       LEFT JOIN xianyu_sync_settings AS settings
         ON settings.id = 1
-      LEFT JOIN xianyu_material_sync AS material
+      LEFT JOIN xianyu_account_material_sync AS material
         ON material.game_id = games.id
+       AND material.account_id = ?
       LEFT JOIN xianyu_publications AS publication
         ON publication.game_id = games.id
        AND publication.account_id = ?
       WHERE games.id = ?
     `)
-    .get(primaryAccountId, gameId);
+    .get(primaryAccountId, primaryAccountId, gameId);
   if (!row) return null;
 
   return {
@@ -1385,22 +1425,36 @@ export async function startDashboardServer(
         request.method === "GET" &&
         requestUrl.pathname === "/api/settings/xianyu"
       ) {
+        const requestedAccountId = String(
+          requestUrl.searchParams.get("accountId") ?? "",
+        ).trim();
         const settingsPayload = withDatabase(config.dbPath, (database) => {
-          const settings = database
+          const globalSettings = database
             .prepare(
-              `SELECT
-                 account_id,
-                 default_price,
-                 default_stock,
-                 publish_mode,
-                 title_template,
-                 description_template,
-                 image_template,
-                 updated_at
-               FROM xianyu_sync_settings
-               WHERE id = 1`,
+              `SELECT account_id, default_price, default_stock, publish_mode,
+                      title_template, description_template, image_template,
+                      updated_at
+               FROM xianyu_sync_settings WHERE id = 1`,
             )
             .get();
+          const accountSettings = requestedAccountId
+            ? database
+                .prepare(
+                  `SELECT account_id, default_price, default_stock, publish_mode,
+                          title_template, description_template, image_template,
+                          publish_options, updated_at
+                   FROM xianyu_account_settings WHERE account_id = ?`,
+                )
+                .get(requestedAccountId)
+            : null;
+          const settings = {
+            ...(accountSettings ?? globalSettings ?? {}),
+            account_id:
+              requestedAccountId ||
+              accountSettings?.account_id ||
+              globalSettings?.account_id ||
+              null,
+          };
           const preview = database
             .prepare(`
               SELECT
@@ -1423,7 +1477,7 @@ export async function startDashboardServer(
         const preview = settingsPayload.preview;
         sendJson(response, 200, {
           ...mapXianyuSettings(settings),
-          configured: Boolean(settings),
+          configured: Boolean(settings.account_id),
           preview: preview
             ? {
                 id: preview.id,
@@ -1548,6 +1602,37 @@ export async function startDashboardServer(
         return;
       }
       if (
+        request.method === "GET" &&
+        requestUrl.pathname === "/api/xianyu/accounts/capability"
+      ) {
+        if (
+          !requireKey(
+            request,
+            response,
+            config.xianyuApiKey,
+            "X-API-Key",
+          )
+        ) {
+          return;
+        }
+        const accountId = String(
+          requestUrl.searchParams.get("accountId") ?? "",
+        ).trim();
+        if (!accountId) {
+          sendError(response, 422, "请选择要识别类型的闲鱼账号");
+          return;
+        }
+        if (!handlers.getXianyuAccountPublishCapability) {
+          sendError(response, 503, "闲鱼账号能力服务尚未启用");
+          return;
+        }
+        const capability = await handlers.getXianyuAccountPublishCapability(
+          accountId,
+        );
+        sendJson(response, 200, capability);
+        return;
+      }
+      if (
         request.method === "POST" &&
         requestUrl.pathname === "/api/xianyu/items/sync"
       ) {
@@ -1599,13 +1684,19 @@ export async function startDashboardServer(
           return;
         }
         const body = await readJsonBody(request);
+        const accountId = String(body.account_id ?? "").trim();
+        if (!accountId) {
+          sendError(response, 422, "请选择要保存商品配置的闲鱼账号");
+          return;
+        }
         let defaultPrice;
         const database = new CrawlerDatabase(config.dbPath);
         let templates;
         let defaultStock;
-        let publishMode;
+        let saved;
+        const publishMode = "account-auto";
         try {
-          const current = database.getXianyuSyncSettings();
+          const current = database.getXianyuSyncSettings(accountId);
           defaultPrice = salePrice(
             body.default_price ?? current.default_price,
           );
@@ -1621,21 +1712,16 @@ export async function startDashboardServer(
             imageTemplate:
               body.image_template ?? current.image_template,
           });
-          publishMode = String(
-            body.publish_mode ?? current.publish_mode ?? "batch",
-          ).trim();
-          if (!["batch", "shop-batch"].includes(publishMode)) {
-            sendError(response, 422, "publish_mode 必须是 batch 或 shop-batch");
-            return;
-          }
           database.setXianyuSettings(
-            current.account_id,
+            accountId,
             defaultPrice,
             new Date().toISOString(),
             templates,
             defaultStock,
-            publishMode,
+            "batch",
+            body.publish_options ?? current.publish_options,
           );
+          saved = database.getXianyuSyncSettings(accountId);
         } finally {
           database.close();
         }
@@ -1645,6 +1731,7 @@ export async function startDashboardServer(
           defaultStock,
           publishMode,
           ...templates,
+          ...mapXianyuSettings(saved),
         });
         return;
       }

@@ -113,6 +113,37 @@ export class XianyuClient {
     return materials;
   }
 
+  async getAccountPublishCapability(accountId, { signal = null } = {}) {
+    const payload = await this.request(
+      "/api/v1/product-publish/publish/capability",
+      {
+        method: "POST",
+        body: { account_id: accountId },
+        signal,
+      },
+    );
+    return payload?.data ?? {};
+  }
+
+  async recommendCategory(
+    { accountId, title, description },
+    { signal = null } = {},
+  ) {
+    const payload = await this.request(
+      "/api/v1/product-publish/category/recommend",
+      {
+        method: "POST",
+        body: {
+          account_id: accountId,
+          title,
+          description,
+        },
+        signal,
+      },
+    );
+    return payload?.data ?? {};
+  }
+
   async publishBatch(
     { accountId, materialIds, requestId },
     { signal = null } = {},
@@ -125,24 +156,6 @@ export class XianyuClient {
           account_ids: [accountId],
           material_ids: materialIds,
           request_id: requestId,
-        },
-        signal,
-      },
-    );
-    return payload?.data ?? {};
-  }
-
-  async publishShopBatch(
-    { accountId, materialIds },
-    { signal = null } = {},
-  ) {
-    const payload = await this.request(
-      "/api/v1/product-publish/publish/shop/batch",
-      {
-        method: "POST",
-        body: {
-          account_ids: [accountId],
-          material_ids: materialIds,
         },
         signal,
       },
@@ -192,14 +205,6 @@ export class XianyuClient {
   async getBatchStatus(batchId, { signal = null } = {}) {
     const payload = await this.request(
       `/api/v1/product-publish/publish/batch/${encodeURIComponent(batchId)}/status`,
-      { signal },
-    );
-    return payload?.data ?? {};
-  }
-
-  async getShopBatchStatus(batchId, { signal = null } = {}) {
-    const payload = await this.request(
-      `/api/v1/product-publish/publish/shop/batch/${encodeURIComponent(batchId)}/status`,
       { signal },
     );
     return payload?.data ?? {};

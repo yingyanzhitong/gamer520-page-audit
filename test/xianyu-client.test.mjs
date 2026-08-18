@@ -138,7 +138,7 @@ test("单商品发布使用同步接口并透传素材内容", async () => {
   });
 });
 
-test("鱼小铺批量发布使用专用提交和状态查询接口", async () => {
+test("批量发布统一使用按账号自动分流接口", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -146,7 +146,7 @@ test("鱼小铺批量发布使用专用提交和状态查询接口", async () =>
     return new Response(
       JSON.stringify({
         success: true,
-        data: options.method === "POST" ? { batch_id: "shop-batch-1" } : { done: true },
+        data: options.method === "POST" ? { batch_id: "batch-1" } : { done: true },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
@@ -158,13 +158,14 @@ test("鱼小铺批量发布使用专用提交和状态查询接口", async () =>
       apiKey: "test-key",
     });
     assert.deepEqual(
-      await client.publishShopBatch({
+      await client.publishBatch({
         accountId: "account-a",
         materialIds: [1, 2],
+        requestId: "request-1",
       }),
-      { batch_id: "shop-batch-1" },
+      { batch_id: "batch-1" },
     );
-    assert.deepEqual(await client.getShopBatchStatus("shop-batch-1"), {
+    assert.deepEqual(await client.getBatchStatus("batch-1"), {
       done: true,
     });
   } finally {
@@ -173,16 +174,90 @@ test("鱼小铺批量发布使用专用提交和状态查询接口", async () =>
 
   assert.equal(
     requests[0].url,
-    "https://xianyu.example/api/v1/product-publish/publish/shop/batch",
+    "https://xianyu.example/api/v1/product-publish/publish/batch",
   );
   assert.deepEqual(JSON.parse(requests[0].body), {
     account_ids: ["account-a"],
     material_ids: [1, 2],
+    request_id: "request-1",
   });
   assert.equal(
     requests[1].url,
-    "https://xianyu.example/api/v1/product-publish/publish/shop/batch/shop-batch-1/status",
+    "https://xianyu.example/api/v1/product-publish/publish/batch/batch-1/status",
   );
+});
+
+test("按账号读取发布能力并按该账号推荐商品分类", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), body: JSON.parse(options.body) });
+    const capability = String(url).endsWith("/publish/capability");
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: capability
+          ? {
+              account_type: "fish-shop",
+              supports: { quantity: true },
+            }
+          : {
+              candidates: [
+                {
+                  cat_id: "500000",
+                  channel_cat_id: "500001",
+                  tb_cat_id: "500002",
+                },
+              ],
+            },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  try {
+    const client = new XianyuClient({
+      baseUrl: "https://xianyu.example",
+      apiKey: "test-key",
+    });
+    assert.deepEqual(
+      await client.getAccountPublishCapability("account-a"),
+      { account_type: "fish-shop", supports: { quantity: true } },
+    );
+    assert.deepEqual(
+      await client.recommendCategory({
+        accountId: "account-a",
+        title: "游戏标题",
+        description: "游戏简介",
+      }),
+      {
+        candidates: [
+          {
+            cat_id: "500000",
+            channel_cat_id: "500001",
+            tb_cat_id: "500002",
+          },
+        ],
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(requests, [
+    {
+      url: "https://xianyu.example/api/v1/product-publish/publish/capability",
+      body: { account_id: "account-a" },
+    },
+    {
+      url: "https://xianyu.example/api/v1/product-publish/category/recommend",
+      body: {
+        account_id: "account-a",
+        title: "游戏标题",
+        description: "游戏简介",
+      },
+    },
+  ]);
 });
 
 test("外部终止信号会取消正在进行的闲鱼请求", async () => {

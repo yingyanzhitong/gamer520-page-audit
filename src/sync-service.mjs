@@ -126,6 +126,63 @@ function matchNewPublishedItems(
   return matches;
 }
 
+function selectRecommendedCategory(recommendation) {
+  const candidates = Array.isArray(recommendation?.candidates)
+    ? recommendation.candidates
+    : [];
+  const hasCompletePlatformCategory = (candidate) =>
+    Boolean(
+      String(candidate?.cat_id ?? "").trim() &&
+        String(candidate?.channel_cat_id ?? "").trim() &&
+        String(candidate?.tb_cat_id ?? "").trim(),
+    );
+  const selected =
+    candidates.find(
+      (candidate) => candidate?.is_selected && hasCompletePlatformCategory(candidate),
+    ) ??
+    candidates.find(hasCompletePlatformCategory) ??
+    candidates.find((candidate) => candidate?.is_selected) ??
+    candidates[0];
+  const categoryId = String(selected?.cat_id ?? "").trim();
+  const channelCategoryId = String(selected?.channel_cat_id ?? "").trim();
+  const tbCategoryId = String(selected?.tb_cat_id ?? "").trim();
+  if (!categoryId || !channelCategoryId || !tbCategoryId) {
+    throw new Error("分类推荐未返回完整的平台商品分类，请检查账号登录状态后重试");
+  }
+  return {
+    platform_category_id: categoryId,
+    platform_category_name: String(selected?.cat_name ?? "").trim() || null,
+    platform_channel_category_id: channelCategoryId,
+    platform_channel_category_name:
+      String(selected?.channel_cat_name ?? "").trim() || null,
+    platform_leaf_id: String(selected?.leaf_id ?? "").trim() || null,
+    platform_tb_category_id: tbCategoryId,
+    platform_category_path: Array.isArray(selected?.path) ? selected.path : [],
+    category_source: "recommendation",
+  };
+}
+
+function publishOptionsForAccount(settings, capability) {
+  const options = settings.publish_options ?? {};
+  const accountType = capability?.account_type === "fish-shop"
+    ? "fish-shop"
+    : "personal";
+  const supportedShippingMethods = Array.isArray(capability?.supports?.shipping_methods)
+    ? capability.supports.shipping_methods
+    : [];
+  if (
+    supportedShippingMethods.length > 0 &&
+    !supportedShippingMethods.includes(options.shippingMethod)
+  ) {
+    const error = new Error(
+      `该账号不支持“${options.shippingMethod}”运费方式，请在商品配置中重新保存`,
+    );
+    error.statusCode = 422;
+    throw error;
+  }
+  return { options, accountType };
+}
+
 export class XianyuSyncService {
   constructor(config, client = null, dependencies = {}) {
     this.config = config;
@@ -159,6 +216,10 @@ export class XianyuSyncService {
     return account;
   }
 
+  async getAccountPublishCapability(accountId, { signal = null } = {}) {
+    return this.client.getAccountPublishCapability(accountId, { signal });
+  }
+
   async syncAccountPublishedItems({ accountIds = null, signal = null } = {}) {
     const database = new CrawlerDatabase(this.config.dbPath);
     try {
@@ -177,19 +238,21 @@ export class XianyuSyncService {
         error.statusCode = 422;
         throw error;
       }
-      const materials = await this.client.listMaterials({ signal });
-      const materialState = database.reconcileRemoteMaterials(
-        materials,
-        nowIso(),
-      );
       const accounts = [];
       for (const accountId of resolvedAccountIds) {
         await this.validateAccount(accountId, { signal });
+        const materials = await this.client.listMaterials({ signal });
+        const materialState = database.reconcileRemoteMaterials(
+          accountId,
+          materials,
+          nowIso(),
+        );
         const settings = database.getXianyuSyncSettings(accountId);
         await this.client.refreshAccountItems(accountId, { signal });
         const items = await this.client.listAccountItems(accountId, { signal });
         accounts.push({
           accountId,
+          ...materialState,
           ...database.reconcileAccountPublishedItems(
             accountId,
             items,
@@ -206,7 +269,18 @@ export class XianyuSyncService {
         });
       }
       const aggregate = {
-        ...materialState,
+        materialConfirmedCount: accounts.reduce(
+          (total, account) => total + (account.materialConfirmedCount ?? 0),
+          0,
+        ),
+        materialResetCount: accounts.reduce(
+          (total, account) => total + (account.materialResetCount ?? 0),
+          0,
+        ),
+        materialImportedCount: accounts.reduce(
+          (total, account) => total + (account.materialImportedCount ?? 0),
+          0,
+        ),
         accountItemCount: accounts.reduce(
           (total, account) => total + account.accountItemCount,
           0,
@@ -231,7 +305,6 @@ export class XianyuSyncService {
       if (accounts.length === 1) {
         return {
           accountId: accounts[0].accountId,
-          ...materialState,
           ...accounts[0],
         };
       }
@@ -306,18 +379,12 @@ export class XianyuSyncService {
       error.statusCode = 422;
       throw error;
     }
-    const publishMode =
-      settings.publish_mode === "shop-batch" ? "shop-batch" : "batch";
-    const publishLabel =
-      publishMode === "shop-batch" ? "鱼小铺批量发布" : "批量发布";
+    const publishMode = "account-auto";
+    const publishLabel = "按账号类型批量发布";
     const submitPublishBatch = (payload, options) =>
-      publishMode === "shop-batch"
-        ? this.client.publishShopBatch(payload, options)
-        : this.client.publishBatch(payload, options);
+      this.client.publishBatch(payload, options);
     const getPublishBatchStatus = (batchId, options) =>
-      publishMode === "shop-batch"
-        ? this.client.getShopBatchStatus(batchId, options)
-        : this.client.getBatchStatus(batchId, options);
+      this.client.getBatchStatus(batchId, options);
 
     const startedAt = nowIso();
     const runId = database.startSyncRun(
@@ -374,6 +441,9 @@ export class XianyuSyncService {
       publishSkipped: 0,
     };
     let knownAccountItems = null;
+    let accountCapability = null;
+    let accountPublishOptions = null;
+    let accountType = "personal";
     const listingCache = new Map();
     const listingFor = (candidate) => {
       if (!listingCache.has(candidate.id)) {
@@ -463,6 +533,7 @@ export class XianyuSyncService {
       });
       await control?.checkpoint();
       const materialState = database.reconcileRemoteMaterials(
+        accountId,
         remoteMaterials,
         nowIso(),
       );
@@ -591,6 +662,14 @@ export class XianyuSyncService {
         signal: control?.signal,
       });
       await control?.checkpoint();
+      accountCapability = await this.getAccountPublishCapability(accountId, {
+        signal: control?.signal,
+      });
+      ({ options: accountPublishOptions, accountType } = publishOptionsForAccount(
+        settings,
+        accountCapability,
+      ));
+      await control?.checkpoint();
       recordTaskLog({
         level: "success",
         stage: "account",
@@ -600,6 +679,8 @@ export class XianyuSyncService {
           accountId,
           remark: account.remark ?? null,
           enabled: account.enabled,
+          accountType,
+          supports: accountCapability?.supports ?? {},
         },
       });
       await control?.checkpoint();
@@ -748,16 +829,44 @@ export class XianyuSyncService {
             details: { coverUrl },
           });
         }
+        const recommendation = await this.client.recommendCategory(
+          {
+            accountId,
+            title: listing.title,
+            description: listing.description,
+          },
+          { signal: control?.signal },
+        );
+        await control?.checkpoint();
+        const category = selectRecommendedCategory(recommendation);
         return {
           title: listing.title,
           description: listing.description,
           price: Number(candidate.effective_price),
-          stock: Number(settings.default_stock ?? 999),
+          original_price: accountPublishOptions.originalPrice,
           images: [coverUrl],
-          category: "虚拟商品",
-          deliveryMethod: "express",
-          postage: 0,
-          condition: "全新",
+          category: accountPublishOptions.category,
+          ...category,
+          platform_attributes: accountPublishOptions.platformAttributes,
+          quantity:
+            accountType === "fish-shop"
+              ? Number(accountPublishOptions.fish.quantity)
+              : 1,
+          delivery_method: accountPublishOptions.deliveryMethod,
+          shipping_method: accountPublishOptions.shippingMethod,
+          support_pickup:
+            accountType !== "fish-shop" && accountPublishOptions.supportPickup,
+          postage: Number(accountPublishOptions.postage),
+          address: accountPublishOptions.address,
+          address_expected_text: accountPublishOptions.addressExpectedText,
+          brand: accountPublishOptions.brand,
+          condition: accountPublishOptions.condition,
+          specifications:
+            accountType === "fish-shop"
+              ? accountPublishOptions.fish.specifications
+              : [],
+          sku_rows:
+            accountType === "fish-shop" ? accountPublishOptions.fish.skuRows : [],
         };
       };
       const syncMaterial = async (candidate) => {
@@ -796,24 +905,15 @@ export class XianyuSyncService {
           details: {
             title: listing.title,
             price: Number(candidate.effective_price),
-            stock: Number(settings.default_stock ?? 999),
+            accountType,
+            quantity:
+              accountType === "fish-shop"
+                ? Number(accountPublishOptions.fish.quantity)
+                : 1,
             imageUrl: listing.imageUrl,
           },
         });
-        const payload = {
-          external_id: String(candidate.id),
-          content_hash: candidate.sync_content_hash,
-          title: listing.title,
-          description: listing.description,
-          price: Number(candidate.effective_price),
-          stock: Number(settings.default_stock ?? 999),
-          images: [],
-          category: "虚拟商品",
-          delivery_method: "express",
-          postage: 0,
-          condition: "全新",
-          remark: `来源 gamer520，商品ID ${candidate.id}`,
-        };
+        const externalId = `${accountId}:${candidate.id}`;
         const titleKey = listing.title.trim();
         const previous = titleLocks.get(titleKey) ?? Promise.resolve();
         const operation = previous
@@ -824,7 +924,12 @@ export class XianyuSyncService {
               candidate,
               listing,
             );
-            payload.images = [...publishPayload.images];
+            const payload = {
+              external_id: externalId,
+              content_hash: candidate.sync_content_hash,
+              ...publishPayload,
+              remark: `来源 gamer520，账号 ${accountId}，商品ID ${candidate.id}`,
+            };
             recordTaskLog({
               gameId: candidate.id,
               stage: "material",
@@ -833,8 +938,10 @@ export class XianyuSyncService {
               details: {
                 title: payload.title,
                 price: payload.price,
-                stock: payload.stock,
+                accountType,
+                quantity: payload.quantity,
                 imageCount: payload.images.length,
+                categoryId: payload.platform_category_id,
               },
             });
             const results = await this.client.upsertMaterials(
@@ -844,7 +951,7 @@ export class XianyuSyncService {
             await control?.checkpoint();
             const result = results.find(
               (item) =>
-                String(item.external_id) === String(candidate.id),
+                String(item.external_id) === externalId,
             );
             if (!result) {
               throw new Error("闲鱼素材接口未返回该商品结果");
@@ -1023,7 +1130,6 @@ export class XianyuSyncService {
             throw submissionError;
           }
           try {
-            if (publishMode === "shop-batch") throw submissionError;
             recoveredStatus = await getPublishBatchStatus(requestId, {
               signal: control?.signal,
             });
@@ -1413,6 +1519,7 @@ export class XianyuSyncService {
         if (error) {
           database.markMaterialFailed(
             candidate.id,
+            accountId,
             error.message,
             nowIso(),
           );
@@ -1425,6 +1532,7 @@ export class XianyuSyncService {
         if (!Number.isInteger(materialId) || materialId <= 0) {
           database.markMaterialFailed(
             candidate.id,
+            accountId,
             "闲鱼素材接口未返回有效 material_id",
             nowIso(),
           );
@@ -1445,6 +1553,7 @@ export class XianyuSyncService {
         if (result.action === "skipped") {
           database.markMaterialSkipped(
             candidate.id,
+            accountId,
             materialId,
             candidate.sync_content_hash,
             result.reason ?? "闲鱼素材库已存在同名商品",
@@ -1453,6 +1562,7 @@ export class XianyuSyncService {
         } else {
           database.markMaterialSynced(
             candidate.id,
+            accountId,
             materialId,
             candidate.sync_content_hash,
             syncedAt,
