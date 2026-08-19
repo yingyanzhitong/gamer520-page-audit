@@ -1132,6 +1132,19 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       options: {
         accountIds: ["account-a"],
         useConfiguredTask: true,
+        tasks: [
+          {
+            accountId: "account-a",
+            cronSchedule: "15 */8 * * *",
+            enabled: true,
+            mode: "selected-force",
+            gameIds: [118842],
+            materialConcurrency: 6,
+            publishBatchSize: 8,
+            publishLimit: 42,
+            sort: "created",
+          },
+        ],
         gameIds: [118842],
       },
     });

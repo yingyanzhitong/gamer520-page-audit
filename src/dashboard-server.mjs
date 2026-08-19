@@ -1813,6 +1813,9 @@ export async function startDashboardServer(
           }
           mode = syncMode(configuredTask.mode);
         }
+        const configuredTaskOptions = useConfiguredTask
+          ? { useConfiguredTask: true, tasks: [configuredTask] }
+          : {};
         if (
           mode === "selected-force" &&
           (!(useConfiguredTask ? configuredTask?.gameIds : state.sync?.gameIds)
@@ -1827,14 +1830,14 @@ export async function startDashboardServer(
           mode === "selected-force"
             ? {
                 ...accountOptions,
-                ...(useConfiguredTask ? { useConfiguredTask: true } : {}),
+                ...configuredTaskOptions,
                 gameIds: useConfiguredTask
                   ? configuredTask.gameIds
                   : state.sync.gameIds,
               }
             : {
                 ...accountOptions,
-                ...(useConfiguredTask ? { useConfiguredTask: true } : {}),
+                ...configuredTaskOptions,
               },
         );
         sendJson(response, 202, {
