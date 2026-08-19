@@ -1791,16 +1791,32 @@ export async function startDashboardServer(
           sendError(response, 503, "闲鱼同步服务尚未启用");
           return;
         }
-        const mode = syncMode(body.mode);
         const accountIds = body.account_ids ?? state.sync?.accountIds ?? [];
         const accountOptions =
           Array.isArray(accountIds) && accountIds.length > 0
             ? { accountIds }
             : {};
+        const useConfiguredTask = body.use_configured_task === true;
+        let mode = syncMode(body.mode);
+        let configuredTask = null;
+        if (useConfiguredTask) {
+          if (!Array.isArray(accountIds) || accountIds.length !== 1) {
+            sendError(response, 422, "请指定一个已设定同步任务的发布账号");
+            return;
+          }
+          configuredTask = (state.sync?.tasks ?? []).find(
+            (task) => task.accountId === accountIds[0],
+          );
+          if (!configuredTask) {
+            sendError(response, 422, "该账号尚未设定同步任务");
+            return;
+          }
+          mode = syncMode(configuredTask.mode);
+        }
         if (
           mode === "selected-force" &&
-          (!Array.isArray(state.sync?.gameIds) ||
-            state.sync.gameIds.length === 0)
+          (!(useConfiguredTask ? configuredTask?.gameIds : state.sync?.gameIds)
+            ?.length)
         ) {
           sendError(response, 422, "请先配置至少一个自选游戏");
           return;
@@ -1809,12 +1825,23 @@ export async function startDashboardServer(
           "manual",
           mode,
           mode === "selected-force"
-            ? { ...accountOptions, gameIds: state.sync.gameIds }
-            : accountOptions,
+            ? {
+                ...accountOptions,
+                ...(useConfiguredTask ? { useConfiguredTask: true } : {}),
+                gameIds: useConfiguredTask
+                  ? configuredTask.gameIds
+                  : state.sync.gameIds,
+              }
+            : {
+                ...accountOptions,
+                ...(useConfiguredTask ? { useConfiguredTask: true } : {}),
+              },
         );
         sendJson(response, 202, {
           success: true,
-          message: `${mode === "pending" ? "未发布商品" : mode === "updated" ? "已更新商品" : mode === "selected-force" ? "自选游戏强制发布" : "全部待处理商品"}同步任务已启动`,
+          message: useConfiguredTask
+            ? "已按设定启动同步任务"
+            : `${mode === "pending" ? "未发布商品" : mode === "updated" ? "已更新商品" : mode === "selected-force" ? "自选游戏强制发布" : "全部待处理商品"}同步任务已启动`,
           ...accepted,
         });
         return;

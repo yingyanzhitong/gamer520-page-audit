@@ -446,6 +446,7 @@ function triggerSync(
   const accountIds = syncAccountIdsValue(
     options.accountIds ?? schedulerSettings.syncAccountIds,
   );
+  const useConfiguredTask = options.useConfiguredTask === true;
   if (accountIds.length === 0) {
     if (reason.startsWith("schedule")) {
       log("schedule_skipped", {
@@ -533,7 +534,8 @@ function triggerSync(
     for (let index = 0; index < accountIds.length; index += 1) {
       const accountId = accountIds[index];
       const task = accountTasks[index];
-      const resolvedMode = reason.startsWith("schedule") ? task.mode : mode;
+      const resolvedMode =
+        reason.startsWith("schedule") || useConfiguredTask ? task.mode : mode;
       const gameIds = Array.isArray(options.gameIds)
         ? options.gameIds
         : resolvedMode === "selected-force"
@@ -548,7 +550,7 @@ function triggerSync(
         materialConcurrency: task.materialConcurrency,
         publishBatchSize: task.publishBatchSize,
         candidateSort: task.sort,
-        publishLimit: reason.startsWith("schedule")
+        publishLimit: reason.startsWith("schedule") || useConfiguredTask
           ? task.publishLimit
           : 0,
         onProgress: (progress) => {

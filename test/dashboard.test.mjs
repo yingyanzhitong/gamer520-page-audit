@@ -184,6 +184,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
   database.close();
 
   let savedSchedule = null;
+  let runtimeSyncTasks = null;
   let crawlTrigger = null;
   let syncTrigger = null;
   let taskControl = null;
@@ -214,7 +215,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         cronTimezone: "Asia/Shanghai",
         nextRun: "2026-07-28T18:00:00.000Z",
         accountIds: ["account-a", "account-b"],
-        tasks: [
+        tasks: runtimeSyncTasks ?? [
           {
             accountId: "account-a",
             enabled: true,
@@ -299,6 +300,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       },
       updateScheduleSettings: (settings) => {
         savedSchedule = settings;
+        runtimeSyncTasks = settings.syncTasks;
         return {
           active: false,
           enabled: settings.crawlEnabled,
@@ -1109,6 +1111,29 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       trigger: "manual",
       mode: "pending",
       options: { accountIds: ["account-a", "account-b"] },
+    });
+
+    const configuredSync = await fetch(`${baseUrl}/api/sync/run`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-API-Key": "xianyu-secret",
+      },
+      body: JSON.stringify({
+        use_configured_task: true,
+        account_ids: ["account-a"],
+      }),
+    });
+    assert.equal(configuredSync.status, 202);
+    assert.equal((await configuredSync.json()).message, "已按设定启动同步任务");
+    assert.deepEqual(syncTrigger, {
+      trigger: "manual",
+      mode: "selected-force",
+      options: {
+        accountIds: ["account-a"],
+        useConfiguredTask: true,
+        gameIds: [118842],
+      },
     });
 
     const singleSync = await fetch(

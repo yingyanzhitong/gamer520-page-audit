@@ -1436,14 +1436,16 @@ function TasksPage({ notify }) {
     }
   }
 
-  async function runTask(kind, mode) {
+  async function runTask(kind, mode, { useConfiguredTask = false } = {}) {
     try {
       await api(kind === "crawl" ? "/api/crawl/run" : "/api/sync/run", {
         method: "POST",
         body: jsonBody(
           kind === "sync"
             ? {
-                mode,
+                ...(useConfiguredTask
+                  ? { use_configured_task: true }
+                  : { mode }),
                 account_ids: selectedScheduleAccountId
                   ? [selectedScheduleAccountId]
                   : [],
@@ -1451,7 +1453,13 @@ function TasksPage({ notify }) {
             : {},
         ),
       });
-      notify(kind === "crawl" ? "采集任务已启动" : "同步任务已启动");
+      notify(
+        kind === "crawl"
+          ? "采集任务已启动"
+          : useConfiguredTask
+            ? "已按设定启动同步任务"
+            : "同步任务已启动",
+      );
       await load();
     } catch (caught) {
       notify(errorMessage(caught), "error");
@@ -1502,11 +1510,13 @@ function TasksPage({ notify }) {
               立即采集
             </Button>
             <Button
-              onClick={() => runTask("sync", "pending")}
+              onClick={() =>
+                runTask("sync", null, { useConfiguredTask: true })
+              }
               disabled={!selectedSyncTask || !selectedSyncAccountUsable}
             >
               <Play className="h-4 w-4" />
-              同步未发布
+              立即执行同步任务
             </Button>
           </>
         }
