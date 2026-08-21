@@ -1526,6 +1526,64 @@ test("已有素材跳过上传但进入发布线程且不虚增发布进度", as
   }
 });
 
+test("同步使用商品配置中选择的卡券，未选择时不自动绑定", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-sync-configured-card-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const timestamp = "2026-08-21T00:00:00.000Z";
+  const firstGame = game(901);
+  const database = new CrawlerDatabase(databasePath);
+  try {
+    database.upsertDiscoveredGames([firstGame], timestamp);
+    database.saveGameSuccess(firstGame, result(firstGame.id), timestamp);
+    database.setXianyuSettings(
+      "account-a",
+      1,
+      timestamp,
+      null,
+      null,
+      null,
+      { cardId: 42 },
+    );
+  } finally {
+    database.close();
+  }
+
+  const client = new FakeXianyuClient();
+  const service = new XianyuSyncService(config(databasePath), client);
+  try {
+    const firstSync = await service.run({ trigger: "test" });
+    assert.equal(firstSync.cardBound, 1);
+    assert.deepEqual(client.cardBindCalls[0].cardIds, [42]);
+
+    const secondGame = game(902);
+    const updatedDatabase = new CrawlerDatabase(databasePath);
+    try {
+      updatedDatabase.upsertDiscoveredGames([secondGame], timestamp);
+      updatedDatabase.saveGameSuccess(secondGame, result(secondGame.id), timestamp);
+      updatedDatabase.setXianyuSettings(
+        "account-a",
+        1,
+        "2026-08-21T00:01:00.000Z",
+        null,
+        null,
+        null,
+        { cardId: null },
+      );
+    } finally {
+      updatedDatabase.close();
+    }
+
+    const secondSync = await service.run({ trigger: "test" });
+    assert.equal(secondSync.publishSuccess, 1);
+    assert.equal(secondSync.cardBound, 0);
+    assert.equal(client.cardBindCalls.length, 1);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("已有商品编号时跳过素材同步和卡券重试", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-card-retry-test-"),

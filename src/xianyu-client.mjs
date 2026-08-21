@@ -79,6 +79,25 @@ export class XianyuClient {
     }));
   }
 
+  async listCards({ signal = null } = {}) {
+    const payload = await this.request(
+      "/api/v1/cards?page=1&page_size=9999&lite=true",
+      { signal },
+    );
+    const data = payload?.data ?? payload;
+    if (!Array.isArray(data?.list)) {
+      throw new XianyuApiError("闲鱼卡券接口返回格式无效");
+    }
+    return data.list
+      .map((card) => ({
+        id: Number(card?.id),
+        name: String(card?.name ?? "").trim(),
+        type: String(card?.type ?? "").trim(),
+        enabled: Boolean(card?.enabled),
+      }))
+      .filter((card) => Number.isInteger(card.id) && card.id > 0 && card.name);
+  }
+
   async upsertMaterials(items, { signal = null } = {}) {
     const payload = await this.request(
       "/api/v1/product-publish/materials/external/upsert",

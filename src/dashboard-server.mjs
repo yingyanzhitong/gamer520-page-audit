@@ -76,6 +76,7 @@ function mapRun(row) {
 
 function mapXianyuSettings(row) {
   const defaultPublishOptions = {
+    cardId: 6,
     originalPrice: null,
     category: "虚拟商品",
     condition: "全新",
@@ -1599,6 +1600,28 @@ export async function startDashboardServer(
         }
         const accounts = await handlers.listXianyuAccounts();
         sendJson(response, 200, { items: accounts });
+        return;
+      }
+      if (
+        request.method === "GET" &&
+        requestUrl.pathname === "/api/xianyu/cards"
+      ) {
+        if (
+          !requireKey(
+            request,
+            response,
+            config.xianyuApiKey,
+            "X-API-Key",
+          )
+        ) {
+          return;
+        }
+        if (!handlers.listXianyuCards) {
+          sendError(response, 503, "闲鱼卡券服务尚未启用");
+          return;
+        }
+        const cards = await handlers.listXianyuCards();
+        sendJson(response, 200, { items: cards });
         return;
       }
       if (

@@ -127,6 +127,15 @@ function positiveOptionalNumber(value, fieldName) {
   return number;
 }
 
+function optionalPositiveInteger(value, fieldName) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) {
+    throw publishOptionsError(`${fieldName}必须是正整数`);
+  }
+  return number;
+}
+
 function normalizeXianyuPublishOptions(value, defaultStock = 999) {
   const options = parsePublishOptions(value);
   const fish = parsePublishOptions(options.fish);
@@ -163,6 +172,9 @@ function normalizeXianyuPublishOptions(value, defaultStock = 999) {
     throw publishOptionsError("平台属性最多支持 30 条");
   }
   return {
+    cardId: Object.hasOwn(options, "cardId")
+      ? optionalPositiveInteger(options.cardId, "绑定卡券")
+      : 6,
     originalPrice: positiveOptionalNumber(options.originalPrice, "原价"),
     category: optionalText(options.category ?? "虚拟商品", 100, "商品分类"),
     condition: optionalText(options.condition ?? "全新", 20, "成色") ?? "全新",

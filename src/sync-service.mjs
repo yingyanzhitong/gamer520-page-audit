@@ -13,7 +13,6 @@ import {
 export { buildListingDescription };
 
 const syncModes = new Set(["all", "pending", "updated", "selected-force"]);
-const deliveryCardId = 6;
 export const materialSyncConcurrency = 4;
 export const publishBatchSize = 20;
 export const publishBatchLogIntervalMs = 60_000;
@@ -200,6 +199,10 @@ export class XianyuSyncService {
     return this.client.listAccounts({ signal });
   }
 
+  async listCards({ signal = null } = {}) {
+    return this.client.listCards({ signal });
+  }
+
   async validateAccount(accountId, { signal = null } = {}) {
     const accounts = await this.listAccounts({ signal });
     const account = accounts.find((item) => item.accountId === accountId);
@@ -352,6 +355,11 @@ export class XianyuSyncService {
       configuredAccountId ?? fallbackSettings.account_id ?? "",
     ).trim();
     const settings = database.getXianyuSyncSettings(accountId);
+    const configuredCardId = Number(settings.publish_options?.cardId);
+    const deliveryCardId =
+      Number.isInteger(configuredCardId) && configuredCardId > 0
+        ? configuredCardId
+        : null;
     const resolvedMaterialConcurrency = Math.min(
       12,
       Math.max(1, Number.parseInt(materialConcurrency, 10) || materialSyncConcurrency),
@@ -561,6 +569,7 @@ export class XianyuSyncService {
       return { materialState, publicationState };
     };
     const bindDeliveryCard = async (candidate, itemId) => {
+      if (!deliveryCardId) return false;
       await control?.checkpoint();
       reportProgress({
         total: candidates.length,
@@ -647,6 +656,7 @@ export class XianyuSyncService {
         publishBatchSize: resolvedPublishBatchSize,
         publishLimit: resolvedPublishLimit || null,
         candidateSort: resolvedCandidateSort,
+        cardId: deliveryCardId,
         publishLogIntervalSeconds: publishBatchLogIntervalMs / 1_000,
         requestedGameIds: Array.isArray(gameIds) ? gameIds : null,
       },

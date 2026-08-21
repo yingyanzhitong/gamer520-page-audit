@@ -2039,6 +2039,7 @@ function TasksPage({ notify }) {
 function ProductConfigPage({ notify }) {
   const [settings, setSettings] = useState(null);
   const [accounts, setAccounts] = useState([]);
+  const [cards, setCards] = useState([]);
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [capability, setCapability] = useState(null);
   const [fishSpecificationsText, setFishSpecificationsText] = useState("[]");
@@ -2047,9 +2048,13 @@ function ProductConfigPage({ notify }) {
   const [previewImageFailed, setPreviewImageFailed] = useState(false);
 
   const load = useCallback(async () => {
-    const payload = await api("/api/xianyu/accounts");
+    const [payload, cardPayload] = await Promise.all([
+      api("/api/xianyu/accounts"),
+      api("/api/xianyu/cards"),
+    ]);
     const items = payload.items ?? [];
     setAccounts(items);
+    setCards(cardPayload.items ?? []);
     setSelectedAccountId((current) =>
       items.some((account) => account.accountId === current)
         ? current
@@ -2160,6 +2165,7 @@ function ProductConfigPage({ notify }) {
 
   const isFishShop = capability?.account_type === "fish-shop";
   const publishOptions = settings?.publishOptions ?? {
+    cardId: 6,
     originalPrice: null,
     category: "虚拟商品",
     condition: "全新",
@@ -2270,6 +2276,38 @@ function ProductConfigPage({ notify }) {
                     update("defaultPrice", event.target.value)
                   }
                 />
+              </div>
+              <div className="space-y-2">
+                <Label>绑定卡券（可选）</Label>
+                <Select
+                  value={
+                    publishOptions.cardId == null
+                      ? ""
+                      : String(publishOptions.cardId)
+                  }
+                  onChange={(event) =>
+                    updatePublishOption(
+                      "cardId",
+                      event.target.value ? Number(event.target.value) : null,
+                    )
+                  }
+                >
+                  <option value="">不绑定卡券</option>
+                  {cards.map((card) => (
+                    <option
+                      key={card.id}
+                      value={card.id}
+                      disabled={!card.enabled}
+                    >
+                      #{card.id} · {card.name}
+                      {card.type ? `（${card.type}）` : ""}
+                      {card.enabled ? "" : "（已停用）"}
+                    </option>
+                  ))}
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  卡券来自 xianyu-auto-reply；不绑定时，后续发布不会自动关联卡券。
+                </p>
               </div>
               <div className="space-y-2">
                 <Label>原价（可选）</Label>

@@ -274,6 +274,10 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           remark: "停用",
         },
       ],
+      listXianyuCards: async () => [
+        { id: 6, name: "默认卡券", type: "text", enabled: true },
+        { id: 9, name: "已停用卡券", type: "api", enabled: false },
+      ],
       getXianyuAccountPublishCapability: async (accountId) => ({
         account_id: accountId,
         account_type: accountId === "account-b" ? "fish-shop" : "personal",
@@ -883,6 +887,14 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(accounts.items.length, 3);
     assert.equal(accounts.items[0].accountId, "account-a");
 
+    const cards = await fetch(`${baseUrl}/api/xianyu/cards`, {
+      headers: { "X-API-Key": "xianyu-secret" },
+    }).then((response) => response.json());
+    assert.deepEqual(cards.items, [
+      { id: 6, name: "默认卡券", type: "text", enabled: true },
+      { id: 9, name: "已停用卡券", type: "api", enabled: false },
+    ]);
+
     const capability = await fetch(
       `${baseUrl}/api/xianyu/accounts/capability?accountId=account-b`,
       { headers: { "X-API-Key": "xianyu-secret" } },
@@ -906,6 +918,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           title_template: "现货 {title}",
           description_template: "{description}\n{cloud_drives}",
           image_template: "https://cdn.example/{id}.jpg",
+          publish_options: { cardId: 9 },
         }),
       },
     );
@@ -915,6 +928,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(savedSettingsPayload.defaultStock, 88);
     assert.equal(savedSettingsPayload.publishMode, "account-auto");
     assert.equal(savedSettingsPayload.titleTemplate, "现货 {title}");
+    assert.equal(savedSettingsPayload.publishOptions.cardId, 9);
 
     const settings = await fetch(
       `${baseUrl}/api/settings/xianyu?accountId=account-a`,
@@ -923,6 +937,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(settings.defaultPrice, 3.5);
     assert.equal(settings.defaultStock, 88);
     assert.equal(settings.publishMode, "account-auto");
+    assert.equal(settings.publishOptions.cardId, 9);
     assert.equal(settings.titleTemplate, "现货 {title}");
     assert.equal(
       settings.descriptionTemplate,

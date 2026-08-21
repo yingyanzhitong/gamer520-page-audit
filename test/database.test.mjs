@@ -682,6 +682,36 @@ test("所有闲鱼账号读取同一套商品配置", () => {
       database.getXianyuSyncSettings("account-b").account_id,
       "account-b",
     );
+    assert.equal(
+      database.getXianyuSyncSettings("account-a").publish_options.cardId,
+      6,
+    );
+    database.setXianyuSettings(
+      "account-a",
+      2.5,
+      "2026-08-17T00:00:00.000Z",
+      null,
+      null,
+      null,
+      { cardId: null },
+    );
+    assert.equal(
+      database.getXianyuSyncSettings("account-a").publish_options.cardId,
+      null,
+    );
+    assert.throws(
+      () =>
+        database.setXianyuSettings(
+          "account-a",
+          2.5,
+          "2026-08-17T00:00:00.000Z",
+          null,
+          null,
+          null,
+          { cardId: 0 },
+        ),
+      /绑定卡券必须是正整数/,
+    );
   } finally {
     database.close();
     fs.rmSync(directory, { recursive: true, force: true });
