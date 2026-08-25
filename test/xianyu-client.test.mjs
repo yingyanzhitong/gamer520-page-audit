@@ -3,12 +3,12 @@ import test from "node:test";
 
 import { XianyuClient } from "../src/xianyu-client.mjs";
 
-test("刷新账号商品使用闲鱼允许的每页 20 条", async () => {
+test("刷新账号商品使用闲鱼允许的每页 20 条并返回实时列表", async () => {
   const originalFetch = globalThis.fetch;
   let requestBody;
   globalThis.fetch = async (_url, options) => {
     requestBody = JSON.parse(options.body);
-    return new Response(JSON.stringify({ success: true, data: {} }), {
+    return new Response(JSON.stringify({ success: true, items: [{ item_id: "1" }] }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -19,7 +19,9 @@ test("刷新账号商品使用闲鱼允许的每页 20 条", async () => {
       baseUrl: "https://xianyu.example",
       apiKey: "test-key",
     });
-    await client.refreshAccountItems("account-a");
+    assert.deepEqual(await client.refreshAccountItems("account-a"), [
+      { item_id: "1" },
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }

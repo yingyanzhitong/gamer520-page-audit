@@ -67,6 +67,7 @@ class FakeXianyuClient {
     this.cardBindCalls = [];
     this.events = [];
     this.accountItems = new Map();
+    this.refreshedAccountItems = new Map();
     this.refreshAccountItemCalls = [];
     this.listMaterialCalls = 0;
     this.capabilities = new Map();
@@ -186,7 +187,11 @@ class FakeXianyuClient {
 
   async refreshAccountItems(accountId) {
     this.refreshAccountItemCalls.push(accountId);
-    return { success: true };
+    return [
+      ...(this.refreshedAccountItems.get(accountId) ??
+        this.accountItems.get(accountId) ??
+        []),
+    ];
   }
 
   async listAccountItems(accountId) {
@@ -507,7 +512,7 @@ test("闲鱼商品核对按编号或唯一名称确认发布，未匹配项回�
   }
 });
 
-test("手动闲鱼商品同步按素材库和商品管理回写当前状态", async () => {
+test("手动闲鱼商品同步按素材库和实时商品管理回写当前状态", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-current-xianyu-status-test-"),
   );
@@ -560,13 +565,21 @@ test("手动闲鱼商品同步按素材库和商品管理回写当前状态", as
     contentHash: materialContentHash,
     title: "游戏 401",
   });
-  client.accountItems.set("account-a", [
+  const remoteItems = [
     {
       item_id: "item-product-only",
       item_title: "【秒发】游戏 402",
       item_url: "https://www.goofish.com/item?id=item-product-only",
     },
+  ];
+  client.accountItems.set("account-a", [
+    ...remoteItems,
+    {
+      item_id: "item-offline",
+      item_title: "【秒发】游戏 403",
+    },
   ]);
+  client.refreshedAccountItems.set("account-a", remoteItems);
   const service = new XianyuSyncService(config(databasePath), client);
   try {
     const summary = await service.syncAccountPublishedItems();

@@ -230,7 +230,7 @@ export class XianyuClient {
   }
 
   async refreshAccountItems(accountId, { signal = null } = {}) {
-    return this.request("/api/v1/items/get-all-from-account", {
+    const payload = await this.request("/api/v1/items/get-all-from-account", {
       method: "POST",
       body: {
         cookie_id: accountId,
@@ -238,6 +238,19 @@ export class XianyuClient {
       },
       signal,
     });
+    if (payload?.skipped) {
+      throw new XianyuApiError(
+        payload.message ?? "闲鱼商品列表正在刷新，请稍后重试",
+        { payload },
+      );
+    }
+    const items = payload?.items ?? payload?.data?.items;
+    if (!Array.isArray(items)) {
+      throw new XianyuApiError("闲鱼商品刷新接口未返回实时商品列表", {
+        payload,
+      });
+    }
+    return items;
   }
 
   async listAccountItems(accountId, { signal = null } = {}) {

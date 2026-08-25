@@ -251,8 +251,9 @@ export class XianyuSyncService {
           nowIso(),
         );
         const settings = database.getXianyuSyncSettings(accountId);
-        await this.client.refreshAccountItems(accountId, { signal });
-        const items = await this.client.listAccountItems(accountId, { signal });
+        const items = await this.client.refreshAccountItems(accountId, {
+          signal,
+        });
         accounts.push({
           accountId,
           ...materialState,
@@ -513,11 +514,7 @@ export class XianyuSyncService {
         action: "refresh-items",
         message: `正在刷新账号 ${accountId} 的商品列表`,
       });
-      await this.client.refreshAccountItems(accountId, {
-        signal: control?.signal,
-      });
-      await control?.checkpoint();
-      knownAccountItems = await this.client.listAccountItems(accountId, {
+      knownAccountItems = await this.client.refreshAccountItems(accountId, {
         signal: control?.signal,
       });
       await control?.checkpoint();
