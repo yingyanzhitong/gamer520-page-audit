@@ -153,7 +153,7 @@ test("后台数据需要登录，闲鱼 Key 脱敏且 Gamer520 Key 明文展示"
       "xyk_new-test-key-value",
     );
 
-    const createdDownloadKey = await fetch(
+    const createdDownloadKeyResponse = await fetch(
       `${baseUrl}/api/admin/api-keys/download`,
       {
         method: "POST",
@@ -163,7 +163,9 @@ test("后台数据需要登录，闲鱼 Key 脱敏且 Gamer520 Key 明文展示"
         },
         body: JSON.stringify({ name: "自动发货测试" }),
       },
-    ).then((response) => response.json());
+    );
+    assert.equal(createdDownloadKeyResponse.status, 200);
+    const createdDownloadKey = await createdDownloadKeyResponse.json();
     assert.match(createdDownloadKey.item.value, /^g5k_/);
     const deletedDownloadKey = await fetch(
       `${baseUrl}/api/admin/api-keys/download/${createdDownloadKey.item.id}`,

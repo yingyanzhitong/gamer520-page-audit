@@ -1106,7 +1106,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       },
       body: JSON.stringify({}),
     });
-    assert.equal(crawl.status, 202);
+    assert.equal(crawl.status, 200);
     assert.equal(crawlTrigger, "manual");
 
     const sync = await fetch(`${baseUrl}/api/sync/run`, {
@@ -1120,7 +1120,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         account_ids: ["account-a", "account-b"],
       }),
     });
-    assert.equal(sync.status, 202);
+    assert.equal(sync.status, 200);
     assert.equal((await sync.json()).mode, "pending");
     assert.deepEqual(syncTrigger, {
       trigger: "manual",
@@ -1139,7 +1139,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         account_ids: ["account-a"],
       }),
     });
-    assert.equal(configuredSync.status, 202);
+    assert.equal(configuredSync.status, 200);
     assert.equal((await configuredSync.json()).message, "已按设定启动同步任务");
     assert.deepEqual(syncTrigger, {
       trigger: "manual",
@@ -1175,7 +1175,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         body: JSON.stringify({}),
       },
     );
-    assert.equal(singleSync.status, 202);
+    assert.equal(singleSync.status, 200);
     assert.deepEqual(syncTrigger, {
       trigger: "manual-game",
       mode: "all",
@@ -1210,7 +1210,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
         body: JSON.stringify({ gameIds: [118842, 118842] }),
       },
     );
-    assert.equal(selectedSync.status, 202);
+    assert.equal(selectedSync.status, 200);
     const selectedPayload = await selectedSync.json();
     assert.equal(selectedPayload.selectedCount, 1);
     assert.deepEqual(selectedPayload.gameIds, [118842]);

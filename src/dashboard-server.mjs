@@ -1241,11 +1241,11 @@ export async function startDashboardServer(
           }
           throw error;
         }
-        response.writeHead(302, {
-          location: new URL(cached.publicUrl).pathname,
-          "cache-control": "no-store",
-        });
-        response.end();
+        serveCachedCover(
+          new URL(cached.publicUrl),
+          response,
+          config.coverCacheDir,
+        );
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/runs") {
@@ -1395,7 +1395,7 @@ export async function startDashboardServer(
         } finally {
           database.close();
         }
-        sendJson(response, 201, { success: true, item });
+        sendJson(response, 200, { success: true, item });
         return;
       }
       const downloadKeyMatch = requestUrl.pathname.match(
@@ -1783,7 +1783,7 @@ export async function startDashboardServer(
           return;
         }
         const accepted = handlers.triggerCrawl("manual");
-        sendJson(response, 202, {
+        sendJson(response, 200, {
           success: true,
           message: "手动采集任务已启动",
           ...accepted,
@@ -1863,7 +1863,7 @@ export async function startDashboardServer(
                 ...configuredTaskOptions,
               },
         );
-        sendJson(response, 202, {
+        sendJson(response, 200, {
           success: true,
           message: useConfiguredTask
             ? "已按设定启动同步任务"
@@ -1925,7 +1925,7 @@ export async function startDashboardServer(
             ? { accountIds }
             : {}),
         });
-        sendJson(response, 202, {
+        sendJson(response, 200, {
           success: true,
           selectedCount: gameIds.length,
           gameIds,
@@ -2146,7 +2146,7 @@ export async function startDashboardServer(
           "all",
           { gameIds: [gameId] },
         );
-        sendJson(response, 202, {
+        sendJson(response, 200, {
           success: true,
           gameId,
           message: `游戏 ${gameId} 同步任务已启动`,
