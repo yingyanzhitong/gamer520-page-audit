@@ -1,0 +1,38 @@
+src/dashboard-server.mjs
+  s_88607198babb2b::t_188f4bb98b1de9 2115-2122,2155,2160-2161
+test/dashboard.test.mjs
+  s_88607198babb2b::t_b0ce3973611375 1210
+  s_88607198babb2b::t_106ced9438716e 1175
+  s_88607198babb2b::t_188f4bb98b1de9 1182,1184-1200
+package.json
+  s_88607198babb2b::t_8ff1b245473444 3
+CHANGELOG.md
+  s_88607198babb2b::t_8ff1b245473444 3-6
+frontend/src/App.jsx
+  s_88607198babb2b::t_188f4bb98b1de9 2812-2815,2820,2822,3083-3084,3087-3089
+public/assets/index-Et25NV1R.js
+  s_88607198babb2b::t_5287970c81d08e 50
+public/index.html
+  s_88607198babb2b::t_45ae38cbe953ec 15
+package-lock.json
+  s_88607198babb2b::t_d4af07ce817cdd 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d89e2ae01e2d10c81c81191f85f1d2da0048ddc1",
+  "prompts": {},
+  "logical_commit_id": "d89e2ae01e2d10c81c81191f85f1d2da0048ddc1",
+  "sessions": {
+    "s_88607198babb2b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a03935-2f8f-7212-9548-9307ddf142a2",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 49,
+      "total_deletions": 12
+    }
+  }
+}
