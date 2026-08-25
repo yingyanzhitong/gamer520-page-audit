@@ -108,6 +108,35 @@ const statusLabels = {
   updated: "已更新",
 };
 
+const productConfigAccountStorageKey = "gamer520.product-config.account-id";
+const gamesAccountStorageKey = "gamer520.games.account-id";
+
+function storedAccountId(storageKey) {
+  try {
+    return window.localStorage.getItem(storageKey) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function useRememberedAccountId(storageKey) {
+  const [accountId, setAccountId] = useState(() => storedAccountId(storageKey));
+
+  useEffect(() => {
+    try {
+      if (accountId) {
+        window.localStorage.setItem(storageKey, accountId);
+      } else {
+        window.localStorage.removeItem(storageKey);
+      }
+    } catch {
+      // 浏览器禁用本地存储时仍保持当前页面内的选择。
+    }
+  }, [accountId, storageKey]);
+
+  return [accountId, setAccountId];
+}
+
 function errorMessage(error) {
   return error instanceof Error ? error.message : "操作失败";
 }
@@ -2040,7 +2069,9 @@ function ProductConfigPage({ notify }) {
   const [settings, setSettings] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [cards, setCards] = useState([]);
-  const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [selectedAccountId, setSelectedAccountId] = useRememberedAccountId(
+    productConfigAccountStorageKey,
+  );
   const [capability, setCapability] = useState(null);
   const [fishSpecificationsText, setFishSpecificationsText] = useState("[]");
   const [fishSkuRowsText, setFishSkuRowsText] = useState("[]");
@@ -2165,7 +2196,7 @@ function ProductConfigPage({ notify }) {
 
   const isFishShop = capability?.account_type === "fish-shop";
   const publishOptions = settings?.publishOptions ?? {
-    cardId: 6,
+    cardId: null,
     originalPrice: null,
     category: "虚拟商品",
     condition: "全新",
@@ -2731,7 +2762,9 @@ function GamesPage({ notify }) {
   const [page, setPage] = useState(1);
   const [data, setData] = useState({ items: [], total: 0, pageCount: 1 });
   const [accounts, setAccounts] = useState([]);
-  const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [selectedAccountId, setSelectedAccountId] = useRememberedAccountId(
+    gamesAccountStorageKey,
+  );
   const [detailId, setDetailId] = useState(null);
   const [syncingGameId, setSyncingGameId] = useState(null);
   const [syncingXianyuItems, setSyncingXianyuItems] = useState(false);
@@ -2761,7 +2794,11 @@ function GamesPage({ notify }) {
           (account) => account.enabled !== false,
         );
         setAccounts(enabledAccounts);
-        setSelectedAccountId((current) => current || enabledAccounts[0]?.accountId || "");
+        setSelectedAccountId((current) =>
+          enabledAccounts.some((account) => account.accountId === current)
+            ? current
+            : enabledAccounts[0]?.accountId ?? "",
+        );
       })
       .catch((caught) => {
         if (active) notify(errorMessage(caught), "error");

@@ -174,7 +174,7 @@ function normalizeXianyuPublishOptions(value, defaultStock = 999) {
   return {
     cardId: Object.hasOwn(options, "cardId")
       ? optionalPositiveInteger(options.cardId, "绑定卡券")
-      : 6,
+      : null,
     originalPrice: positiveOptionalNumber(options.originalPrice, "原价"),
     category: optionalText(options.category ?? "虚拟商品", 100, "商品分类"),
     condition: optionalText(options.condition ?? "全新", 20, "成色") ?? "全新",

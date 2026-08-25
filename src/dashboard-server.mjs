@@ -76,7 +76,7 @@ function mapRun(row) {
 
 function mapXianyuSettings(row) {
   const defaultPublishOptions = {
-    cardId: 6,
+    cardId: null,
     originalPrice: null,
     category: "虚拟商品",
     condition: "全新",

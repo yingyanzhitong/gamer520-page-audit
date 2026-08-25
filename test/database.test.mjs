@@ -684,7 +684,7 @@ test("所有闲鱼账号读取同一套商品配置", () => {
     );
     assert.equal(
       database.getXianyuSyncSettings("account-a").publish_options.cardId,
-      6,
+      null,
     );
     database.setXianyuSettings(
       "account-a",

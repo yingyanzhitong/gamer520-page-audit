@@ -672,7 +672,15 @@ test("素材导入和商品发布独立运行，单批数量可配置", async ()
         timestamp,
       );
     }
-    database.setXianyuSettings("account-a", 2.5, timestamp);
+    database.setXianyuSettings(
+      "account-a",
+      2.5,
+      timestamp,
+      null,
+      null,
+      null,
+      { cardId: 6 },
+    );
     database.setGameSalePrice(1, 9.9, timestamp);
   } finally {
     database.close();
@@ -1291,6 +1299,8 @@ test("自定义模板用于素材、封面和卡券标题，修改后不重复�
         imageTemplate: "https://cdn.example/games/{id}.jpg",
       },
       88,
+      null,
+      { cardId: 6 },
     );
   } finally {
     database.close();
@@ -1600,6 +1610,15 @@ test("已有商品编号时跳过素材同步和卡券重试", async () => {
       timestamp,
     );
     database.setXianyuAccountId("account-a", timestamp);
+    database.setXianyuSettings(
+      "account-a",
+      1,
+      timestamp,
+      null,
+      null,
+      null,
+      { cardId: 6 },
+    );
   } finally {
     database.close();
   }
@@ -1749,6 +1768,15 @@ test("未发布和已更新同步范围只处理对应商品", async () => {
       firstAt,
     );
     database.setXianyuAccountId("account-a", firstAt);
+    database.setXianyuSettings(
+      "account-a",
+      1,
+      firstAt,
+      null,
+      null,
+      null,
+      { cardId: 6 },
+    );
   } finally {
     database.close();
   }
