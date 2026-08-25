@@ -2112,6 +2112,14 @@ export async function startDashboardServer(
         ) {
           return;
         }
+        const body = await readJsonBody(request);
+        const accountId = String(
+          body.account_id ?? body.accountId ?? "",
+        ).trim();
+        if (!accountId) {
+          sendError(response, 422, "请选择要发布的闲鱼账号");
+          return;
+        }
         const gameId = Number(gameSyncMatch[1]);
         const game = withDatabase(config.dbPath, (database) =>
           database
@@ -2144,12 +2152,13 @@ export async function startDashboardServer(
         const accepted = handlers.triggerSync(
           "manual-game",
           "all",
-          { gameIds: [gameId] },
+          { gameIds: [gameId], accountIds: [accountId] },
         );
         sendJson(response, 200, {
           success: true,
           gameId,
-          message: `游戏 ${gameId} 同步任务已启动`,
+          accountId,
+          message: `游戏 ${gameId} 已向账号 ${accountId} 启动同步`,
           ...accepted,
         });
         return;

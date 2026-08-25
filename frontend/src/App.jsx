@@ -2809,13 +2809,17 @@ function GamesPage({ notify }) {
   }, []);
 
   async function syncGame(gameId) {
+    if (!selectedAccountId) {
+      notify("请先选择要发布的闲鱼账号", "error");
+      return;
+    }
     setSyncingGameId(gameId);
     try {
       await api(`/api/games/${gameId}/sync`, {
         method: "POST",
-        body: jsonBody({}),
+        body: jsonBody({ account_id: selectedAccountId }),
       });
-      notify(`游戏 ${gameId} 同步已启动`);
+      notify(`游戏 ${gameId} 已向账号 ${selectedAccountId} 启动同步`);
     } catch (caught) {
       notify(errorMessage(caught), "error");
     } finally {
@@ -3076,10 +3080,13 @@ function GamesPage({ notify }) {
                         size="sm"
                         disabled={
                           game.scrapeStatus !== "success" ||
-                          syncingGameId === game.id
+                          syncingGameId === game.id ||
+                          !selectedAccountId
                         }
                         title={
-                          game.scrapeStatus === "success"
+                          !selectedAccountId
+                            ? "请先选择发布状态账号"
+                            : game.scrapeStatus === "success"
                             ? "同步此游戏"
                             : "仅采集成功的游戏可以同步"
                         }

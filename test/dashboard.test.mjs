@@ -1172,15 +1172,32 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           "content-type": "application/json",
           "X-API-Key": "xianyu-secret",
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ account_id: "account-a" }),
       },
     );
     assert.equal(singleSync.status, 200);
     assert.deepEqual(syncTrigger, {
       trigger: "manual-game",
       mode: "all",
-      options: { gameIds: [118842] },
+      options: { gameIds: [118842], accountIds: ["account-a"] },
     });
+
+    const missingAccountGameSync = await fetch(
+      `${baseUrl}/api/games/118842/sync`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-API-Key": "xianyu-secret",
+        },
+        body: JSON.stringify({}),
+      },
+    );
+    assert.equal(missingAccountGameSync.status, 422);
+    assert.match(
+      (await missingAccountGameSync.json()).error,
+      /请选择要发布的闲鱼账号/,
+    );
 
     const missingGameSync = await fetch(
       `${baseUrl}/api/games/118843/sync`,
@@ -1190,7 +1207,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           "content-type": "application/json",
           "X-API-Key": "xianyu-secret",
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ account_id: "account-a" }),
       },
     );
     assert.equal(missingGameSync.status, 422);
