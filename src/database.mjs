@@ -2087,7 +2087,7 @@ export class CrawlerDatabase {
           row.synced_content_hash !== row.sync_content_hash ||
           ["pending", "failed"].includes(row.material_sync_status);
         const publicationNeedsSync =
-          (row.publication_status == null &&
+          ([null, "pending"].includes(row.publication_status) &&
             row.material_sync_status !== "skipped") ||
           row.publication_status === "failed" ||
           (row.publication_status === "success" &&

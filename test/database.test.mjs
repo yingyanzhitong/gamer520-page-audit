@@ -880,6 +880,65 @@ test("闲鱼同步候选支持创建、更新和热度排序", () => {
   }
 });
 
+test("已回退为待发布的商品会重新进入未发布同步候选", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-pending-publication-test-"),
+  );
+  const database = new CrawlerDatabase(path.join(directory, "test.sqlite"));
+  try {
+    const game = discovery(130004, "回退待发布商品", 1);
+    const syncedAt = "2026-08-26T00:00:00.000Z";
+    database.upsertDiscoveredGames([game], syncedAt);
+    database.saveGameSuccess(
+      game,
+      result(game.id, game.title, "https://pan.example/130004"),
+      syncedAt,
+    );
+
+    const candidate = database
+      .listSyncCandidates("account-a", 20, "pending")
+      .find((item) => item.id === game.id);
+    database.markMaterialSynced(
+      game.id,
+      "account-a",
+      1300040,
+      candidate.sync_content_hash,
+      syncedAt,
+    );
+    database.markPublicationSubmitted(
+      game.id,
+      "account-a",
+      1300040,
+      "batch-130004",
+      syncedAt,
+    );
+    database.markPublicationResult({
+      gameId: game.id,
+      accountId: "account-a",
+      status: "success",
+      itemId: "item-130004",
+      updatedAt: syncedAt,
+    });
+    const reconciliation = database.reconcileAccountPublishedItems(
+      "account-a",
+      [],
+      syncedAt,
+    );
+
+    assert.equal(reconciliation.materialFallbackCount, 1);
+
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "pending")
+        .map((item) => item.id),
+      [game.id],
+    );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("违规游戏只能手动恢复，采集更新不会使其重新进入发布候选", () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-violation-status-test-"),
