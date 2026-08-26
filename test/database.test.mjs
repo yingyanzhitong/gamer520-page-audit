@@ -585,7 +585,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
             materialConcurrency: 6,
             publishBatchSize: 8,
             publishLimit: 42,
-            sort: "updated",
+            sort: "updated-desc",
           },
           {
             accountId: "account-b",
@@ -596,14 +596,14 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
             materialConcurrency: 2,
             publishBatchSize: 5,
             publishLimit: 10,
-            sort: "hot",
+            sort: "hot-asc",
           },
         ],
         crawlConcurrency: 5,
         materialConcurrency: 6,
         publishBatchSize: 8,
         publishLimit: 42,
-        syncSort: "updated",
+        syncSort: "updated-desc",
         publishConcurrency: 2,
       },
       "2026-07-28T01:00:00.000Z",
@@ -621,7 +621,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     assert.equal(updated.material_concurrency, 6);
     assert.equal(updated.publish_batch_size, 8);
     assert.equal(updated.sync_publish_limit, 42);
-    assert.equal(updated.sync_sort, "updated");
+    assert.equal(updated.sync_sort, "updated-desc");
     assert.equal(updated.publish_concurrency, 2);
     const updatedTasks = JSON.parse(updated.sync_tasks);
     assert.equal(updatedTasks.length, 2);
@@ -634,7 +634,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
       materialConcurrency: 2,
       publishBatchSize: 5,
       publishLimit: 10,
-      sort: "hot",
+      sort: "hot-asc",
     });
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
@@ -870,7 +870,25 @@ test("闲鱼同步候选支持创建、更新和热度排序", () => {
     );
     assert.deepEqual(
       database
+        .listSyncCandidates("account-a", 20, "all", "created-desc")
+        .map((candidate) => candidate.id),
+      [130003, 130002, 130001],
+    );
+    assert.deepEqual(
+      database
         .listSyncCandidates("account-a", 20, "all", "updated")
+        .map((candidate) => candidate.id),
+      [130002, 130001, 130003],
+    );
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "all", "updated-desc")
+        .map((candidate) => candidate.id),
+      [130003, 130001, 130002],
+    );
+    assert.deepEqual(
+      database
+        .listSyncCandidates("account-a", 20, "all", "hot-asc")
         .map((candidate) => candidate.id),
       [130002, 130001, 130003],
     );

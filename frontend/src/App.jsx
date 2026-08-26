@@ -1760,8 +1760,11 @@ function TasksPage({ notify }) {
                       }
                     >
                       <option value="created">创建时间从早到晚</option>
+                      <option value="created-desc">创建时间从晚到早</option>
                       <option value="updated">更新时间从早到晚</option>
+                      <option value="updated-desc">更新时间从晚到早</option>
                       <option value="hot">热度从高到低</option>
+                      <option value="hot-asc">热度从低到高</option>
                     </Select>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-3">

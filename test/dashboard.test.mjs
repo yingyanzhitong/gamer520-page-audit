@@ -413,6 +413,9 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /查询发布状态/);
     assert.match(appSource, /同步排序/);
     assert.match(appSource, /热度从高到低/);
+    assert.match(appSource, /创建时间从晚到早/);
+    assert.match(appSource, /更新时间从晚到早/);
+    assert.match(appSource, /热度从低到高/);
     assert.match(appSource, /按热度排序/);
     assert.match(appSource, /按创建时间/);
     assert.match(appSource, /按更新时间/);
@@ -1070,7 +1073,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
                 material_concurrency: 6,
                 publish_batch_size: 8,
                 publish_limit: 42,
-                sort: "created",
+                sort: "created-desc",
               },
               {
                 account_id: "account-b",
@@ -1081,7 +1084,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
                 material_concurrency: 2,
                 publish_batch_size: 5,
                 publish_limit: 10,
-                sort: "hot",
+                sort: "hot-asc",
               },
             ],
           },
@@ -1101,12 +1104,12 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       materialConcurrency: 6,
       publishBatchSize: 8,
       publishLimit: 42,
-      sort: "created",
+      sort: "created-desc",
     });
     assert.equal(savedSchedule.syncTasks[1].accountId, "account-b");
     assert.equal(savedSchedule.syncTasks[1].cronSchedule, "30 9 * * *");
     assert.equal(savedSchedule.syncTasks[1].publishBatchSize, 5);
-    assert.equal(savedSchedule.syncTasks[1].sort, "hot");
+    assert.equal(savedSchedule.syncTasks[1].sort, "hot-asc");
     assert.equal(savedSchedule.publishConcurrency, undefined);
 
     const crawl = await fetch(`${baseUrl}/api/crawl/run`, {
@@ -1168,7 +1171,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
             materialConcurrency: 6,
             publishBatchSize: 8,
             publishLimit: 42,
-            sort: "created",
+            sort: "created-desc",
           },
         ],
         gameIds: [118842],

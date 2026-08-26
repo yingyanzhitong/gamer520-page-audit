@@ -93,7 +93,14 @@ export const ALL_SYNC_CANDIDATE_CONDITION = `
 `;
 
 const syncModes = new Set(["all", "pending", "updated", "selected-force"]);
-const syncSorts = new Set(["created", "updated", "hot"]);
+const syncSorts = new Set([
+  "created",
+  "created-desc",
+  "updated",
+  "updated-desc",
+  "hot",
+  "hot-asc",
+]);
 const xianyuPublishModes = new Set(["batch", "shop-batch"]);
 const xianyuShippingMethods = new Set(["free", "distance", "fixed", "none"]);
 
@@ -2018,12 +2025,20 @@ export class CrawlerDatabase {
     }
     const sortClause = {
       created: "games.first_seen_at ASC, games.id ASC",
+      "created-desc": "games.first_seen_at DESC, games.id DESC",
       updated: "games.updated_at ASC, games.id ASC",
+      "updated-desc": "games.updated_at DESC, games.id DESC",
       hot: `
         CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
         games.hot_rank DESC,
         games.updated_at DESC,
         games.id DESC
+      `,
+      "hot-asc": `
+        CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
+        games.hot_rank ASC,
+        games.updated_at ASC,
+        games.id ASC
       `,
     }[normalizedSort];
     const rows = this.database

@@ -262,9 +262,18 @@ function syncTasksValue(value) {
       error.statusCode = 422;
       throw error;
     }
-    if (!new Set(["created", "updated", "hot"]).has(sort)) {
+    if (
+      !new Set([
+        "created",
+        "created-desc",
+        "updated",
+        "updated-desc",
+        "hot",
+        "hot-asc",
+      ]).has(sort)
+    ) {
       const error = new Error(
-        `账号 ${accountId} 的同步排序必须是 created、updated 或 hot`,
+        `账号 ${accountId} 的同步排序无效`,
       );
       error.statusCode = 422;
       throw error;
