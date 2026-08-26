@@ -823,7 +823,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(hotSortedGames.sort, "hot");
     assert.deepEqual(
       hotSortedGames.items.map((item) => item.id),
-      [118844, 118845, 118846],
+      [118845, 118844, 118846],
     );
 
     const createdSortedGames = await fetch(

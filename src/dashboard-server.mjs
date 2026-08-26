@@ -632,7 +632,7 @@ function listGames(database, requestUrl) {
     updated: "games.updated_at DESC, games.id DESC",
     hot: `
       CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
-      games.hot_rank DESC,
+      games.hot_rank ASC,
       games.updated_at DESC,
       games.id DESC
     `,

@@ -860,7 +860,7 @@ test("闲鱼同步候选支持创建、更新和热度排序", () => {
       database
         .listSyncCandidates("account-a", 20, "all", "hot")
         .map((candidate) => candidate.id),
-      [130001, 130002, 130003],
+      [130002, 130001, 130003],
     );
     assert.deepEqual(
       database
@@ -890,7 +890,51 @@ test("闲鱼同步候选支持创建、更新和热度排序", () => {
       database
         .listSyncCandidates("account-a", 20, "all", "hot-asc")
         .map((candidate) => candidate.id),
-      [130002, 130001, 130003],
+      [130001, 130002, 130003],
+    );
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("完整热度榜采集会清除未再次出现游戏的旧名次", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-stale-hot-rank-test-"),
+  );
+  const database = new CrawlerDatabase(path.join(directory, "test.sqlite"));
+  try {
+    const firstSeenAt = "2026-08-25T00:00:00.000Z";
+    const currentSeenAt = "2026-08-26T00:00:00.000Z";
+    const staleGame = discovery(130005, "已退出热度榜", 3);
+    const currentGame = discovery(130006, "仍在热度榜", 1);
+
+    database.upsertDiscoveredGames([staleGame, currentGame], firstSeenAt);
+    database.upsertDiscoveredGames([currentGame], currentSeenAt);
+
+    assert.equal(database.clearStaleHotRanks(currentSeenAt), 1);
+    assert.deepEqual(
+      database.queryAll(
+        `
+          SELECT id, hot_page, hot_position, hot_rank
+          FROM games
+          ORDER BY id ASC
+        `,
+      ).map((game) => ({ ...game })),
+      [
+        {
+          id: 130005,
+          hot_page: null,
+          hot_position: null,
+          hot_rank: null,
+        },
+        {
+          id: 130006,
+          hot_page: 1,
+          hot_position: 1,
+          hot_rank: 1,
+        },
+      ],
     );
   } finally {
     database.close();

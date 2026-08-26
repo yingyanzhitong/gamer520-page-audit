@@ -1235,6 +1235,19 @@ export class CrawlerDatabase {
     });
   }
 
+  clearStaleHotRanks(seenAt) {
+    return this.database
+      .prepare(`
+        UPDATE games
+        SET hot_page = NULL,
+            hot_position = NULL,
+            hot_rank = NULL
+        WHERE hot_rank IS NOT NULL
+          AND (last_seen_at IS NULL OR last_seen_at < ?)
+      `)
+      .run(seenAt).changes;
+  }
+
   markGameAttempt(gameId, attemptedAt) {
     this.database
       .prepare(`
@@ -2030,13 +2043,13 @@ export class CrawlerDatabase {
       "updated-desc": "games.updated_at DESC, games.id DESC",
       hot: `
         CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
-        games.hot_rank DESC,
+        games.hot_rank ASC,
         games.updated_at DESC,
         games.id DESC
       `,
       "hot-asc": `
         CASE WHEN games.hot_rank IS NULL THEN 1 ELSE 0 END,
-        games.hot_rank ASC,
+        games.hot_rank DESC,
         games.updated_at ASC,
         games.id ASC
       `,

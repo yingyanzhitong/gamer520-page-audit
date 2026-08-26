@@ -180,6 +180,7 @@ export async function runCrawl({
     });
     const listContext = await createCrawlerContext(browser);
     const discovered = new Map();
+    let listExhausted = false;
 
     try {
       for (let pageNumber = 1; pageNumber <= config.pageCount; pageNumber += 1) {
@@ -206,6 +207,7 @@ export async function runCrawl({
           statistics.listPagesSucceeded += 1;
 
           if (items.length === 0) {
+            listExhausted = true;
             recordTaskLog({
               level: "warning",
               stage: "list",
@@ -295,6 +297,13 @@ export async function runCrawl({
     );
     statistics.discoveredCount = queue.length;
     database.upsertDiscoveredGames(queue, startedAt);
+    const rankingComplete =
+      queue.length > 0 &&
+      statistics.listPagesFailed === 0 &&
+      (listExhausted || statistics.listPagesSucceeded === config.pageCount);
+    const staleHotRanksCleared = rankingComplete
+      ? database.clearStaleHotRanks(startedAt)
+      : 0;
     database.updateRunProgress(runId, statistics);
     recordTaskLog({
       level: "success",
@@ -305,8 +314,19 @@ export async function runCrawl({
         listPagesSucceeded: statistics.listPagesSucceeded,
         listPagesFailed: statistics.listPagesFailed,
         discoveredCount: queue.length,
+        rankingComplete,
+        staleHotRanksCleared,
       },
     });
+    if (rankingComplete && staleHotRanksCleared > 0) {
+      recordTaskLog({
+        level: "success",
+        stage: "discovery",
+        action: "cleared-stale-ranks",
+        message: `热度榜完整采集，已清除 ${staleHotRanksCleared} 个旧热度名次`,
+        details: { staleHotRanksCleared },
+      });
+    }
 
     if (queue.length === 0) {
       throw new Error("热度列表没有发现任何有效游戏");
