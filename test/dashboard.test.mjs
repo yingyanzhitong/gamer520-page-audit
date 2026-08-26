@@ -416,6 +416,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /按热度排序/);
     assert.match(appSource, /按创建时间/);
     assert.match(appSource, /按更新时间/);
+    assert.match(appSource, /可发布/);
     assert.doesNotMatch(appSource, /更新素材库/);
     assert.match(appSource, /缺失/);
     assert.doesNotMatch(appSource, /缺少图片或资源/);
@@ -452,6 +453,11 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(accountBStates.accountId, "account-b");
     assert.equal(accountBStates.items[0].xianyuStatus, "none");
     assert.equal(accountBStates.items[0].xianyuItemId, null);
+    const accountBPublishableGames = await fetch(
+      `${baseUrl}/api/games?xianyuStatus=publishable&accountId=account-b`,
+    ).then((response) => response.json());
+    assert.equal(accountBPublishableGames.total, 1);
+    assert.equal(accountBPublishableGames.items[0].id, game.id);
     const accountBDashboard = await fetch(`${baseUrl}/api/dashboard`).then(
       (response) => response.json(),
     );
@@ -689,6 +695,11 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     ).then((response) => response.json());
     assert.equal(materialGames.total, 1);
     assert.equal(materialGames.items[0].xianyuStatus, "material");
+    const retryablePublishableGames = await fetch(
+      `${baseUrl}/api/games?xianyuStatus=publishable`,
+    ).then((response) => response.json());
+    assert.equal(retryablePublishableGames.total, 1);
+    assert.equal(retryablePublishableGames.items[0].id, game.id);
 
     const noneDatabase = new CrawlerDatabase(databasePath);
     noneDatabase.database

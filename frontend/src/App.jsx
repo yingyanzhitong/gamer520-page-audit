@@ -2915,6 +2915,7 @@ function GamesPage({ notify }) {
               }}
             >
               <option value="all">全部闲鱼状态</option>
+              <option value="publishable">可发布</option>
               <option value="none">无</option>
               <option value="material">加入素材库</option>
               <option value="publishing">发布中</option>

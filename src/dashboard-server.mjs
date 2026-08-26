@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { cacheCoverImage } from "./cover-cache.mjs";
 import {
+  ALL_SYNC_CANDIDATE_CONDITION,
   CrawlerDatabase,
   VALID_GAME_DATA_CONDITION,
 } from "./database.mjs";
@@ -576,6 +577,7 @@ function listGames(database, requestUrl) {
   const validOnly = requestUrl.searchParams.get("validOnly") === "true";
   const xianyuStatus = new Set([
     "none",
+    "publishable",
     "material",
     "published",
     "publishing",
@@ -612,7 +614,10 @@ function listGames(database, requestUrl) {
     );
     parameters.push(status);
   }
-  if (xianyuStatus !== "all") {
+  if (xianyuStatus === "publishable") {
+    conditions.push(`(${VALID_GAME_DATA_CONDITION})`);
+    conditions.push(`(${ALL_SYNC_CANDIDATE_CONDITION})`);
+  } else if (xianyuStatus !== "all") {
     conditions.push(`(${xianyuStatusExpression}) = ?`);
     parameters.push(xianyuStatus);
   }

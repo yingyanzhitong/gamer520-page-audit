@@ -86,6 +86,12 @@ export const VALID_GAME_DATA_CONDITION = `
   AND (${COMPLETE_GAME_CONTENT_CONDITION})
 `;
 
+export const ALL_SYNC_CANDIDATE_CONDITION = `
+  publication.item_id IS NULL
+  AND COALESCE(publication.status, 'pending') NOT IN ('publishing', 'unknown', 'success')
+  AND COALESCE(material.status, 'pending') != 'skipped'
+`;
+
 const syncModes = new Set(["all", "pending", "updated", "selected-force"]);
 const syncSorts = new Set(["created", "updated", "hot"]);
 const xianyuPublishModes = new Set(["batch", "shop-batch"]);
@@ -2004,6 +2010,12 @@ export class CrawlerDatabase {
     const settings = this.getXianyuSyncSettings(accountId);
     const normalizedMode = normalizeSyncMode(mode);
     const normalizedSort = normalizeSyncSort(sort);
+    const candidateConditions = [VALID_GAME_DATA_CONDITION];
+    if (normalizedMode === "all") {
+      candidateConditions.push(ALL_SYNC_CANDIDATE_CONDITION);
+    } else {
+      candidateConditions.push(...syncScopeConditions(normalizedMode));
+    }
     const sortClause = {
       created: "games.first_seen_at ASC, games.id ASC",
       updated: "games.updated_at ASC, games.id ASC",
@@ -2040,8 +2052,7 @@ export class CrawlerDatabase {
         LEFT JOIN xianyu_publications AS publication
           ON publication.game_id = games.id
          AND publication.account_id = ?
-        WHERE ${VALID_GAME_DATA_CONDITION}
-          AND ${syncScopeConditions(normalizedMode).join("\n          AND ")}
+        WHERE ${candidateConditions.join("\n          AND ")}
         ORDER BY
           CASE WHEN publication.status = 'failed' THEN 0 ELSE 1 END,
           ${sortClause}
@@ -2101,7 +2112,7 @@ export class CrawlerDatabase {
         if (normalizedMode === "selected-force") {
           return true;
         }
-        return row.material_sync_status !== "skipped";
+        return true;
       })
       .slice(0, limit);
   }
