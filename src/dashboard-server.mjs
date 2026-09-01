@@ -567,6 +567,7 @@ function listGames(database, requestUrl) {
     100,
   );
   const query = requestUrl.searchParams.get("query")?.trim().slice(0, 200) ?? "";
+  const tag = requestUrl.searchParams.get("tag")?.trim().slice(0, 100) ?? "";
   const requestedStatus = requestUrl.searchParams.get("status") ?? "all";
   const status = new Set([
     "pending",
@@ -623,6 +624,14 @@ function listGames(database, requestUrl) {
     );
     const pattern = `%${query}%`;
     parameters.push(pattern, pattern, pattern, pattern);
+  }
+  if (tag) {
+    conditions.push(`EXISTS (
+      SELECT 1
+      FROM json_each(games.tags) AS selected_game_tag
+      WHERE selected_game_tag.value = ?
+    )`);
+    parameters.push(tag);
   }
   if (status !== "all") {
     conditions.push(
@@ -691,6 +700,15 @@ function listGames(database, requestUrl) {
       pageSize,
       (page - 1) * pageSize,
     );
+  const availableTags = database
+    .prepare(`
+      SELECT DISTINCT game_tag.value AS tag
+      FROM games, json_each(games.tags) AS game_tag
+      WHERE length(trim(game_tag.value)) > 0
+      ORDER BY game_tag.value COLLATE NOCASE
+    `)
+    .all()
+    .map((row) => row.tag);
 
   return {
     page,
@@ -698,6 +716,8 @@ function listGames(database, requestUrl) {
     total,
     pageCount: Math.max(1, Math.ceil(total / pageSize)),
     sort,
+    tag: tag || null,
+    availableTags,
     accountId: primaryAccountId,
     items: rows.map(mapGame),
   };

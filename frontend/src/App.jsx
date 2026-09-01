@@ -2776,6 +2776,7 @@ function PriceEditor({ game, onSaved, notify }) {
 
 function GamesPage({ notify }) {
   const [query, setQuery] = useState("");
+  const [tag, setTag] = useState("all");
   const [status, setStatus] = useState("all");
   const [xianyuStatus, setXianyuStatus] = useState("all");
   const [sort, setSort] = useState("hot");
@@ -2799,9 +2800,10 @@ function GamesPage({ notify }) {
       xianyuStatus,
       sort,
     });
+    if (tag !== "all") parameters.set("tag", tag);
     if (selectedAccountId) parameters.set("accountId", selectedAccountId);
     setData(await api(`/api/games?${parameters}`));
-  }, [page, query, status, xianyuStatus, sort, selectedAccountId]);
+  }, [page, query, tag, status, xianyuStatus, sort, selectedAccountId]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -2900,7 +2902,7 @@ function GamesPage({ notify }) {
       />
       <Card>
         <CardContent className="p-4">
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px_160px]">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px_180px_180px_160px]">
             <div className="relative">
               <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
               <Input
@@ -2913,6 +2915,20 @@ function GamesPage({ notify }) {
                 }}
               />
             </div>
+            <Select
+              value={tag}
+              onChange={(event) => {
+                setTag(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="all">全部标签</option>
+              {(data.availableTags ?? []).map((availableTag) => (
+                <option key={availableTag} value={availableTag}>
+                  {availableTag}
+                </option>
+              ))}
+            </Select>
             <Select
               value={status}
               onChange={(event) => {

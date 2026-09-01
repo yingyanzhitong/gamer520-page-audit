@@ -424,6 +424,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.doesNotMatch(appSource, /更新素材库/);
     assert.match(appSource, /缺失/);
     assert.match(appSource, /标签/);
+    assert.match(appSource, /全部标签/);
     assert.doesNotMatch(appSource, /缺少图片或资源/);
     assert.match(appSource, /图片链接/);
     assert.match(appSource, /图片预览加载失败/);
@@ -443,6 +444,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(games.total, 1);
     assert.equal(games.items[0].title, "黄昏远征军");
     assert.deepEqual(games.items[0].tags, ["PC PLAY", "虚拟机"]);
+    assert.deepEqual(games.availableTags, ["PC PLAY", "虚拟机"]);
     assert.equal(games.items[0].xianyuItemId, "1067769058126");
     assert.equal(games.items[0].isValid, true);
 
@@ -451,6 +453,18 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     ).then((response) => response.json());
     assert.equal(gamesByTag.total, 1);
     assert.equal(gamesByTag.items[0].id, 118842);
+
+    const gamesByTagFilter = await fetch(
+      `${baseUrl}/api/games?tag=${encodeURIComponent("虚拟机")}&status=success`,
+    ).then((response) => response.json());
+    assert.equal(gamesByTagFilter.total, 1);
+    assert.equal(gamesByTagFilter.tag, "虚拟机");
+    assert.equal(gamesByTagFilter.items[0].id, 118842);
+
+    const gamesByMissingTag = await fetch(
+      `${baseUrl}/api/games?tag=${encodeURIComponent("不存在的标签")}`,
+    ).then((response) => response.json());
+    assert.equal(gamesByMissingTag.total, 0);
 
     const accountSwitchDatabase = new CrawlerDatabase(databasePath);
     accountSwitchDatabase.setXianyuAccountId(
