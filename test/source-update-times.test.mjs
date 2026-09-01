@@ -2,10 +2,26 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  composeGameDescription,
   fetchSourceUpdateTimes,
   isSourceTimestampCurrent,
   validateImageUrl,
 } from "../src/playwright-extractor.mjs";
+
+test("虚拟机说明置于游戏描述首行且不会重复", () => {
+  const virtualMachineDescription = "游戏方式:简单虚拟机化 已内置教程";
+  assert.equal(
+    composeGameDescription("普通游戏简介", virtualMachineDescription),
+    `${virtualMachineDescription}\n普通游戏简介`,
+  );
+  assert.equal(
+    composeGameDescription(
+      `普通游戏简介\n${virtualMachineDescription}`,
+      virtualMachineDescription,
+    ),
+    `${virtualMachineDescription}\n普通游戏简介`,
+  );
+});
 
 test("来源更新时间接口批量读取 modified_gmt 并按 UTC 标准化", async () => {
   let requestedUrl;

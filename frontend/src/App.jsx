@@ -1189,7 +1189,7 @@ function SelectedGamesDialog({
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
             <Input
               className="pl-9"
-              placeholder="搜索游戏名称或游戏 ID"
+              placeholder="搜索游戏名称、游戏 ID 或标签"
               value={query}
               onChange={(event) => {
                 setQuery(event.target.value);
@@ -2640,6 +2640,23 @@ function GameDetail({ gameId, accountId, open, onOpenChange, notify }) {
             </p>
           </div>
         </div>
+        {detail?.game?.tags?.length ? (
+          <div className="flex flex-wrap gap-2">
+            {detail.game.tags.map((tag) => (
+              <Badge key={tag} tone="info">
+                {tag}
+              </Badge>
+            ))}
+          </div>
+        ) : null}
+        {detail?.game?.description ? (
+          <div className="rounded-lg border p-4">
+            <p className="text-xs text-muted-foreground">游戏描述</p>
+            <p className="mt-2 whitespace-pre-line text-sm leading-6">
+              {detail.game.description}
+            </p>
+          </div>
+        ) : null}
         {detail?.game?.imageUrl ? (
           <div className="grid gap-4 rounded-lg border p-4 sm:grid-cols-[minmax(0,1fr)_10rem] sm:items-center">
             <div className="min-w-0">
@@ -2888,7 +2905,7 @@ function GamesPage({ notify }) {
               <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
               <Input
                 className="pl-9"
-                placeholder="搜索名称、游戏 ID 或闲鱼商品 ID"
+                placeholder="搜索名称、游戏 ID、标签或闲鱼商品 ID"
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value);
@@ -3018,6 +3035,15 @@ function GamesPage({ notify }) {
                       <span className="font-data mt-1 block text-[10px] text-muted-foreground">
                         ID {game.id} · 热度 {game.hotRank ?? "—"}
                       </span>
+                      {game.tags?.length ? (
+                        <span className="mt-1 flex flex-wrap gap-1">
+                          {game.tags.map((tag) => (
+                            <Badge key={tag} tone="info">
+                              {tag}
+                            </Badge>
+                          ))}
+                        </span>
+                      ) : null}
                     </button>
                   </TableCell>
                   <TableCell>{game.downloadCount} 个</TableCell>

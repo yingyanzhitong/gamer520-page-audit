@@ -41,6 +41,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     id: 118842,
     sourceUrl: "https://www.gamer520.com/118842.html",
     title: "黄昏远征军",
+    tags: ["PC PLAY", "虚拟机"],
     imageUrl: "https://images.example/118842.jpg",
     hotPage: 1,
     hotPosition: 1,
@@ -422,6 +423,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.match(appSource, /可发布/);
     assert.doesNotMatch(appSource, /更新素材库/);
     assert.match(appSource, /缺失/);
+    assert.match(appSource, /标签/);
     assert.doesNotMatch(appSource, /缺少图片或资源/);
     assert.match(appSource, /图片链接/);
     assert.match(appSource, /图片预览加载失败/);
@@ -440,8 +442,15 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     ).then((response) => response.json());
     assert.equal(games.total, 1);
     assert.equal(games.items[0].title, "黄昏远征军");
+    assert.deepEqual(games.items[0].tags, ["PC PLAY", "虚拟机"]);
     assert.equal(games.items[0].xianyuItemId, "1067769058126");
     assert.equal(games.items[0].isValid, true);
+
+    const gamesByTag = await fetch(
+      `${baseUrl}/api/games?query=${encodeURIComponent("虚拟机")}`,
+    ).then((response) => response.json());
+    assert.equal(gamesByTag.total, 1);
+    assert.equal(gamesByTag.items[0].id, 118842);
 
     const accountSwitchDatabase = new CrawlerDatabase(databasePath);
     accountSwitchDatabase.setXianyuAccountId(

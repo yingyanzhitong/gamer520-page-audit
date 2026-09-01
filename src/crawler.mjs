@@ -30,6 +30,16 @@ function createStatistics() {
   };
 }
 
+function needsVirtualMachineDescription(game, refreshState) {
+  return (
+    Array.isArray(game.tags) &&
+    game.tags.includes("虚拟机") &&
+    !/^游戏方式\s*[：:].*虚拟机/u.test(
+      String(refreshState.description ?? "").split("\n")[0].trim(),
+    )
+  );
+}
+
 async function runWithRetry(operation, config, control = null) {
   let lastError;
   for (let attempt = 1; attempt <= config.maxRetries + 1; attempt += 1) {
@@ -418,7 +428,12 @@ export async function runCrawl({
     try {
       for (const game of queue) {
         const refreshState = database.getGameRefreshState(game.id) ?? {};
+        const metadataBackfillRequired = needsVirtualMachineDescription(
+          game,
+          refreshState,
+        );
         if (
+          !metadataBackfillRequired &&
           isSourceTimestampCurrent(
             game.sourceUpdatedAt,
             refreshState.last_scraped_at,
@@ -462,6 +477,7 @@ export async function runCrawl({
             },
           });
         } else {
+          game.forceMetadataRefresh = metadataBackfillRequired;
           detailQueue.push(game);
           recordTaskLog({
             gameId: game.id,
@@ -514,6 +530,7 @@ export async function runCrawl({
                   sourceUpdatedAt: refreshState.source_updated_at,
                   lastScrapedAt: refreshState.last_scraped_at,
                   knownSourceUpdatedAt: game.sourceUpdatedAt,
+                  forceRefresh: game.forceMetadataRefresh,
                 }),
               config,
               control,

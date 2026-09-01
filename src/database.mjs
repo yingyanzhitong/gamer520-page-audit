@@ -33,6 +33,33 @@ function isHttpUrl(value) {
   }
 }
 
+function normalizeGameTags(value) {
+  let tags = value;
+  if (typeof tags === "string") {
+    try {
+      tags = JSON.parse(tags);
+    } catch {
+      tags = [];
+    }
+  }
+  if (!Array.isArray(tags)) return [];
+  return [
+    ...new Set(tags.map((tag) => String(tag ?? "").trim()).filter(Boolean)),
+  ];
+}
+
+export function isDomesticCloudDriveDownload(download) {
+  if (!isHttpUrl(download?.url)) return false;
+  if (/百度|夸克|迅雷/u.test(String(download?.provider ?? ""))) return true;
+  try {
+    return /^(?:pan\.baidu\.com|pan\.quark\.cn|pan\.xunlei\.com)$/i.test(
+      new URL(download.url).hostname,
+    );
+  } catch {
+    return false;
+  }
+}
+
 function hasCompleteGameData({
   title,
   description,
@@ -45,12 +72,16 @@ function hasCompleteGameData({
     Boolean(String(description ?? "").trim()) &&
     imageAccessible &&
     isHttpUrl(imageUrl) &&
-    downloads.some((download) => isHttpUrl(download?.url))
+    downloads.some(isDomesticCloudDriveDownload)
   );
 }
 
-function missingGameDataError(imageAccessible) {
-  return imageAccessible ? "缺少图片或资源" : "图片链接无法访问";
+function missingGameDataError({ imageAccessible, downloads = [] }) {
+  if (!imageAccessible) return "图片链接无法访问";
+  if (!downloads.some(isDomesticCloudDriveDownload)) {
+    return "缺少国内网盘资源";
+  }
+  return "缺少图片或资源";
 }
 
 function normalizedXianyuTitle(value) {
@@ -59,6 +90,20 @@ function normalizedXianyuTitle(value) {
     .toLowerCase()
     .replace(/\s+/gu, "");
 }
+
+const DOMESTIC_CLOUD_DRIVE_SQL_CONDITION = `
+  (
+    downloads.provider LIKE '%百度%'
+    OR downloads.provider LIKE '%夸克%'
+    OR downloads.provider LIKE '%迅雷%'
+    OR lower(trim(downloads.url)) LIKE 'http://pan.baidu.com%'
+    OR lower(trim(downloads.url)) LIKE 'https://pan.baidu.com%'
+    OR lower(trim(downloads.url)) LIKE 'http://pan.quark.cn%'
+    OR lower(trim(downloads.url)) LIKE 'https://pan.quark.cn%'
+    OR lower(trim(downloads.url)) LIKE 'http://pan.xunlei.com%'
+    OR lower(trim(downloads.url)) LIKE 'https://pan.xunlei.com%'
+  )
+`;
 
 const COMPLETE_GAME_CONTENT_CONDITION = `
   games.content_hash IS NOT NULL
@@ -74,6 +119,7 @@ const COMPLETE_GAME_CONTENT_CONDITION = `
     SELECT 1
     FROM downloads
     WHERE downloads.game_id = games.id
+      AND (${DOMESTIC_CLOUD_DRIVE_SQL_CONDITION})
       AND (
         trim(downloads.url) LIKE 'http://%'
         OR trim(downloads.url) LIKE 'https://%'
@@ -338,6 +384,7 @@ export class CrawlerDatabase {
         source_url TEXT NOT NULL UNIQUE,
         title TEXT,
         description TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
         image_url TEXT,
         resource_code TEXT,
         detail_page_url TEXT,
@@ -575,7 +622,7 @@ export class CrawlerDatabase {
     this.#backfillMissingGameStatuses();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 21;");
+    this.database.exec("PRAGMA user_version = 22;");
   }
 
   #migrateSchema() {
@@ -591,6 +638,7 @@ export class CrawlerDatabase {
       ["last_changed_at", "TEXT"],
       ["source_updated_at", "TEXT"],
       ["sale_price", "REAL"],
+      ["tags", "TEXT NOT NULL DEFAULT '[]'"],
       ["xianyu_item_id", "TEXT"],
       ["xianyu_item_url", "TEXT"],
       ["xianyu_account_id", "TEXT"],
@@ -838,10 +886,19 @@ export class CrawlerDatabase {
     this.database.exec(`
       UPDATE games
       SET scrape_status = 'missing',
-          last_error = COALESCE(
-            NULLIF(last_error, ''),
-            '缺少图片或资源'
-          )
+          last_error = CASE
+            WHEN NOT EXISTS (
+              SELECT 1
+              FROM downloads
+              WHERE downloads.game_id = games.id
+                AND (${DOMESTIC_CLOUD_DRIVE_SQL_CONDITION})
+                AND (
+                  trim(downloads.url) LIKE 'http://%'
+                  OR trim(downloads.url) LIKE 'https://%'
+                )
+            ) THEN '缺少国内网盘资源'
+            ELSE COALESCE(NULLIF(last_error, ''), '缺少图片或资源')
+          END
       WHERE scrape_status = 'success'
         AND NOT (${COMPLETE_GAME_CONTENT_CONDITION});
     `);
@@ -1185,6 +1242,7 @@ export class CrawlerDatabase {
         id,
         source_url,
         title,
+        tags,
         image_url,
         hot_page,
         hot_position,
@@ -1193,7 +1251,7 @@ export class CrawlerDatabase {
         last_seen_at,
         scrape_status,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
       ON CONFLICT(id) DO UPDATE SET
         source_url = excluded.source_url,
         title = CASE
@@ -1201,6 +1259,7 @@ export class CrawlerDatabase {
           THEN COALESCE(excluded.title, games.title)
           ELSE games.title
         END,
+        tags = excluded.tags,
         image_url = CASE
           WHEN games.last_scraped_at IS NULL
           THEN COALESCE(excluded.image_url, games.image_url)
@@ -1223,6 +1282,7 @@ export class CrawlerDatabase {
           game.id,
           game.sourceUrl,
           game.title,
+          JSON.stringify(normalizeGameTags(game.tags)),
           game.imageUrl,
           game.hotPage,
           game.hotPosition,
@@ -1294,7 +1354,7 @@ export class CrawlerDatabase {
       `)
       .get(gameId);
     const downloads = this.database
-      .prepare("SELECT url FROM downloads WHERE game_id = ?")
+      .prepare("SELECT provider, url FROM downloads WHERE game_id = ?")
       .all(gameId);
     const complete = hasCompleteGameData({
       title: game?.title,
@@ -1325,7 +1385,7 @@ export class CrawlerDatabase {
           ? game.last_error
           : complete
             ? null
-            : missingGameDataError(imageAccessible),
+            : missingGameDataError({ imageAccessible, downloads }),
         checkedAt,
         gameId,
       );
@@ -1361,6 +1421,9 @@ export class CrawlerDatabase {
         )
         .all(game.id);
       const nextDownloads = result.resource.downloads ?? [];
+      const nextTags = normalizeGameTags(
+        result.page.tags ?? game.tags ?? previous?.tags,
+      );
       const imageAccessible = result.page.imageAccessible !== false;
       const complete = hasCompleteGameData({
         title: result.page.title,
@@ -1406,6 +1469,7 @@ export class CrawlerDatabase {
           SET source_url = ?,
               title = ?,
               description = ?,
+              tags = ?,
               image_url = ?,
               resource_code = ?,
               detail_page_url = ?,
@@ -1425,6 +1489,7 @@ export class CrawlerDatabase {
           result.page.url || game.sourceUrl,
           result.page.title,
           result.page.gameDescription,
+          JSON.stringify(nextTags),
           result.page.image,
           result.resource.resourceCode,
           result.resource.detailPageUrl,
@@ -1437,7 +1502,10 @@ export class CrawlerDatabase {
             ? previous.last_error
             : complete
               ? null
-              : missingGameDataError(imageAccessible),
+              : missingGameDataError({
+                  imageAccessible,
+                  downloads: nextDownloads,
+                }),
           nextHash,
           changeType,
           changedAt,

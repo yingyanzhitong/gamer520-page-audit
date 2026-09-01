@@ -108,6 +108,38 @@ test("相同游戏 ID 覆盖详情并替换下载源", () => {
   }
 });
 
+test("只有海外网盘下载源时采集状态标记为缺失", () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gamer520-domestic-drive-test-"),
+  );
+  const databasePath = path.join(directory, "test.sqlite");
+  const database = new CrawlerDatabase(databasePath);
+
+  try {
+    const timestamp = "2026-07-28T00:00:00.000Z";
+    const game = discovery(118900, "只有海外盘的游戏", 1);
+    const overseasResult = result(
+      game.id,
+      game.title,
+      "https://gofile.io/d/example",
+    );
+    overseasResult.resource.downloads[0].provider = "GOFILE 海外盘";
+
+    database.upsertDiscoveredGames([game], timestamp);
+    database.saveGameSuccess(game, overseasResult, timestamp);
+
+    const stored = database.queryOne(
+      "SELECT scrape_status, last_error FROM games WHERE id = ?",
+      game.id,
+    );
+    assert.equal(stored.scrape_status, "missing");
+    assert.equal(stored.last_error, "缺少国内网盘资源");
+  } finally {
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("详情失败保留旧成功字段和下载源", () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-db-failure-test-"),
@@ -500,7 +532,7 @@ test("缺少图片或资源时采集状态标记为缺失", () => {
       },
       {
         scrape_status: "missing",
-        last_error: "缺少图片或资源",
+        last_error: "缺少国内网盘资源",
       },
     );
 
@@ -638,7 +670,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     });
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      21,
+      22,
     );
   } finally {
     database.close();

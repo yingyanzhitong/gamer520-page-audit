@@ -169,6 +169,36 @@ async function extractGameDescription(page) {
   });
 }
 
+export function composeGameDescription(description, virtualMachineDescription) {
+  const base = String(description ?? "").trim();
+  const virtualMachineLine = String(virtualMachineDescription ?? "").trim();
+  if (!virtualMachineLine) return base || null;
+  const remainingLines = base
+    .split("\n")
+    .filter((line) => line.trim() !== virtualMachineLine);
+  return [virtualMachineLine, ...remainingLines].filter(Boolean).join("\n");
+}
+
+async function extractArticleMetadata(page) {
+  return page.evaluate(() => {
+    const normalize = (value) => value?.replace(/\s+/g, " ").trim() || "";
+    const tags = [
+      ...document.querySelectorAll('.meta-category a[rel="category"]'),
+    ]
+      .map((element) => normalize(element.textContent))
+      .filter(Boolean);
+    const virtualMachineDescription = tags.includes("虚拟机")
+      ? [...document.querySelectorAll(".entry-content p")]
+          .map((element) => normalize(element.textContent))
+          .find((text) => /游戏方式\s*[：:].*虚拟机/u.test(text)) || null
+      : null;
+    return {
+      tags: [...new Set(tags)],
+      virtualMachineDescription,
+    };
+  });
+}
+
 function assertAllowedArticleUrl(pageUrl) {
   const parsed = new URL(pageUrl);
   if (
@@ -322,6 +352,15 @@ export async function discoverListPage(
             image?.getAttribute("data-src") ||
             image?.getAttribute("src") ||
             null,
+          tags: [
+            ...article.querySelectorAll(
+              '.meta-category a[rel="category"]',
+            ),
+          ]
+            .map((element) =>
+              element.textContent?.replace(/\s+/g, " ").trim(),
+            )
+            .filter(Boolean),
           hotPosition: index + 1,
         };
       }),
@@ -677,7 +716,10 @@ export async function extractGame(
           .getAttribute("datetime")
           .catch(() => null),
       );
-    if (isSourceTimestampCurrent(sourceUpdatedAt, refreshState.lastScrapedAt)) {
+    if (
+      !refreshState.forceRefresh &&
+      isSourceTimestampCurrent(sourceUpdatedAt, refreshState.lastScrapedAt)
+    ) {
       return {
         unchanged: true,
         sourceUpdatedAt,
@@ -710,7 +752,11 @@ export async function extractGame(
       articlePage.url(),
       config,
     );
-    const gameDescription = await extractGameDescription(articlePage);
+    const articleMetadata = await extractArticleMetadata(articlePage);
+    const gameDescription = composeGameDescription(
+      await extractGameDescription(articlePage),
+      articleMetadata.virtualMachineDescription,
+    );
     const resourceCodeLocator = articlePage.locator("#refurl");
     const resourceCode =
       (await resourceCodeLocator.count()) > 0
@@ -734,6 +780,7 @@ export async function extractGame(
           image,
           imageAccessible,
           gameDescription,
+          tags: articleMetadata.tags,
           sourceUpdatedAt,
         },
         resource: {
@@ -793,6 +840,7 @@ export async function extractGame(
         image,
         imageAccessible,
         gameDescription,
+        tags: articleMetadata.tags,
         sourceUpdatedAt,
       },
       resource: {

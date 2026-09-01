@@ -127,12 +127,23 @@ function mapXianyuSettings(row) {
   };
 }
 
+function parseGameTags(value) {
+  if (Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(String(value ?? "[]"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function mapGame(row) {
   return {
     id: row.id,
     sourceUrl: row.source_url,
     title: row.title,
     description: row.description,
+    tags: parseGameTags(row.tags),
     imageUrl: row.image_url,
     resourceCode: row.resource_code,
     detailPageUrl: row.detail_page_url,
@@ -601,10 +612,17 @@ function listGames(database, requestUrl) {
 
   if (query) {
     conditions.push(
-      "(CAST(games.id AS TEXT) LIKE ? OR games.title LIKE ? OR publication.item_id LIKE ?)",
+      `(CAST(games.id AS TEXT) LIKE ?
+        OR games.title LIKE ?
+        OR publication.item_id LIKE ?
+        OR EXISTS (
+          SELECT 1
+          FROM json_each(games.tags) AS game_tag
+          WHERE game_tag.value LIKE ?
+        ))`,
     );
     const pattern = `%${query}%`;
-    parameters.push(pattern, pattern, pattern);
+    parameters.push(pattern, pattern, pattern, pattern);
   }
   if (status !== "all") {
     conditions.push(
