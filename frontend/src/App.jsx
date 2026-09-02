@@ -80,6 +80,8 @@ import {
   statusTone,
 } from "@/lib/utils";
 
+const APP_VERSION = `v${__APP_VERSION__}`;
+
 const navigation = [
   { id: "dashboard", label: "看板", icon: LayoutDashboard },
   { id: "tasks", label: "任务", icon: FileClock },
@@ -548,10 +550,18 @@ function Sidebar({ route, onRoute, onLogout, open, onClose }) {
             <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary font-display text-sm font-bold">
               G5
             </span>
-            <span>
-              <strong className="block font-display text-lg tracking-tight">
-                G520 Console
-              </strong>
+            <span className="min-w-0">
+              <span className="flex items-center gap-2">
+                <strong className="font-display text-lg tracking-tight">
+                  G520 Console
+                </strong>
+                <span
+                  className="rounded border border-white/15 bg-white/10 px-1.5 py-0.5 font-data text-[10px] font-semibold tracking-[0.08em] text-slate-200"
+                  aria-label={`当前版本 ${APP_VERSION}`}
+                >
+                  {APP_VERSION}
+                </span>
+              </span>
               <small className="font-data text-[10px] uppercase tracking-[0.14em] text-slate-400">
                 delivery ops
               </small>

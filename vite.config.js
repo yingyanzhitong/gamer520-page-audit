@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
+import packageInfo from "./package.json" with { type: "json" };
 
 const stripChunkTrailingWhitespace = {
   name: "strip-chunk-trailing-whitespace",
@@ -19,6 +20,9 @@ const stripChunkTrailingWhitespace = {
 
 export default defineConfig({
   root: path.resolve("frontend"),
+  define: {
+    __APP_VERSION__: JSON.stringify(packageInfo.version),
+  },
   plugins: [react(), stripChunkTrailingWhitespace],
   resolve: {
     alias: {
