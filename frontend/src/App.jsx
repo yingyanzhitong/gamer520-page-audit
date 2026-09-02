@@ -551,8 +551,8 @@ function Sidebar({ route, onRoute, onLogout, open, onClose }) {
               G5
             </span>
             <span className="min-w-0">
-              <span className="flex items-center gap-2">
-                <strong className="font-display text-lg tracking-tight">
+              <span className="flex items-center gap-1.5">
+                <strong className="font-display whitespace-nowrap text-base tracking-tight">
                   G520 Console
                 </strong>
                 <span
