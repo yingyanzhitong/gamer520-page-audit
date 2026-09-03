@@ -189,6 +189,18 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
   let crawlTrigger = null;
   let syncTrigger = null;
   let taskControl = null;
+  let schedulerActive = false;
+  let queuedTasks = [
+    {
+      id: "queue-1",
+      taskType: "sync",
+      reason: "manual",
+      mode: "pending",
+      accountIds: ["account-a"],
+      gameIds: [],
+      queuedAt: "2026-07-28T00:03:00.000Z",
+    },
+  ];
   let xianyuItemSyncCalls = 0;
   const dashboard = await startDashboardServer(
     {
@@ -200,7 +212,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       pageCount: 100,
     },
     () => ({
-      active: false,
+      active: schedulerActive,
       interrupted: false,
       enabled: true,
       cronSchedule: "0 3 * * *",
@@ -209,6 +221,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       concurrency: 3,
       nextRun: "2026-07-28T19:00:00.000Z",
       updatedAt: "2026-07-28T00:00:00.000Z",
+      queue: queuedTasks,
       sync: {
         active: false,
         interrupted: false,
@@ -332,7 +345,16 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       },
       triggerCrawl: (trigger) => {
         crawlTrigger = trigger;
-        return { trigger, mode: "full", active: true };
+        return schedulerActive
+          ? {
+              trigger,
+              mode: "full",
+              active: false,
+              queued: true,
+              queueId: "queue-new",
+              queuePosition: 2,
+            }
+          : { trigger, mode: "full", active: true, queued: false };
       },
       triggerSync: (trigger, mode, options = {}) => {
         syncTrigger = { trigger, mode, options };
@@ -357,6 +379,11 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
           },
         };
       },
+      removeQueuedTask: (id) => {
+        const index = queuedTasks.findIndex((task) => task.id === id);
+        if (index < 0) return null;
+        return queuedTasks.splice(index, 1)[0];
+      },
     },
   );
   const baseUrl = `http://127.0.0.1:${dashboard.address.port}`;
@@ -378,6 +405,8 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     ).then((response) => response.json());
     assert.equal(schedule.crawl.cronSchedule, "0 3 * * *");
     assert.equal(schedule.crawl.concurrency, 3);
+    assert.equal(schedule.queue.length, 1);
+    assert.equal(schedule.queue[0].id, "queue-1");
     assert.equal(schedule.sync.enabled, true);
     assert.equal(schedule.sync.tasks.length, 2);
     assert.equal(schedule.sync.tasks[0].mode, "all");
@@ -388,6 +417,24 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(schedule.sync.progress.materialSkipped, 2);
     assert.equal(schedule.sync.progress.materialCompleted, 4);
     assert.equal(schedule.sync.progress.publishCompleted, 2);
+
+    const deletedQueueTask = await fetch(
+      `${baseUrl}/api/task-queue/queue-1`,
+      {
+        method: "DELETE",
+        headers: { "X-API-Key": "xianyu-secret" },
+      },
+    );
+    assert.equal(deletedQueueTask.status, 200);
+    assert.equal((await deletedQueueTask.json()).task.id, "queue-1");
+    const missingQueueTask = await fetch(
+      `${baseUrl}/api/task-queue/queue-1`,
+      {
+        method: "DELETE",
+        headers: { "X-API-Key": "xianyu-secret" },
+      },
+    );
+    assert.equal(missingQueueTask.status, 404);
 
     const pageSource = await fetch(baseUrl).then((response) =>
       response.text(),
@@ -1135,6 +1182,7 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
     assert.equal(savedSchedule.syncTasks[1].sort, "hot-asc");
     assert.equal(savedSchedule.publishConcurrency, undefined);
 
+    schedulerActive = true;
     const crawl = await fetch(`${baseUrl}/api/crawl/run`, {
       method: "POST",
       headers: {
@@ -1144,7 +1192,11 @@ test("管理界面直接展示下载源并使用闲鱼 API Key 保护同步操�
       body: JSON.stringify({}),
     });
     assert.equal(crawl.status, 200);
+    const queuedCrawl = await crawl.json();
+    assert.equal(queuedCrawl.queued, true);
+    assert.match(queuedCrawl.message, /已加入任务队列/);
     assert.equal(crawlTrigger, "manual");
+    schedulerActive = false;
 
     const sync = await fetch(`${baseUrl}/api/sync/run`, {
       method: "POST",

@@ -10,6 +10,7 @@ import {
   XianyuSyncService,
 } from "./sync-service.mjs";
 import { TaskControl } from "./task-control.mjs";
+import { TaskQueue } from "./task-queue.mjs";
 import { nowIso, serializeError } from "./utils.mjs";
 
 const config = loadConfig();
@@ -18,8 +19,7 @@ let activeSync = null;
 let crawlControl = null;
 let syncControl = null;
 let syncProgress = null;
-let deferredSyncs = [];
-let deferredCrawl = null;
+const taskQueue = new TaskQueue({ now: nowIso });
 let stopping = false;
 let dashboard;
 let crawlJob = null;
@@ -398,20 +398,16 @@ function triggerCrawl(reason) {
   ) {
     return null;
   }
-  if (activeRun) {
-    log("schedule_skipped", {
+  if (activeRun || activeSync) {
+    const queued = taskQueue.enqueue({
+      taskType: "crawl",
       reason,
-      message: "已有采集任务正在运行",
     });
-    return activeRun;
-  }
-  if (activeSync) {
-    deferredCrawl = reason;
-    log("crawl_deferred", {
-      reason,
-      message: "闲鱼同步任务正在运行，采集将在同步结束后补跑",
+    log("task_queued", {
+      ...queued,
+      message: "已有任务正在运行，采集任务已进入队列",
     });
-    return activeSync;
+    return queued;
   }
 
   crawlControl = new TaskControl();
@@ -432,14 +428,7 @@ function triggerCrawl(reason) {
     .finally(() => {
       activeRun = null;
       if (crawlControl === control) crawlControl = null;
-      if (deferredSyncs.length > 0 && !stopping) {
-        const deferred = deferredSyncs.shift();
-        void triggerSync(
-          deferred.reason,
-          deferred.mode,
-          deferred.options,
-        );
-      }
+      startNextQueuedTask();
     });
   return activeRun;
 }
@@ -469,27 +458,19 @@ function triggerSync(
     throw error;
   }
   if (activeSync || activeRun) {
-    const duplicate = deferredSyncs.some(
-      (deferred) =>
-        deferred.reason === reason &&
-        deferred.options.accountIds.join("\u0000") === accountIds.join("\u0000"),
-    );
-    if (!duplicate) {
-      deferredSyncs.push({
-        reason,
-        mode,
-        options: { ...options, accountIds },
-      });
-    }
-    log("sync_deferred", {
+    const queued = taskQueue.enqueue({
+      taskType: "sync",
       reason,
-      accountIds,
-      queueLength: deferredSyncs.length,
-      message: activeRun
-        ? "采集任务正在运行，账号同步任务已进入队列"
-        : "其他账号同步任务正在运行，当前账号任务已进入队列",
+      mode,
+      options: { ...options, accountIds },
     });
-    return activeSync ?? activeRun;
+    log("task_queued", {
+      ...queued,
+      message: activeRun
+        ? "采集任务正在运行，同步任务已进入队列"
+        : "其他同步任务正在运行，当前任务已进入队列",
+    });
+    return queued;
   }
 
   const configuredTasks = new Map(
@@ -590,20 +571,34 @@ function triggerSync(
       activeSync = null;
       if (syncControl === control) syncControl = null;
       syncProgress = null;
-      if (deferredCrawl && !stopping) {
-        const deferred = deferredCrawl;
-        deferredCrawl = null;
-        void triggerCrawl(deferred);
-      } else if (deferredSyncs.length > 0 && !stopping) {
-        const deferred = deferredSyncs.shift();
-        void triggerSync(
-          deferred.reason,
-          deferred.mode,
-          deferred.options,
-        );
-      }
+      startNextQueuedTask();
     });
   return activeSync;
+}
+
+function startNextQueuedTask() {
+  if (stopping || activeRun || activeSync) return;
+  const next = taskQueue.dequeue();
+  if (!next) return;
+  log("task_dequeued", {
+    ...next,
+    message: "队列任务开始执行",
+  });
+  try {
+    if (next.taskType === "crawl") {
+      triggerCrawl(next.reason);
+    } else {
+      triggerSync(next.reason, next.mode ?? undefined, next.options);
+    }
+  } catch (error) {
+    log("queued_task_skipped", {
+      id: next.id,
+      taskType: next.taskType,
+      reason: next.reason,
+      error: serializeError(error),
+    });
+  }
+  if (!activeRun && !activeSync) startNextQueuedTask();
 }
 
 function buildScheduledJobs(settings) {
@@ -724,8 +719,13 @@ async function controlTask(task, action) {
   } else if (action === "resume") {
     control.resume();
   } else if (action === "terminate") {
-    deferredSyncs = [];
-    deferredCrawl = null;
+    const removed = taskQueue.clear();
+    if (removed.length > 0) {
+      log("task_queue_cleared", {
+        count: removed.length,
+        message: "当前任务被终止，已取消尚未开始的队列任务",
+      });
+    }
     control.terminate();
   } else {
     const error = new Error("任务控制操作无效");
@@ -799,13 +799,14 @@ function scheduleRuntime() {
     runOnStart: config.runOnStart,
     concurrency: schedulerSettings.crawlConcurrency,
     nextRun: crawlJob?.nextRun()?.toISOString() ?? null,
+    queue: taskQueue.list(),
     updatedAt: schedulerSettings.updatedAt,
     sync: {
       active: Boolean(activeSync),
       interrupted: Boolean(syncControl?.interrupted),
       enabled: syncTasks.some((task) => task.enabled),
-      deferred: deferredSyncs.length > 0,
-      deferredCount: deferredSyncs.length,
+      deferred: taskQueue.size > 0,
+      deferredCount: taskQueue.size,
       cronSchedule: schedulerSettings.syncCronSchedule,
       cronTimezone: schedulerSettings.cronTimezone,
       nextRun: syncNextRun,
@@ -869,18 +870,38 @@ dashboard = await startDashboardServer(config, scheduleRuntime, {
   updateScheduleSettings,
   updateXianyuApiKey,
   triggerCrawl: (reason) => {
-    void triggerCrawl(reason);
-    return { active: true, mode: "full" };
+    const accepted = triggerCrawl(reason);
+    return accepted?.queuePosition
+      ? {
+          active: false,
+          mode: "full",
+          queued: true,
+          queueId: accepted.id,
+          queuePosition: accepted.queuePosition,
+        }
+      : { active: Boolean(activeRun), mode: "full", queued: false };
   },
   triggerSync: (reason, mode, options = {}) => {
-    void triggerSync(reason, mode, options);
-    return {
-      active: true,
-      mode,
-      gameIds: options.gameIds ?? null,
-      accountIds: options.accountIds ?? schedulerSettings.syncAccountIds,
-    };
+    const accepted = triggerSync(reason, mode, options);
+    return accepted?.queuePosition
+      ? {
+          active: false,
+          mode,
+          gameIds: options.gameIds ?? null,
+          accountIds: options.accountIds ?? schedulerSettings.syncAccountIds,
+          queued: true,
+          queueId: accepted.id,
+          queuePosition: accepted.queuePosition,
+        }
+      : {
+          active: Boolean(activeSync),
+          mode,
+          gameIds: options.gameIds ?? null,
+          accountIds: options.accountIds ?? schedulerSettings.syncAccountIds,
+          queued: false,
+        };
   },
+  removeQueuedTask: (id) => taskQueue.remove(id),
   controlTask,
 });
 

@@ -1101,6 +1101,12 @@ function serveCachedCover(requestUrl, response, cacheDirectory) {
   fs.createReadStream(filePath).pipe(response);
 }
 
+function taskSubmissionMessage(accepted, startedMessage) {
+  return accepted?.queued
+    ? `已加入任务队列，当前排在第 ${accepted.queuePosition} 位`
+    : startedMessage;
+}
+
 export async function startDashboardServer(
   config,
   runtimeState = () => ({}),
@@ -1554,6 +1560,15 @@ export async function startDashboardServer(
             interrupted: Boolean(state.interrupted),
             concurrency: Number(state.concurrency ?? 3),
           },
+          queue: (state.queue ?? []).map((task) => ({
+            id: task.id,
+            taskType: task.taskType,
+            reason: task.reason,
+            mode: task.mode ?? null,
+            accountIds: task.accountIds ?? [],
+            gameIds: task.gameIds ?? [],
+            queuedAt: task.queuedAt ?? null,
+          })),
           sync: {
             enabled: Boolean(state.sync?.enabled),
             accountIds: state.sync?.accountIds ?? [],
@@ -1816,11 +1831,6 @@ export async function startDashboardServer(
           return;
         }
         await readJsonBody(request);
-        const state = runtimeState();
-        if (state.active || state.sync?.active) {
-          sendError(response, 409, "采集或同步任务正在运行");
-          return;
-        }
         if (!handlers.triggerCrawl) {
           sendError(response, 503, "采集服务尚未启用");
           return;
@@ -1828,7 +1838,7 @@ export async function startDashboardServer(
         const accepted = handlers.triggerCrawl("manual");
         sendJson(response, 200, {
           success: true,
-          message: "手动采集任务已启动",
+          message: taskSubmissionMessage(accepted, "手动采集任务已启动"),
           ...accepted,
         });
         return;
@@ -1849,10 +1859,6 @@ export async function startDashboardServer(
         }
         const body = await readJsonBody(request);
         const state = runtimeState();
-        if (state.active || state.sync?.active) {
-          sendError(response, 409, "采集或同步任务正在运行");
-          return;
-        }
         if (!handlers.triggerSync) {
           sendError(response, 503, "闲鱼同步服务尚未启用");
           return;
@@ -1908,9 +1914,12 @@ export async function startDashboardServer(
         );
         sendJson(response, 200, {
           success: true,
-          message: useConfiguredTask
-            ? "已按设定启动同步任务"
-            : `${mode === "pending" ? "未发布商品" : mode === "updated" ? "已更新商品" : mode === "selected-force" ? "自选游戏强制发布" : "全部待处理商品"}同步任务已启动`,
+          message: taskSubmissionMessage(
+            accepted,
+            useConfiguredTask
+              ? "已按设定启动同步任务"
+              : `${mode === "pending" ? "未发布商品" : mode === "updated" ? "已更新商品" : mode === "selected-force" ? "自选游戏强制发布" : "全部待处理商品"}同步任务已启动`,
+          ),
           ...accepted,
         });
         return;
@@ -1953,11 +1962,6 @@ export async function startDashboardServer(
           );
           return;
         }
-        const state = runtimeState();
-        if (state.active || state.sync?.active) {
-          sendError(response, 409, "采集或同步任务正在运行");
-          return;
-        }
         if (!handlers.triggerSync) {
           sendError(response, 503, "闲鱼同步服务尚未启用");
           return;
@@ -1972,7 +1976,10 @@ export async function startDashboardServer(
           success: true,
           selectedCount: gameIds.length,
           gameIds,
-          message: `已启动 ${gameIds.length} 个有效游戏的同步任务`,
+          message: taskSubmissionMessage(
+            accepted,
+            `已启动 ${gameIds.length} 个有效游戏的同步任务`,
+          ),
           ...accepted,
         });
         return;
@@ -2002,6 +2009,36 @@ export async function startDashboardServer(
           task,
           action,
           scheduler,
+        });
+        return;
+      }
+      const taskQueueMatch = requestUrl.pathname.match(
+        /^\/api\/task-queue\/([^/]+)$/,
+      );
+      if (request.method === "DELETE" && taskQueueMatch) {
+        if (
+          !requireKey(
+            request,
+            response,
+            config.xianyuApiKey,
+            "X-API-Key",
+          )
+        ) {
+          return;
+        }
+        if (!handlers.removeQueuedTask) {
+          sendError(response, 503, "任务队列服务尚未启用");
+          return;
+        }
+        const task = handlers.removeQueuedTask(taskQueueMatch[1]);
+        if (!task) {
+          sendError(response, 404, "队列任务不存在或已开始执行");
+          return;
+        }
+        sendJson(response, 200, {
+          success: true,
+          task,
+          scheduler: runtimeState(),
         });
         return;
       }
@@ -2183,11 +2220,6 @@ export async function startDashboardServer(
           sendError(response, 422, "该游戏采集状态不是成功，不能同步");
           return;
         }
-        const state = runtimeState();
-        if (state.active || state.sync?.active) {
-          sendError(response, 409, "采集或同步任务正在运行");
-          return;
-        }
         if (!handlers.triggerSync) {
           sendError(response, 503, "闲鱼同步服务尚未启用");
           return;
@@ -2201,7 +2233,10 @@ export async function startDashboardServer(
           success: true,
           gameId,
           accountId,
-          message: `游戏 ${gameId} 已向账号 ${accountId} 启动同步`,
+          message: taskSubmissionMessage(
+            accepted,
+            `游戏 ${gameId} 已向账号 ${accountId} 启动同步`,
+          ),
           ...accepted,
         });
         return;

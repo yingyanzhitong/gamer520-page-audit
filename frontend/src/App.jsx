@@ -759,11 +759,11 @@ function DashboardPage({ notify }) {
 
   async function startSync() {
     try {
-      await api("/api/sync/run", {
+      const result = await api("/api/sync/run", {
         method: "POST",
         body: jsonBody({ mode: "pending" }),
       });
-      notify("未发布商品同步已启动");
+      notify(result.message ?? "未发布商品同步已启动");
       await load();
     } catch (caught) {
       notify(errorMessage(caught), "error");
@@ -823,7 +823,9 @@ function DashboardPage({ notify }) {
         <Card>
           <CardHeader>
             <CardTitle>当前任务</CardTitle>
-            <CardDescription>采集与同步只允许一个任务运行。</CardDescription>
+            <CardDescription>
+              采集与同步串行执行；后续提交会进入任务队列。
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
             {data?.scheduler?.sync?.progress ? (
@@ -1065,6 +1067,82 @@ function TaskProgress({ schedule, crawlRun, onViewLogs }) {
             label="发布商品进度"
           />
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function queuedTaskDescription(task) {
+  if (task.taskType === "crawl") return "采集全站游戏数据";
+  const mode = {
+    all: "全部待处理商品",
+    pending: "未发布商品",
+    updated: "已更新商品",
+    "selected-force": "自选游戏强制发布",
+  }[task.mode] ?? "同步任务";
+  const scope = task.gameIds?.length
+    ? `${task.gameIds.length} 个游戏`
+    : task.accountIds?.length
+      ? task.accountIds.join("、")
+      : "当前任务账号";
+  return `${mode} · ${scope}`;
+}
+
+function TaskQueue({ tasks, removingTaskId, onRemove }) {
+  return (
+    <Card className="mt-5">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <CardTitle>任务队列</CardTitle>
+            <CardDescription className="mt-1">
+              同一时间仅运行一个任务，后续任务会按提交顺序自动执行。
+            </CardDescription>
+          </div>
+          <Badge tone={tasks.length ? "info" : "neutral"}>
+            {tasks.length} 个待执行
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {tasks.length ? (
+          tasks.map((task, index) => (
+            <div
+              key={task.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">
+                  #{index + 1} · {task.taskType === "crawl" ? "采集任务" : "同步任务"}
+                </p>
+                <p className="mt-1 truncate text-xs text-muted-foreground">
+                  {queuedTaskDescription(task)}
+                </p>
+                <p className="font-data mt-1 text-[10px] text-muted-foreground">
+                  提交于 {formatDate(task.queuedAt)}
+                </p>
+              </div>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => onRemove(task.id)}
+                disabled={Boolean(removingTaskId)}
+              >
+                {removingTaskId === task.id ? (
+                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                删除
+              </Button>
+            </div>
+          ))
+        ) : (
+          <EmptyState
+            title="任务队列为空"
+            description="提交新任务后，会在这里显示等待执行的任务。"
+          />
+        )}
       </CardContent>
     </Card>
   );
@@ -1375,6 +1453,7 @@ function TasksPage({ notify }) {
   const [saving, setSaving] = useState(false);
   const [logTask, setLogTask] = useState(null);
   const [controlAction, setControlAction] = useState(null);
+  const [removingTaskId, setRemovingTaskId] = useState(null);
   const [selectedGamesOpen, setSelectedGamesOpen] = useState(false);
   const [scheduledGamesOpen, setScheduledGamesOpen] = useState(false);
   const [selectedScheduleAccountId, setSelectedScheduleAccountId] =
@@ -1477,31 +1556,49 @@ function TasksPage({ notify }) {
 
   async function runTask(kind, mode, { useConfiguredTask = false } = {}) {
     try {
-      await api(kind === "crawl" ? "/api/crawl/run" : "/api/sync/run", {
-        method: "POST",
-        body: jsonBody(
-          kind === "sync"
-            ? {
-                ...(useConfiguredTask
-                  ? { use_configured_task: true }
-                  : { mode }),
-                account_ids: selectedScheduleAccountId
-                  ? [selectedScheduleAccountId]
-                  : [],
-              }
-            : {},
-        ),
-      });
-      notify(
-        kind === "crawl"
+      const result = await api(
+        kind === "crawl" ? "/api/crawl/run" : "/api/sync/run",
+        {
+          method: "POST",
+          body: jsonBody(
+            kind === "sync"
+              ? {
+                  ...(useConfiguredTask
+                    ? { use_configured_task: true }
+                    : { mode }),
+                  account_ids: selectedScheduleAccountId
+                    ? [selectedScheduleAccountId]
+                    : [],
+                }
+              : {},
+          ),
+        },
+      );
+      const startedMessage = kind === "crawl"
           ? "采集任务已启动"
           : useConfiguredTask
             ? "已按设定启动同步任务"
-            : "同步任务已启动",
-      );
+            : "同步任务已启动";
+      notify(result.message ?? startedMessage);
       await load();
     } catch (caught) {
       notify(errorMessage(caught), "error");
+    }
+  }
+
+  async function removeQueuedTask(id) {
+    if (removingTaskId) return;
+    setRemovingTaskId(id);
+    try {
+      await api(`/api/task-queue/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      notify("已从任务队列删除");
+      await load();
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    } finally {
+      setRemovingTaskId(null);
     }
   }
 
@@ -1541,7 +1638,7 @@ function TasksPage({ notify }) {
       <PageHeading
         eyebrow="Scheduler & records"
         title="任务"
-        description="配置定时采集和同步，手动执行任务，并在同一页面查看任务记录与错误日志。"
+        description="配置定时采集和同步，手动提交任务并管理等待执行的任务队列。"
         actions={
           <>
             <Button variant="outline" onClick={() => runTask("crawl")}>
@@ -1566,6 +1663,11 @@ function TasksPage({ notify }) {
           (run) => run.taskType === "crawl" && run.status === "running",
         )}
         onViewLogs={setLogTask}
+      />
+      <TaskQueue
+        tasks={schedule?.queue ?? []}
+        removingTaskId={removingTaskId}
+        onRemove={removeQueuedTask}
       />
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
         <Card>
@@ -2847,11 +2949,13 @@ function GamesPage({ notify }) {
     }
     setSyncingGameId(gameId);
     try {
-      await api(`/api/games/${gameId}/sync`, {
+      const result = await api(`/api/games/${gameId}/sync`, {
         method: "POST",
         body: jsonBody({ account_id: selectedAccountId }),
       });
-      notify(`游戏 ${gameId} 已向账号 ${selectedAccountId} 启动同步`);
+      notify(
+        result.message ?? `游戏 ${gameId} 已向账号 ${selectedAccountId} 启动同步`,
+      );
     } catch (caught) {
       notify(errorMessage(caught), "error");
     } finally {
