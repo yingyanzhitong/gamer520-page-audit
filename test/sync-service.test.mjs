@@ -387,11 +387,16 @@ test("闲鱼商品核对按编号或唯一名称确认发布，未匹配项回�
       result(ambiguousTitleGame.id),
       timestamp,
     );
-    database.database.prepare(`
-      UPDATE games
-      SET xianyu_item_id = ?
-      WHERE id = ?
-    `).run("item-confirmed", confirmedGame.id);
+    database.markPublicationSubmitted(
+      confirmedGame.id, "account-a", 3010, "batch-confirmed", timestamp,
+    );
+    database.markPublicationResult({
+      gameId: confirmedGame.id,
+      accountId: "account-a",
+      status: "success",
+      itemId: "item-confirmed",
+      updatedAt: timestamp,
+    });
     for (const gameItem of [
       titleMatchedGame,
       unmatchedGame,
@@ -1607,7 +1612,7 @@ test("同步使用商品配置中选择的卡券，未选择时不自动绑定",
   }
 });
 
-test("已有商品编号时跳过素材同步和卡券重试", async () => {
+test("已有商品编号时仅重试失败的卡券绑定，不重复发布", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-card-retry-test-"),
   );
@@ -1645,6 +1650,18 @@ test("已有商品编号时跳过素材同步和卡券重试", async () => {
     assert.equal(first.cardBindFailed, 1);
     assert.equal(client.publishCalls.length, 1);
 
+    const unrelated = await service.run({ trigger: "test", gameIds: [99999] });
+    assert.equal(unrelated.cardBound, 0);
+    assert.equal(client.cardBindCalls.length, 1);
+
+    const bindCards = client.bindCards.bind(client);
+    client.bindCards = async () => ({ success_count: 0, fail_count: 1 });
+    const stillFailed = await service.run({ trigger: "test", mode: "pending" });
+    assert.equal(stillFailed.status, "partial");
+    assert.equal(stillFailed.cardBindFailed, 1);
+    assert.equal(stillFailed.publishSubmitted, 0);
+    client.bindCards = bindCards;
+
     const retried = await service.run({
       trigger: "test",
       mode: "pending",
@@ -1652,9 +1669,14 @@ test("已有商品编号时跳过素材同步和卡券重试", async () => {
     assert.equal(retried.status, "success");
     assert.equal(retried.selectedCount, 0);
     assert.equal(retried.publishSubmitted, 0);
-    assert.equal(retried.cardBound, 0);
+    assert.equal(retried.cardBound, 1);
     assert.equal(client.publishCalls.length, 1);
-    assert.equal(client.cardBindCalls.length, 1);
+    assert.equal(client.cardBindCalls.length, 2);
+
+    const completed = await service.run({ trigger: "test", mode: "pending" });
+    assert.equal(completed.cardBound, 0);
+    assert.equal(client.cardBindCalls.length, 2);
+    assert.equal(client.publishCalls.length, 1);
 
     const checkedDatabase = new CrawlerDatabase(databasePath);
     const publication = checkedDatabase.queryOne(
@@ -1667,13 +1689,13 @@ test("已有商品编号时跳过素材同步和卡券重试", async () => {
     checkedDatabase.close();
     assert.equal(publication.status, "success");
     assert.equal(publication.card_id, 6);
-    assert.equal(publication.card_bind_status, "failed");
+    assert.equal(publication.card_bind_status, "success");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("已有商品编号后更新内容不重复发布，切换账号会重新发布", async () => {
+test("发布和卡券绑定跟随账号：切换账号独立发布，切回不重复发布", async () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-sync-update-test-"),
   );
@@ -1688,7 +1710,7 @@ test("已有商品编号后更新内容不重复发布，切换账号会重新�
       result(discovered.id, "初始简介"),
       timestamp,
     );
-    database.setXianyuAccountId("account-a", timestamp);
+    database.setXianyuSettings("account-a", 1, timestamp, null, null, null, { cardId: 6 });
   } finally {
     database.close();
   }
@@ -1738,15 +1760,19 @@ test("已有商品编号后更新内容不重复发布，切换账号会重新�
     assert.equal(client.upsertCalls.length, 1);
 
     const switchedDatabase = new CrawlerDatabase(databasePath);
-    switchedDatabase.setXianyuAccountId(
-      "account-b",
-      "2026-07-30T00:00:00.000Z",
+    switchedDatabase.setXianyuSettings(
+      "account-b", 1, "2026-07-30T00:00:00.000Z", null, null, null, { cardId: 9 },
     );
     switchedDatabase.close();
 
     const switched = await service.run({ trigger: "test", limit: 20 });
     assert.equal(switched.selectedCount, 1);
     assert.equal(switched.publishSuccess, 1);
+    assert.equal(switched.cardBound, 1);
+    assert.deepEqual(client.cardBindCalls.map((call) => call.itemIds), [
+      ["item-account-a-1"], ["item-account-b-2"],
+    ]);
+    assert.deepEqual(client.cardBindCalls.map((call) => call.cardIds), [[6], [9]]);
     assert.equal(client.publishCalls.length, 2);
     const switchedPublicationDatabase = new CrawlerDatabase(databasePath);
     assert.equal(
@@ -1760,6 +1786,12 @@ test("已有商品编号后更新内容不重复发布，切换账号会重新�
       "success",
     );
     switchedPublicationDatabase.close();
+
+    const switchedBack = await service.run({ trigger: "test", accountId: "account-a" });
+    assert.equal(switchedBack.publishSubmitted, 0);
+    assert.equal(switchedBack.cardBound, 0);
+    assert.equal(client.publishCalls.length, 2);
+    assert.equal(client.cardBindCalls.length, 2);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

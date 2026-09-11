@@ -1209,7 +1209,7 @@ test("发布成功后把闲鱼商品编号写回游戏数据", () => {
   }
 });
 
-test("账号商品核对会确认已有闲鱼商品编号的发布结果", () => {
+test("账号商品核对只认当前账号发布记录，不采用全局商品编号", () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "gamer520-item-reconcile-test-"),
   );
@@ -1236,6 +1236,19 @@ test("账号商品核对会确认已有闲鱼商品编号的发布结果", () =>
         "https://www.goofish.com/item?id=1069000000001",
         discovered.id,
       );
+
+    const globalOnly = database.reconcileAccountPublishedItems(
+      "account-b", [{ item_id: "1069000000001" }], timestamp,
+    );
+    assert.equal(globalOnly.confirmedCount, 0);
+    assert.equal(database.listSyncCandidates("account-b", 10).length, 1);
+    assert.equal(database.listCardBindingCandidates("account-b", 6).length, 0);
+
+    database.markPublicationSubmitted(discovered.id, "account-a", 900, "batch-a", timestamp);
+    database.markPublicationResult({
+      gameId: discovered.id, accountId: "account-a", status: "success",
+      itemId: "1069000000001", updatedAt: timestamp,
+    });
 
     const summary = database.reconcileAccountPublishedItems(
       "account-a",
@@ -1270,6 +1283,23 @@ test("账号商品核对会确认已有闲鱼商品编号的发布结果", () =>
         item_url: "https://www.goofish.com/item?id=1069000000001",
       },
     );
+
+    assert.equal(database.listSyncCandidates("account-a", 10).length, 0);
+    assert.equal(database.listSyncCandidates("account-b", 10).length, 1);
+    assert.equal(database.listCardBindingCandidates("account-a", 6).length, 1);
+    assert.equal(database.listCardBindingCandidates("account-b", 6).length, 0);
+
+    database.markPublicationSubmitted(discovered.id, "account-b", 901, "batch-b", timestamp);
+    database.markPublicationResult({
+      gameId: discovered.id, accountId: "account-b", status: "success",
+      itemId: "item-b", updatedAt: timestamp,
+    });
+    database.reconcileAccountPublishedItems("account-a", [], timestamp);
+    assert.equal(database.listSyncCandidates("account-a", 10).length, 1);
+    assert.equal(database.listSyncCandidates("account-b", 10).length, 0);
+    assert.equal(database.listCardBindingCandidates("account-a", 6).length, 0);
+    assert.equal(database.listCardBindingCandidates("account-b", 6)[0].publication_item_id, "item-b");
+    assert.equal(database.queryOne("SELECT xianyu_item_id FROM games WHERE id = ?", discovered.id).xianyu_item_id, "item-b");
   } finally {
     database.close();
     fs.rmSync(directory, { recursive: true, force: true });

@@ -693,6 +693,16 @@ export class XianyuSyncService {
       await control?.checkpoint();
       await synchronizeRemoteState();
       await control?.checkpoint();
+      if (deliveryCardId) {
+        const requestedIds = Array.isArray(gameIds) && gameIds.length > 0
+          ? new Set(gameIds.map(Number))
+          : null;
+        for (const candidate of database.listCardBindingCandidates(accountId, deliveryCardId)) {
+          if (requestedIds && !requestedIds.has(candidate.id)) continue;
+          await bindDeliveryCard(candidate, candidate.publication_item_id);
+        }
+        database.updateSyncRun(runId, totals);
+      }
       candidates = database.listSyncCandidates(
         accountId,
         100_000,
@@ -774,16 +784,17 @@ export class XianyuSyncService {
       });
 
       if (candidates.length === 0) {
+        const status = totals.card_bind_failed > 0 ? "partial" : "success";
         database.updateSyncRun(runId, {
-          status: "success",
+          status,
           finished_at: nowIso(),
         });
         recordTaskLog({
-          level: "success",
+          level: status === "success" ? "success" : "warning",
           stage: "task",
           action: "finished",
-          message: "没有需要同步的商品，任务直接完成",
-          details: { status: "success", selectedCount: 0 },
+          message: `没有需要发布的商品，卡券补绑成功 ${totals.card_bound} 个、失败 ${totals.card_bind_failed} 个`,
+          details: { status, selectedCount: 0 },
         });
         return {
           runId,
@@ -798,10 +809,10 @@ export class XianyuSyncService {
           publishSubmitted: 0,
           publishSuccess: 0,
           publishFailed: 0,
-          cardBound: 0,
-          cardBindFailed: 0,
+          cardBound: totals.card_bound,
+          cardBindFailed: totals.card_bind_failed,
           batchCount: 0,
-          status: "success",
+          status,
         };
       }
 

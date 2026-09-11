@@ -2094,6 +2094,27 @@ export class CrawlerDatabase {
     };
   }
 
+  listCardBindingCandidates(accountId, cardId) {
+    const settings = this.getXianyuSyncSettings(accountId);
+    return this.database.prepare(`
+      SELECT games.*, COALESCE(games.sale_price, ?, 1) AS effective_price,
+        publication.item_id AS publication_item_id
+      FROM games
+      JOIN xianyu_publications AS publication ON publication.game_id = games.id
+      WHERE publication.account_id = ?
+        AND publication.status = 'success'
+        AND trim(COALESCE(publication.item_id, '')) != ''
+        AND (publication.card_id IS NULL OR publication.card_id != ?
+          OR COALESCE(publication.card_bind_status, '') != 'success')
+      ORDER BY games.id
+    `).all(settings.default_price, accountId, cardId).map((row) => ({
+      ...row,
+      downloads: this.database.prepare(
+        "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
+      ).all(row.id),
+    }));
+  }
+
   listSyncCandidates(accountId, limit, mode = "all", sort = "created") {
     const settings = this.getXianyuSyncSettings(accountId);
     const normalizedMode = normalizeSyncMode(mode);
@@ -2591,8 +2612,6 @@ export class CrawlerDatabase {
         SELECT
           games.*,
           COALESCE(games.sale_price, ?, 1) AS effective_price,
-          games.xianyu_item_id,
-          games.xianyu_item_url,
           publication.status AS publication_status,
           publication.item_id AS publication_item_id,
           publication.item_url AS publication_item_url
@@ -2654,7 +2673,7 @@ export class CrawlerDatabase {
           xianyu_item_url = NULL,
           xianyu_account_id = NULL,
           xianyu_published_at = NULL
-      WHERE id = ?
+      WHERE id = ? AND xianyu_account_id = ?
     `);
     const downloadStatement = this.database.prepare(
       "SELECT * FROM downloads WHERE game_id = ? ORDER BY provider, url",
@@ -2667,10 +2686,6 @@ export class CrawlerDatabase {
       for (const localItem of localItems) {
         const localItemIds = [
           localItem.publication_item_id,
-          localItem.xianyu_account_id === accountId ||
-          !localItem.xianyu_account_id
-            ? localItem.xianyu_item_id
-            : null,
         ]
           .map((value) => String(value ?? "").trim())
           .filter(Boolean);
@@ -2712,7 +2727,7 @@ export class CrawlerDatabase {
               localItem.id,
               accountId,
             );
-            resetGame.run(localItem.id);
+            resetGame.run(localItem.id, accountId);
             materialFallbackCount += 1;
           }
           continue;
