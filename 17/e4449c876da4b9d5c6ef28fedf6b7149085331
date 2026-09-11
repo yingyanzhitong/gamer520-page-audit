@@ -1,0 +1,53 @@
+test/sync-service.test.mjs
+  s_fb1bfddc574b5b::t_8b18be14e3e17f 390-399
+  s_fb1bfddc574b5b::t_2a6895007c762e 1698,1713,1771-1774,1789-1794
+  s_fb1bfddc574b5b::t_e22bb872f0dee1 1763-1764,1775
+  s_fb1bfddc574b5b::t_b463af51ad74c3 1653-1664
+  s_fb1bfddc574b5b::t_91bb185e6e6820 1615,1672,1674-1679,1692
+  s_cbe0434f6a185b::t_fcc35a50a741fa 1652
+test/database.test.mjs
+  s_fb1bfddc574b5b::t_4b7676419ad27a 1212,1240-1252,1286-1302
+public/index.html
+  s_fb1bfddc574b5b::t_cde7d8f5b63423 15
+CHANGELOG.md
+  s_fb1bfddc574b5b::t_dfaeae052a0f05 3-8
+public/assets/index-B9YXa9rW.js
+  s_fb1bfddc574b5b::t_cde7d8f5b63423 49
+src/database.mjs
+  s_fb1bfddc574b5b::t_a6547f68e4c763 2097,2099,2102-2109,2116-2117
+  s_fb1bfddc574b5b::t_b463af51ad74c3 2098,2100-2101,2110-2115
+  s_fb1bfddc574b5b::t_cf03d78a68ec15 2676,2730
+package.json
+  s_fb1bfddc574b5b::t_f5869d938a1d0b 3
+src/sync-service.mjs
+  s_fb1bfddc574b5b::t_91bb185e6e6820 696-705,787,789,793,796-797,812-813,815
+package-lock.json
+  s_fb1bfddc574b5b::t_f1b6483d0b3260 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "17e4449c876da4b9d5c6ef28fedf6b7149085331",
+  "prompts": {},
+  "logical_commit_id": "17e4449c876da4b9d5c6ef28fedf6b7149085331",
+  "sessions": {
+    "s_cbe0434f6a185b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08f82-a449-7963-9a3c-8c529025eaba",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>"
+    },
+    "s_fb1bfddc574b5b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09065-e8fd-7a93-a6f7-2ecd01cbfe79",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "masongzhi <masongzhi@bigo.sg>",
+      "total_additions": 178,
+      "total_deletions": 34
+    }
+  }
+}
