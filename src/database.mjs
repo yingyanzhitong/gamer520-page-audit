@@ -554,6 +554,15 @@ export class CrawlerDatabase {
       CREATE INDEX IF NOT EXISTS xianyu_publications_account_status_idx
       ON xianyu_publications(account_id, status);
 
+      CREATE TABLE IF NOT EXISTS xianyu_item_history (
+        item_id TEXT NOT NULL,
+        game_id INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        PRIMARY KEY (item_id, game_id, account_id),
+        FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS xianyu_sync_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         trigger_type TEXT NOT NULL,
@@ -622,7 +631,10 @@ export class CrawlerDatabase {
     this.#backfillMissingGameStatuses();
     this.#backfillXianyuItemIds();
     this.#backfillSyncRunProgress();
-    this.database.exec("PRAGMA user_version = 22;");
+    if (this.queryOne("PRAGMA user_version").user_version < 23) {
+      this.#backfillXianyuItemHistory(databasePath);
+    }
+    this.database.exec("PRAGMA user_version = 23;");
   }
 
   #migrateSchema() {
@@ -853,6 +865,122 @@ export class CrawlerDatabase {
         );
       }
     }
+  }
+
+  #backfillXianyuItemHistory(databasePath) {
+    transaction(this.database, () => {
+      this.database.exec(`
+        INSERT OR IGNORE INTO xianyu_item_history (
+          item_id, game_id, account_id, recorded_at
+        )
+        SELECT trim(item_id), game_id, account_id,
+          COALESCE(published_at, updated_at)
+        FROM xianyu_publications
+        WHERE status = 'success' AND trim(COALESCE(item_id, '')) != '';
+
+        INSERT OR IGNORE INTO xianyu_item_history (
+          item_id, game_id, account_id, recorded_at
+        )
+        SELECT trim(xianyu_item_id), id, COALESCE(xianyu_account_id, ''),
+          COALESCE(xianyu_published_at, updated_at)
+        FROM games
+        WHERE trim(COALESCE(xianyu_item_id, '')) != '';
+
+        INSERT OR IGNORE INTO xianyu_item_history (
+          item_id, game_id, account_id, recorded_at
+        )
+        SELECT trim(json_extract(log.detail_json, '$.itemId')),
+          log.game_id, run.account_id, log.created_at
+        FROM task_operation_logs AS log
+        JOIN xianyu_sync_runs AS run ON run.id = log.run_id
+        JOIN games ON games.id = log.game_id
+        WHERE log.task_type = 'sync'
+          AND log.stage = 'publish' AND log.action = 'success'
+          AND run.account_id IS NOT NULL
+          AND CASE WHEN json_valid(log.detail_json)
+            THEN json_type(log.detail_json, '$.itemId') = 'text'
+              AND trim(json_extract(log.detail_json, '$.itemId')) != ''
+            ELSE 0 END;
+      `);
+      this.#restoreXianyuItemHistoryFromBackups(databasePath);
+    });
+  }
+
+  #restoreXianyuItemHistoryFromBackups(databasePath) {
+    const directory = path.dirname(path.resolve(databasePath));
+    const gameExists = this.database.prepare("SELECT 1 FROM games WHERE id = ?");
+    const recordedAt = new Date().toISOString();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !/^gamer520-(?:before-|pre-).*\.sqlite$/u.test(entry.name)) {
+        continue;
+      }
+      const backup = new DatabaseSync(path.join(directory, entry.name), { readOnly: true });
+      try {
+        const publicationColumns = new Set(
+          backup.prepare("PRAGMA table_info(xianyu_publications)").all().map((row) => row.name),
+        );
+        const rows = [];
+        if (["item_id", "game_id", "account_id", "status"].every((column) => publicationColumns.has(column))) {
+          rows.push(...backup.prepare(`
+            SELECT item_id, game_id, account_id FROM xianyu_publications
+            WHERE status = 'success' AND trim(COALESCE(item_id, '')) != ''
+          `).all());
+        }
+        const gameColumns = new Set(
+          backup.prepare("PRAGMA table_info(games)").all().map((row) => row.name),
+        );
+        if (gameColumns.has("id") && gameColumns.has("xianyu_item_id")) {
+          const accountColumn = gameColumns.has("xianyu_account_id")
+            ? "COALESCE(xianyu_account_id, '')" : "''";
+          rows.push(...backup.prepare(`
+            SELECT xianyu_item_id AS item_id, id AS game_id,
+              ${accountColumn} AS account_id
+            FROM games WHERE trim(COALESCE(xianyu_item_id, '')) != ''
+          `).all());
+        }
+        for (const row of rows) {
+          if (!gameExists.get(row.game_id)) continue;
+          this.#recordXianyuItemHistory(
+            row.game_id, row.account_id ?? "", row.item_id, recordedAt,
+          );
+        }
+      } finally {
+        backup.close();
+      }
+    }
+  }
+
+  #recordXianyuItemHistory(gameId, accountId, itemId, recordedAt) {
+    return this.database.prepare(`
+      INSERT OR IGNORE INTO xianyu_item_history (
+        item_id, game_id, account_id, recorded_at
+      ) VALUES (?, ?, ?, ?)
+    `).run(String(itemId).trim(), gameId, accountId, recordedAt).changes;
+  }
+
+  restorePublishedItemHistory(materials, logs, recordedAt) {
+    const byMaterialId = new Map(materials
+      .filter((material) => material.source_type === "gamer520")
+      .map((material) => [Number(material.id), material]));
+    const gameExists = this.database.prepare("SELECT 1 FROM games WHERE id = ?");
+    let matchedCount = 0;
+    let restoredCount = 0;
+    transaction(this.database, () => {
+      for (const log of logs) {
+        if (log.status !== "success" || !String(log.item_id ?? "").trim()) continue;
+        const material = byMaterialId.get(Number(log.material_id));
+        const source = String(material?.source_item_id ?? "").match(/^(?:(.+):)?(\d+)$/u);
+        const accountId = String(log.account_id ?? "").trim();
+        if (!source || !accountId || (source[1] && source[1] !== accountId)) continue;
+        const gameId = Number(source[2]);
+        if (!Number.isSafeInteger(gameId) || !gameExists.get(gameId)) continue;
+        matchedCount += 1;
+        restoredCount += this.#recordXianyuItemHistory(
+          gameId, accountId, log.item_id, recordedAt,
+        );
+      }
+    });
+    return { matchedCount, restoredCount };
   }
 
   #backfillSyncRunProgress() {
@@ -2398,6 +2526,9 @@ export class CrawlerDatabase {
         `)
         .get(gameId, accountId);
       if (!publication?.item_id) return;
+      this.#recordXianyuItemHistory(
+        gameId, accountId, publication.item_id, updatedAt,
+      );
       this.database
         .prepare(`
           UPDATE games
@@ -2607,6 +2738,19 @@ export class CrawlerDatabase {
       matched.push(item);
       accountItemsByTitle.set(title, matched);
     }
+    if (accountItems.size === 0 && this.database.prepare(`
+      SELECT 1 FROM xianyu_publications
+      WHERE account_id = ?
+        AND (trim(COALESCE(item_id, '')) != ''
+          OR status IN ('publishing', 'unknown', 'success'))
+      LIMIT 1
+    `).get(accountId)) {
+      const error = new Error(
+        "当前账号商品列表为空，已保留发布状态和历史商品关联，请确认账号状态后重试",
+      );
+      error.statusCode = 409;
+      throw error;
+    }
     const localItems = this.database
       .prepare(`
         SELECT
@@ -2750,6 +2894,9 @@ export class CrawlerDatabase {
           itemUrl || null,
           syncedAt,
           syncedAt,
+        );
+        this.#recordXianyuItemHistory(
+          localItem.id, accountId, itemId, syncedAt,
         );
         updateGame.run(
           itemId,

@@ -1073,7 +1073,11 @@ function TaskProgress({ schedule, crawlRun, onViewLogs }) {
 }
 
 function queuedTaskDescription(task) {
-  if (task.taskType === "crawl") return "采集全站游戏数据";
+  if (task.taskType === "crawl") {
+    return task.gameIds?.length
+      ? `单独采集游戏 ${task.gameIds.join("、")}`
+      : "采集全站游戏数据";
+  }
   const mode = {
     all: "全部待处理商品",
     pending: "未发布商品",
@@ -2899,6 +2903,7 @@ function GamesPage({ notify }) {
     gamesAccountStorageKey,
   );
   const [detailId, setDetailId] = useState(null);
+  const [collectingGameId, setCollectingGameId] = useState(null);
   const [syncingGameId, setSyncingGameId] = useState(null);
   const [syncingXianyuItems, setSyncingXianyuItems] = useState(false);
   const [updatingViolationGameId, setUpdatingViolationGameId] = useState(null);
@@ -2941,6 +2946,21 @@ function GamesPage({ notify }) {
       active = false;
     };
   }, []);
+
+  async function collectGame(gameId) {
+    setCollectingGameId(gameId);
+    try {
+      const result = await api(`/api/games/${gameId}/crawl`, {
+        method: "POST",
+        body: jsonBody({}),
+      });
+      notify(result.message ?? `游戏 ${gameId} 的采集任务已提交`);
+    } catch (caught) {
+      notify(errorMessage(caught), "error");
+    } finally {
+      setCollectingGameId(null);
+    }
+  }
 
   async function syncGame(gameId) {
     if (!selectedAccountId) {
@@ -3012,7 +3032,7 @@ function GamesPage({ notify }) {
       <PageHeading
         eyebrow="Catalog operations"
         title="游戏数据"
-        description="检索游戏、调整售价、查看下载凭证，并单独触发某个游戏的同步。"
+        description="检索游戏、调整售价、查看下载凭证，并单独触发某个游戏的采集或同步。"
       />
       <Card>
         <CardContent className="p-4">
@@ -3139,7 +3159,7 @@ function GamesPage({ notify }) {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          <Table>
+          <Table className="min-w-[1280px] [&_th]:whitespace-nowrap [&_td:not(:first-child)]:whitespace-nowrap">
             <TableHeader>
               <TableRow>
                 <TableHead>游戏</TableHead>
@@ -3211,6 +3231,20 @@ function GamesPage({ notify }) {
                       >
                         <Eye className="h-3.5 w-3.5" />
                         详情
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={collectingGameId !== null}
+                        title="重新采集此游戏的详情、图片和下载源"
+                        onClick={() => collectGame(game.id)}
+                      >
+                        {collectingGameId === game.id ? (
+                          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <CloudDownload className="h-3.5 w-3.5" />
+                        )}
+                        {collectingGameId === game.id ? "提交中" : "采集"}
                       </Button>
                       <Button
                         variant={

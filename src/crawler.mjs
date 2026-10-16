@@ -107,6 +107,7 @@ function chunks(items, size) {
 
 export async function runCrawl({
   trigger = "manual",
+  gameIds = null,
   overrides = {},
   control = null,
 } = {}) {
@@ -118,7 +119,7 @@ export async function runCrawl({
   const runId = database.startRun(
     trigger,
     startedAt,
-    publicConfig(config),
+    { ...publicConfig(config), gameIds },
   );
   const recordTaskLog = ({
     gameId = null,
@@ -160,9 +161,12 @@ export async function runCrawl({
   recordTaskLog({
     stage: "task",
     action: "start",
-    message: `采集任务已启动，将读取前 ${config.pageCount} 页`,
+    message: gameIds
+      ? `单独采集任务已启动，游戏 ${gameIds.join("、")}`
+      : `采集任务已启动，将读取前 ${config.pageCount} 页`,
     details: {
       trigger,
+      gameIds,
       pageCount: config.pageCount,
       detailConcurrency: config.detailConcurrency,
       maxRetries: config.maxRetries,
@@ -190,10 +194,30 @@ export async function runCrawl({
     });
     const listContext = await createCrawlerContext(browser);
     const discovered = new Map();
+    if (gameIds) {
+      for (const gameId of gameIds) {
+        const row = database.queryOne(
+          "SELECT * FROM games WHERE id = ?",
+          gameId,
+        );
+        if (!row) throw new Error(`没有找到游戏 ${gameId}`);
+        discovered.set(gameId, {
+          id: row.id,
+          sourceUrl: row.source_url,
+          title: row.title,
+          tags: JSON.parse(row.tags ?? "[]"),
+          hotRank: row.hot_rank,
+        });
+      }
+    }
     let listExhausted = false;
 
     try {
-      for (let pageNumber = 1; pageNumber <= config.pageCount; pageNumber += 1) {
+      for (
+        let pageNumber = 1;
+        !gameIds && pageNumber <= config.pageCount;
+        pageNumber += 1
+      ) {
         await control?.checkpoint();
         const pageUrl = buildListPageUrl(config.listUrl, pageNumber);
         recordTaskLog({
@@ -306,8 +330,9 @@ export async function runCrawl({
       (left, right) => left.hotRank - right.hotRank,
     );
     statistics.discoveredCount = queue.length;
-    database.upsertDiscoveredGames(queue, startedAt);
+    if (!gameIds) database.upsertDiscoveredGames(queue, startedAt);
     const rankingComplete =
+      !gameIds &&
       queue.length > 0 &&
       statistics.listPagesFailed === 0 &&
       (listExhausted || statistics.listPagesSucceeded === config.pageCount);
@@ -319,7 +344,9 @@ export async function runCrawl({
       level: "success",
       stage: "discovery",
       action: "saved",
-      message: `列表采集完成，共保存 ${queue.length} 个候选游戏`,
+      message: gameIds
+        ? `已选定 ${queue.length} 个游戏进行单独采集`
+        : `列表采集完成，共保存 ${queue.length} 个候选游戏`,
       details: {
         listPagesSucceeded: statistics.listPagesSucceeded,
         listPagesFailed: statistics.listPagesFailed,
@@ -433,6 +460,7 @@ export async function runCrawl({
           refreshState,
         );
         if (
+          !gameIds &&
           !metadataBackfillRequired &&
           isSourceTimestampCurrent(
             game.sourceUpdatedAt,
@@ -477,7 +505,7 @@ export async function runCrawl({
             },
           });
         } else {
-          game.forceMetadataRefresh = metadataBackfillRequired;
+          game.forceMetadataRefresh = Boolean(gameIds) || metadataBackfillRequired;
           detailQueue.push(game);
           recordTaskLog({
             gameId: game.id,

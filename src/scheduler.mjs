@@ -4,6 +4,7 @@ import { loadConfig } from "./config.mjs";
 import { runCrawl } from "./crawler.mjs";
 import { CrawlerDatabase } from "./database.mjs";
 import { startDashboardServer } from "./dashboard-server.mjs";
+import { recoverPublishedItemHistory } from "./recover-item-history.mjs";
 import {
   materialSyncConcurrency,
   publishBatchSize,
@@ -391,7 +392,7 @@ function normalizeScheduleSettings(input) {
   return normalized;
 }
 
-function triggerCrawl(reason) {
+function triggerCrawl(reason, options = {}) {
   if (
     stopping ||
     (reason.startsWith("schedule") && !schedulerSettings.crawlEnabled)
@@ -402,6 +403,7 @@ function triggerCrawl(reason) {
     const queued = taskQueue.enqueue({
       taskType: "crawl",
       reason,
+      options,
     });
     log("task_queued", {
       ...queued,
@@ -414,6 +416,7 @@ function triggerCrawl(reason) {
   const control = crawlControl;
   activeRun = runCrawl({
     trigger: reason,
+    gameIds: options.gameIds ?? null,
     control,
     overrides: {
       detailConcurrency: schedulerSettings.crawlConcurrency,
@@ -586,7 +589,7 @@ function startNextQueuedTask() {
   });
   try {
     if (next.taskType === "crawl") {
-      triggerCrawl(next.reason);
+      triggerCrawl(next.reason, next.options);
     } else {
       triggerSync(next.reason, next.mode ?? undefined, next.options);
     }
@@ -856,6 +859,9 @@ schedulerSettings = settingsFromRow(
 );
 database.close();
 syncService = new XianyuSyncService(config);
+if (config.xianyuApiKey) {
+  log("item_history_recovered", await recoverPublishedItemHistory(config));
+}
 replaceScheduledJobs(schedulerSettings);
 
 dashboard = await startDashboardServer(config, scheduleRuntime, {
@@ -869,17 +875,24 @@ dashboard = await startDashboardServer(config, scheduleRuntime, {
     }),
   updateScheduleSettings,
   updateXianyuApiKey,
-  triggerCrawl: (reason) => {
-    const accepted = triggerCrawl(reason);
+  triggerCrawl: (reason, options = {}) => {
+    const accepted = triggerCrawl(reason, options);
+    const mode = options.gameIds?.length ? "selected" : "full";
     return accepted?.queuePosition
       ? {
           active: false,
-          mode: "full",
+          mode,
+          gameIds: options.gameIds ?? null,
           queued: true,
           queueId: accepted.id,
           queuePosition: accepted.queuePosition,
         }
-      : { active: Boolean(activeRun), mode: "full", queued: false };
+      : {
+          active: Boolean(activeRun),
+          mode,
+          gameIds: options.gameIds ?? null,
+          queued: false,
+        };
   },
   triggerSync: (reason, mode, options = {}) => {
     const accepted = triggerSync(reason, mode, options);

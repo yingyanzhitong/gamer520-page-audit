@@ -132,6 +132,27 @@ export class XianyuClient {
     return materials;
   }
 
+  async listSuccessfulPublications({ signal = null } = {}) {
+    const logs = [];
+    let page = 1;
+    let totalPages = 1;
+    while (page <= totalPages) {
+      const payload = await this.request(
+        `/api/v1/product-publish/logs?status=success&page=${page}&page_size=100`,
+        { signal },
+      );
+      const data = payload?.data;
+      if (!Array.isArray(data?.list)) {
+        throw new XianyuApiError("闲鱼成功发布日志返回格式无效");
+      }
+      logs.push(...data.list);
+      totalPages = Math.max(1, Number(data.total_pages) || 1);
+      if (data.list.length === 0) break;
+      page += 1;
+    }
+    return logs;
+  }
+
   async getAccountPublishCapability(accountId, { signal = null } = {}) {
     const payload = await this.request(
       "/api/v1/product-publish/publish/capability",

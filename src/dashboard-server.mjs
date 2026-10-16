@@ -785,17 +785,8 @@ function downloadSources(database, input) {
   const itemTitleValue = normalizeDownloadLookupTitle(
     requestedItemTitle,
   );
-  if (requestedItemTitle && !itemTitleValue) {
-    return {
-      status: 422,
-      error: "item_title 去除【秒发】后不能为空",
-    };
-  }
   if (itemIdValue.length > 100) {
     return { status: 422, error: "item_id 不能超过 100 个字符" };
-  }
-  if (idValue && !/^\d+$/.test(idValue)) {
-    return { status: 422, error: "id 必须是数字" };
   }
 
   let rows = [];
@@ -812,20 +803,43 @@ function downloadSources(database, input) {
              publication.item_id = ?
              AND publication.status = 'success'
            )
+           OR EXISTS (
+             SELECT 1 FROM xianyu_item_history AS history
+             WHERE history.game_id = games.id AND history.item_id = ?
+           )
         ORDER BY games.id
       `)
-      .all(itemIdValue, itemIdValue);
+      .all(itemIdValue, itemIdValue, itemIdValue);
     if (rows.length > 0) strategy = "item_id";
   }
   if (rows.length === 0 && requestedItemTitle) {
+    if (!itemTitleValue) {
+      return {
+        status: 422,
+        error: "item_title 去除【秒发】后不能为空",
+      };
+    }
     rows = database
       .prepare(
         "SELECT * FROM games WHERE trim(title) = ? COLLATE NOCASE ORDER BY id",
       )
       .all(itemTitleValue);
+    // 闲鱼可能截短版本后缀；仅接受保留完整游戏名和分隔符的标题前缀。
+    if (rows.length === 0 && itemTitleValue.indexOf("|") > 0) {
+      rows = database
+        .prepare(`
+          SELECT * FROM games
+          WHERE substr(trim(title), 1, length(?)) = ? COLLATE NOCASE
+          ORDER BY id
+        `)
+        .all(itemTitleValue, itemTitleValue);
+    }
     if (rows.length > 0) strategy = "item_title";
   }
   if (rows.length === 0 && idValue) {
+    if (!/^\d+$/.test(idValue)) {
+      return { status: 422, error: "id 必须是数字" };
+    }
     rows = database
       .prepare("SELECT * FROM games WHERE id = ?")
       .all(Number(idValue));
@@ -862,7 +876,7 @@ function downloadSources(database, input) {
               normalizedItemTitle: itemTitleValue,
             }
           : {}),
-        ...(idValue ? { id: Number(idValue) } : {}),
+        ...(idValue && /^\d+$/.test(idValue) ? { id: Number(idValue) } : {}),
       },
       itemId:
         strategy === "item_id"
@@ -2174,6 +2188,43 @@ export async function startDashboardServer(
         sendJson(response, 200, {
           success: true,
           ...result,
+        });
+        return;
+      }
+
+      const gameCrawlMatch = requestUrl.pathname.match(
+        /^\/api\/games\/(\d+)\/crawl$/,
+      );
+      if (request.method === "POST" && gameCrawlMatch) {
+        if (
+          !requireKey(request, response, config.xianyuApiKey, "X-API-Key")
+        ) {
+          return;
+        }
+        await readJsonBody(request);
+        const gameId = Number(gameCrawlMatch[1]);
+        const game = withDatabase(config.dbPath, (database) =>
+          database.prepare("SELECT id FROM games WHERE id = ?").get(gameId),
+        );
+        if (!game) {
+          sendError(response, 404, "没有找到该游戏");
+          return;
+        }
+        if (!handlers.triggerCrawl) {
+          sendError(response, 503, "采集服务尚未启用");
+          return;
+        }
+        const accepted = handlers.triggerCrawl("manual-game", {
+          gameIds: [gameId],
+        });
+        sendJson(response, 200, {
+          success: true,
+          gameId,
+          message: taskSubmissionMessage(
+            accepted,
+            `游戏 ${gameId} 的采集任务已启动`,
+          ),
+          ...accepted,
         });
         return;
       }

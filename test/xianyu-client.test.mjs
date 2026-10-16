@@ -79,6 +79,34 @@ test("素材库查询按 1000 条分页读取全部素材", async () => {
   ]);
 });
 
+test("成功发布日志按允许的每页 100 条读取全部账号", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    const page = Number(new URL(url).searchParams.get("page"));
+    return new Response(JSON.stringify({ success: true, data: {
+      list: [{ item_id: `item-${page}`, account_id: `account-${page}` }],
+      total_pages: 2,
+    } }));
+  };
+  try {
+    const client = new XianyuClient({ baseUrl: "https://xianyu.example", apiKey: "key" });
+    assert.deepEqual(await client.listSuccessfulPublications(), [
+      { item_id: "item-1", account_id: "account-1" },
+      { item_id: "item-2", account_id: "account-2" },
+    ]);
+    assert.deepEqual(urls, [
+      "https://xianyu.example/api/v1/product-publish/logs?status=success&page=1&page_size=100",
+      "https://xianyu.example/api/v1/product-publish/logs?status=success&page=2&page_size=100",
+    ]);
+    globalThis.fetch = async () => new Response(JSON.stringify({ success: true, data: {} }));
+    await assert.rejects(client.listSuccessfulPublications(), /发布日志返回格式无效/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("单商品发布使用同步接口并透传素材内容", async () => {
   const originalFetch = globalThis.fetch;
   let requestUrl;

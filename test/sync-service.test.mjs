@@ -1906,12 +1906,27 @@ test("每次发布前均以闲鱼素材库和商品管理状态回写本地", as
     assert.equal(first.publishSuccess, 1);
     assert.equal(client.listMaterialCalls, 1);
 
-    client.materials.clear();
     client.accountItems.set("account-a", []);
+    await assert.rejects(service.run({ trigger: "test" }), (error) =>
+      error.statusCode === 409 && /商品列表为空/.test(error.message),
+    );
+    assert.equal(client.publishCalls.length, 1);
+    const protectedDatabase = new CrawlerDatabase(databasePath);
+    try {
+      assert.equal(protectedDatabase.queryOne(
+        "SELECT status FROM xianyu_publications WHERE game_id = ? AND account_id = ?",
+        selectedGame.id, "account-a",
+      ).status, "success");
+    } finally {
+      protectedDatabase.close();
+    }
+
+    client.materials.clear();
+    client.accountItems.set("account-a", [{ item_id: "unrelated-item" }]);
     const second = await service.run({ trigger: "test" });
     assert.equal(second.selectedCount, 1);
     assert.equal(second.publishSuccess, 1);
-    assert.equal(client.listMaterialCalls, 2);
+    assert.equal(client.listMaterialCalls, 3);
     assert.equal(client.upsertCalls.length, 2);
     assert.equal(client.publishCalls.length, 2);
   } finally {
@@ -1958,7 +1973,7 @@ test("自选游戏强制发布以闲鱼实际商品列表为准", async () => {
       refreshCountBeforeForceCheck + 1,
     );
 
-    client.accountItems.set("account-a", []);
+    client.accountItems.set("account-a", [{ item_id: "unrelated-item" }]);
     const republishedAfterManualDeletion = await service.run({
       trigger: "test",
       mode: "selected-force",

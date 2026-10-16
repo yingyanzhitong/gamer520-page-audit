@@ -670,7 +670,7 @@ test("任务调度设置写入单例配置并覆盖更新", () => {
     });
     assert.equal(
       database.queryOne("PRAGMA user_version").user_version,
-      22,
+      23,
     );
   } finally {
     database.close();
@@ -1015,7 +1015,7 @@ test("已回退为待发布的商品会重新进入未发布同步候选", () =>
     });
     const reconciliation = database.reconcileAccountPublishedItems(
       "account-a",
-      [],
+      [{ item_id: "unrelated-item" }],
       syncedAt,
     );
 
@@ -1294,7 +1294,9 @@ test("账号商品核对只认当前账号发布记录，不采用全局商品�
       gameId: discovered.id, accountId: "account-b", status: "success",
       itemId: "item-b", updatedAt: timestamp,
     });
-    database.reconcileAccountPublishedItems("account-a", [], timestamp);
+    database.reconcileAccountPublishedItems(
+      "account-a", [{ item_id: "unrelated-item" }], timestamp,
+    );
     assert.equal(database.listSyncCandidates("account-a", 10).length, 1);
     assert.equal(database.listSyncCandidates("account-b", 10).length, 0);
     assert.equal(database.listCardBindingCandidates("account-a", 6).length, 0);
