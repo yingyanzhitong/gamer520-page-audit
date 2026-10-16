@@ -1074,6 +1074,9 @@ function TaskProgress({ schedule, crawlRun, onViewLogs }) {
 
 function queuedTaskDescription(task) {
   if (task.taskType === "crawl") {
+    if (task.reason === "manual-missing-downloads") {
+      return `重采无下载源 · ${task.gameIds?.length ?? 0} 个游戏`;
+    }
     return task.gameIds?.length
       ? `单独采集游戏 ${task.gameIds.join("、")}`
       : "采集全站游戏数据";
@@ -1457,6 +1460,7 @@ function TasksPage({ notify }) {
   const [saving, setSaving] = useState(false);
   const [logTask, setLogTask] = useState(null);
   const [controlAction, setControlAction] = useState(null);
+  const [submittingTask, setSubmittingTask] = useState(null);
   const [removingTaskId, setRemovingTaskId] = useState(null);
   const [selectedGamesOpen, setSelectedGamesOpen] = useState(false);
   const [scheduledGamesOpen, setScheduledGamesOpen] = useState(false);
@@ -1559,6 +1563,8 @@ function TasksPage({ notify }) {
   }
 
   async function runTask(kind, mode, { useConfiguredTask = false } = {}) {
+    if (submittingTask) return;
+    setSubmittingTask(`${kind}:${mode ?? "default"}`);
     try {
       const result = await api(
         kind === "crawl" ? "/api/crawl/run" : "/api/sync/run",
@@ -1574,7 +1580,7 @@ function TasksPage({ notify }) {
                     ? [selectedScheduleAccountId]
                     : [],
                 }
-              : {},
+              : mode ? { mode } : {},
           ),
         },
       );
@@ -1587,6 +1593,8 @@ function TasksPage({ notify }) {
       await load();
     } catch (caught) {
       notify(errorMessage(caught), "error");
+    } finally {
+      setSubmittingTask(null);
     }
   }
 
@@ -1645,15 +1653,30 @@ function TasksPage({ notify }) {
         description="配置定时采集和同步，手动提交任务并管理等待执行的任务队列。"
         actions={
           <>
-            <Button variant="outline" onClick={() => runTask("crawl")}>
+            <Button
+              variant="outline"
+              onClick={() => runTask("crawl")}
+              disabled={Boolean(submittingTask)}
+            >
               <CloudDownload className="h-4 w-4" />
               立即采集
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => runTask("crawl", "missing-downloads")}
+              disabled={Boolean(submittingTask)}
+              title="重新采集所有没有下载源的游戏"
+            >
+              {submittingTask === "crawl:missing-downloads"
+                ? <LoaderCircle className="h-4 w-4 animate-spin" />
+                : <RotateCcw className="h-4 w-4" />}
+              重采无下载源
             </Button>
             <Button
               onClick={() =>
                 runTask("sync", null, { useConfiguredTask: true })
               }
-              disabled={!selectedSyncTask || !selectedSyncAccountUsable}
+              disabled={Boolean(submittingTask) || !selectedSyncTask || !selectedSyncAccountUsable}
             >
               <Play className="h-4 w-4" />
               立即执行同步任务

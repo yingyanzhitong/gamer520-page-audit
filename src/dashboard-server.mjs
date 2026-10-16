@@ -1844,9 +1844,50 @@ export async function startDashboardServer(
         ) {
           return;
         }
-        await readJsonBody(request);
+        const body = await readJsonBody(request);
+        const mode = body.mode ?? "full";
+        if (!["full", "missing-downloads"].includes(mode)) {
+          sendError(response, 422, "采集范围必须是 full 或 missing-downloads");
+          return;
+        }
         if (!handlers.triggerCrawl) {
           sendError(response, 503, "采集服务尚未启用");
+          return;
+        }
+        if (mode === "missing-downloads") {
+          const gameIds = withDatabase(config.dbPath, (database) =>
+            database.prepare(`
+              SELECT id FROM games
+              WHERE NOT EXISTS (
+                SELECT 1 FROM downloads WHERE downloads.game_id = games.id
+              )
+              ORDER BY id
+            `).all().map((game) => game.id),
+          );
+          if (gameIds.length === 0) {
+            sendJson(response, 200, {
+              success: true,
+              active: false,
+              queued: false,
+              mode,
+              gameCount: 0,
+              message: "没有无下载源的游戏，无需重新采集",
+            });
+            return;
+          }
+          const accepted = handlers.triggerCrawl("manual-missing-downloads", {
+            gameIds,
+          });
+          sendJson(response, 200, {
+            success: true,
+            ...accepted,
+            mode,
+            gameCount: gameIds.length,
+            message: taskSubmissionMessage(
+              accepted,
+              `已启动 ${gameIds.length} 个无下载源游戏的重新采集`,
+            ),
+          });
           return;
         }
         const accepted = handlers.triggerCrawl("manual");
