@@ -494,6 +494,10 @@ async function openDetailViaRequest(context, pageUrl, config) {
     throw new Error(`资源接口返回失败：${message}`);
   }
 
+  return openResourceLandingPage(context, landingUrl, config);
+}
+
+async function openResourceLandingPage(context, landingUrl, config) {
   const detailPage = await context.newPage();
   const landingResponse = await detailPage.goto(landingUrl, {
     timeout: config.navigationTimeoutMs,
@@ -765,7 +769,7 @@ export async function extractGame(
             .getAttribute("data-clipboard-text")
         : null;
     const resourceButton = articlePage.locator(
-      "#cao_widget_pay-4 .go-down",
+      "#cao_widget_pay-4 .go-down, #cao_widget_pay-4 a.go-downblank[href]",
     );
 
     if (!title) {
@@ -796,19 +800,32 @@ export async function extractGame(
     }
 
     let detailPage;
-    try {
-      detailPage = await openDetailViaClick(
-        context,
-        articlePage,
-        resourceButton,
-        config,
+    if (
+      await resourceButton.evaluate((element) =>
+        element.matches("a.go-downblank[href]"),
+      )
+    ) {
+      const landingUrl = decodeHttpUrl(
+        await resourceButton.getAttribute("href"),
+        articlePage.url(),
       );
-    } catch (error) {
-      if (error instanceof AccessBlockedError) throw error;
-      for (const page of context.pages()) {
-        if (page !== articlePage) await page.close().catch(() => {});
+      if (!landingUrl) throw new Error("资源下载链接无效");
+      detailPage = await openResourceLandingPage(context, landingUrl, config);
+    } else {
+      try {
+        detailPage = await openDetailViaClick(
+          context,
+          articlePage,
+          resourceButton,
+          config,
+        );
+      } catch (error) {
+        if (error instanceof AccessBlockedError) throw error;
+        for (const page of context.pages()) {
+          if (page !== articlePage) await page.close().catch(() => {});
+        }
+        detailPage = await openDetailViaRequest(context, pageUrl, config);
       }
-      detailPage = await openDetailViaRequest(context, pageUrl, config);
     }
 
     await unlockProtectedDetail(detailPage, resourceCode, config);
